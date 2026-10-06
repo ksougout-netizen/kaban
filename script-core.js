@@ -4848,7 +4848,9 @@ function setRecordingStatus(state, text) {
     status.classList.add("visible");
     status.classList.toggle("audio-recording", state.mode === "audio");
     status.classList.toggle("video-recording", state.mode === "video");
-    label.textContent = text;
+    // В панели — только время («00:07»); подписи вроде «Подключаем камеру…» — целиком.
+    const timeOnly = /(\d\d:\d\d)\s*$/.exec(text);
+    label.textContent = timeOnly ? timeOnly[1] : text;
 
     // Пока идёт подключение второй камеры, recordStream ещё не готов —
     // в превью на это время просто временно показывается сырая фронталка,
@@ -4879,8 +4881,57 @@ function resetRecordingState(state) {
         document.body.style.removeProperty("--record-drag-x");
         document.body.style.removeProperty("--record-drag-lock-y");
         document.getElementById("record-stop-locked-btn").hidden = true;
+        document.getElementById("record-cancel-locked-btn").hidden = true;
+        document.getElementById("recording-status")?.classList.remove("locked");
+        stopRecordingMeter(state);
+        const ringEl = document.getElementById("rec-ring-progress");
+        if (ringEl) ringEl.style.strokeDashoffset = "295";
     }
 
+}
+
+// Живая волна по реальному уровню микрофона: 12 столбиков, каждый кадр сдвигаем
+// историю громкости (новое значение справа) — волна «бежит», как в Telegram.
+const REC_WAVE_BARS = 12;
+
+function startRecordingMeter(state) {
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        const track = state.stream?.getAudioTracks()[0];
+        if (!AudioContextClass || !track) return;
+        const ctx = new AudioContextClass();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        const source = ctx.createMediaStreamSource(new MediaStream([track]));
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.fftSize);
+        const bars = [...document.querySelectorAll("#recording-wave span")];
+        const history = new Array(REC_WAVE_BARS).fill(0.12);
+        let lastPush = 0;
+        let frame = 0;
+        const tick = (now) => {
+            frame = requestAnimationFrame(tick);
+            if (now - lastPush < 70) return;
+            lastPush = now;
+            analyser.getByteTimeDomainData(data);
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+            const level = Math.min(1, Math.sqrt(sum / data.length) * 5);
+            history.push(Math.max(0.12, level));
+            history.shift();
+            bars.forEach((bar, i) => { bar.style.transform = `scaleY(${history[i].toFixed(2)})`; });
+        };
+        frame = requestAnimationFrame(tick);
+        state.meter = { ctx, source, stop: () => { cancelAnimationFrame(frame); try { source.disconnect(); } catch {} ctx.close?.().catch(() => {}); } };
+        document.getElementById("recording-wave")?.classList.add("live");
+    } catch { /* без живой волны — останется анимация-заглушка */ }
+}
+
+function stopRecordingMeter(state) {
+    state?.meter?.stop();
+    if (state) state.meter = null;
+    const wave = document.getElementById("recording-wave");
+    if (wave) { wave.classList.remove("live"); wave.querySelectorAll("span").forEach((bar) => { bar.style.transform = ""; }); }
 }
 
 function activeRecordingPointerId() {
@@ -4908,6 +4959,8 @@ function stopRecordingTracks(state) {
    (getUserMedia отдаёт только одну одновременно) — в этом случае (и на
    любой другой ошибке/таймауте) просто возвращаем null, и startRecording
    остаётся на одной фронтальной камере, как было до этой фичи. */
+
+const DUAL_CAMERA_ENABLED = false;
 
 function withTimeout(promise, ms) {
     return Promise.race([
@@ -5055,6 +5108,7 @@ async function startRecording(button, event) {
         replyToId: pendingReply?.messageId || null,
         pointerId: event.pointerId ?? -1,
         stopRequested: false,
+        pressedAt: Date.now(),
         stream: null,
         recorder: null,
         chunks: [],
@@ -5114,7 +5168,10 @@ async function startRecording(button, event) {
         // Safari — там физически нельзя открыть две камеры одновременно) —
         // тихо остаёмся на одной фронтальной камере, как и было раньше.
         state.recordStream = state.stream;
-        if (state.mode === "video") {
+        // Двойная камера (BeReal) выключена: на компьютере с одной веб-камерой «задняя»
+        // камера — та же самая, и в углу кружка рисовалось пустое колечко-дубликат.
+        // Видеокружок — чистая фронтальная камера, как в Telegram.
+        if (state.mode === "video" && DUAL_CAMERA_ENABLED) {
             state.dualCamera = await trySetupDualCamera(state);
             if (state.dualCamera) {
                 state.recordStream = state.dualCamera.combinedStream;
@@ -5171,6 +5228,7 @@ async function startRecording(button, event) {
 
         state.recorder.start(200);
         state.startedAt = Date.now();
+        startRecordingMeter(state);
         setRecordingStatus(
             state,
             `${state.mode === "video" ? "Видеокружок" : "Запись"} 00:00`
@@ -5180,6 +5238,8 @@ async function startRecording(button, event) {
         state.timer = setInterval(() => {
             const elapsed = Date.now() - state.startedAt;
             setRecordingStatus(state, `${modeLabel} ${formatRecordingTime(elapsed)}`);
+            const ring = document.getElementById("rec-ring-progress");
+            if (ring) ring.style.strokeDashoffset = String(295 * (1 - Math.min(1, elapsed / MAX_RECORDING_MS)));
 
             if (elapsed >= MAX_RECORDING_MS) {
                 stopRecording(state.pointerId, false, true);
@@ -5243,6 +5303,8 @@ function lockRecording(state) {
     document.body.style.removeProperty("--record-drag-x");
     document.body.style.removeProperty("--record-drag-lock-y");
     document.getElementById("record-stop-locked-btn").hidden = false;
+    document.getElementById("record-cancel-locked-btn").hidden = false;
+    document.getElementById("recording-status")?.classList.add("locked");
 
     if (state.pointerId !== -1) {
         try { state.button.releasePointerCapture(state.pointerId); } catch { /* уже отпущен системой — не критично */ }

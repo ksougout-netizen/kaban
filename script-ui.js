@@ -4966,6 +4966,14 @@ document.querySelectorAll(".record-button").forEach((button) => {
 
     button.addEventListener("pointerup", (event) => {
         const state = activeRecording;
+        // Быстрое нажатие (короче 0,4 с) — не «забыли удержать», а запись без
+        // удержания: сразу закрепляем её, дальше кнопки «удалить» / «отправить».
+        // Раньше короткий тап просто выдавал «удерживайте кнопку дольше» — на
+        // компьютере держать мышь минуту неудобно.
+        if (state && state.button === button && !state.locked && !state.cancelArmed && event.pointerId !== -1 && Date.now() - state.pressedAt < 400) {
+            lockRecording(state);
+            return;
+        }
         stopRecording(event.pointerId, state?.button === button && state?.cancelArmed);
     });
 
@@ -5001,6 +5009,14 @@ document.querySelectorAll(".record-button").forEach((button) => {
     });
 
 });
+
+// Esc — удалить запись, Enter — отправить (в закреплённом режиме).
+document.addEventListener("keydown", (event) => {
+    const state = activeRecording;
+    if (!state || !state.locked) return;
+    if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); stopRecording(state.pointerId, true, true); }
+    else if (event.key === "Enter") { event.preventDefault(); event.stopImmediatePropagation(); stopRecording(state.pointerId, false, true); }
+}, true);
 
 window.addEventListener("blur", () => {
     if (activeRecording) {

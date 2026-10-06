@@ -40,7 +40,7 @@
 
 <link rel="preconnect" href="https://ketvgmietommjqutejuj.supabase.co" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261006-77">
+<link rel="stylesheet" href="style.css?v=20261006-78">
 </head>
 
 <body>
@@ -778,16 +778,30 @@
                 <div class="record-lock-hint" id="record-lock-hint" aria-hidden="true">🔒</div>
                 <div class="record-cancel-hint" id="record-cancel-hint" aria-hidden="true">← Проведите для отмены</div>
 
+                <!-- Панель записи: пока держите кнопку — таймер, живая волна и подсказки
+                     жестов; после «блокировки» (быстрый тап или свайп вверх) появляются
+                     крупные кнопки «удалить» и «отправить» — запись идёт без удержания. -->
                 <div class="recording-status" id="recording-status" aria-live="polite">
-                    <span class="recording-dot" aria-hidden="true"></span>
-                    <span id="recording-status-text">Запись 00:00</span>
-                    <span class="recording-wave" aria-hidden="true">
-                        <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-                    </span>
-                    <video class="recording-preview" id="recording-preview" muted playsinline></video>
-                    <button type="button" class="record-stop-locked-btn" id="record-stop-locked-btn" onclick="stopRecording(activeRecordingPointerId(), false, true)" hidden aria-label="Остановить и отправить" title="Остановить и отправить">
-                        ⏹
-                    </button>
+                    <div class="rec-stage">
+                        <video class="recording-preview" id="recording-preview" muted playsinline></video>
+                        <svg class="rec-ring" viewBox="0 0 100 100" aria-hidden="true">
+                            <circle class="rec-ring-track" cx="50" cy="50" r="47"></circle>
+                            <circle class="rec-ring-progress" id="rec-ring-progress" cx="50" cy="50" r="47"></circle>
+                        </svg>
+                    </div>
+                    <div class="rec-bar">
+                        <button type="button" class="rec-action rec-trash" id="record-cancel-locked-btn" onclick="stopRecording(activeRecordingPointerId(), true, true)" hidden aria-label="Удалить запись" title="Удалить запись (Esc)">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2m-8 0 1 12h8l1-12M10 11v5M14 11v5"/></svg>
+                        </button>
+                        <span class="recording-dot" aria-hidden="true"></span>
+                        <span class="rec-time" id="recording-status-text">Запись 00:00</span>
+                        <span class="recording-wave" id="recording-wave" aria-hidden="true">
+                            <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                        </span>
+                        <button type="button" class="record-stop-locked-btn rec-action rec-send" id="record-stop-locked-btn" onclick="stopRecording(activeRecordingPointerId(), false, true)" hidden aria-label="Отправить" title="Отправить (Enter)">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+                        </button>
+                    </div>
                 </div>
 
                 <div class="input">
@@ -899,8 +913,8 @@
                         class="input-button record-button"
                         type="button"
                         data-record-mode="audio"
-                        aria-label="Удерживайте для записи голосового сообщения"
-                        title="Удерживайте для записи голосового сообщения"
+                        aria-label="Голосовое сообщение: нажмите — запись без удержания, удерживайте — пока держите"
+                        title="Голосовое: нажмите и говорите, или удерживайте. Влево — отмена, вверх — закрепить"
                     >
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <rect x="9" y="3" width="6" height="12" rx="3"/>
@@ -912,8 +926,8 @@
                         class="input-button record-button"
                         type="button"
                         data-record-mode="video"
-                        aria-label="Удерживайте для записи видеокружка"
-                        title="Удерживайте для записи видеокружка"
+                        aria-label="Видеокружок: нажмите — запись без удержания, удерживайте — пока держите"
+                        title="Кружок: нажмите и снимайте, или удерживайте. Влево — отмена, вверх — закрепить"
                     >
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <rect x="3" y="6" width="13" height="12" rx="2.5"/>
@@ -3058,27 +3072,27 @@
 
 <!-- Библиотеки лежат рядом с сайтом (vendor/): не зависим от CDN, которые бывают недоступны; версия supabase-js закреплена (2.117.2). -->
 <script src="vendor/supabase.js?v=2.117.2"></script>
-<script src="supabaseClient.js?v=20261006-77"></script>
-<script src="crypto.js?v=20261006-77"></script>
+<script src="supabaseClient.js?v=20261006-78"></script>
+<script src="crypto.js?v=20261006-78"></script>
 <!-- script.js разбит на 4 файла для удобства навигации (раньше был один
      файл ~350КБ/8300+ строк) — порядок подключения важен, см. комментарий
      в начале каждого файла. Это НЕ ES-модули: обычные классические
      скрипты, выполняются последовательно как один большой файл, функции
      между ними в общей глобальной области видимости, как и раньше. -->
-<script src="emoji-data.js?v=20261006-77"></script>
-<script src="script-core.js?v=20261006-77"></script>
-<script src="script-ui.js?v=20261006-77"></script>
-<script src="script-chats.js?v=20261006-77"></script>
-<script src="script-messages.js?v=20261006-77"></script>
-<script src="effects.js?v=20261006-77"></script>
-<script src="games.js?v=20261006-77"></script>
-<script src="voice-ai.js?v=20261006-77"></script>
-<script src="stories.js?v=20261006-77"></script>
-<script src="productivity.js?v=20261006-77"></script>
-<script src="reactions.js?v=20261006-77"></script>
-<script src="listen.js?v=20261006-77"></script>
-<script src="voice.js?v=20261006-77"></script>
-<script src="resilience.js?v=20261006-77"></script>
+<script src="emoji-data.js?v=20261006-78"></script>
+<script src="script-core.js?v=20261006-78"></script>
+<script src="script-ui.js?v=20261006-78"></script>
+<script src="script-chats.js?v=20261006-78"></script>
+<script src="script-messages.js?v=20261006-78"></script>
+<script src="effects.js?v=20261006-78"></script>
+<script src="games.js?v=20261006-78"></script>
+<script src="voice-ai.js?v=20261006-78"></script>
+<script src="stories.js?v=20261006-78"></script>
+<script src="productivity.js?v=20261006-78"></script>
+<script src="reactions.js?v=20261006-78"></script>
+<script src="listen.js?v=20261006-78"></script>
+<script src="voice.js?v=20261006-78"></script>
+<script src="resilience.js?v=20261006-78"></script>
 
 </body>
 </html>

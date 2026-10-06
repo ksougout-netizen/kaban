@@ -11040,3 +11040,107 @@ body.reduce-motion .voice-avatar.speaking { animation: none; }
 /* Музыка голосовой комнаты */
 .listen-panel.offscreen { position: fixed !important; left: -10000px !important; top: 0 !important; width: 320px; opacity: 0; pointer-events: none; }
 .vroom-music { color: #22c55e; font-weight: 600; }
+
+/* ============================================================================
+   ЗАПИСЬ ГОЛОСОВЫХ И КРУЖКОВ — новая панель
+   Таймер и живая волна по реальному звуку микрофона; кружок записывается в
+   большом круглом превью с кольцом оставшегося времени. После «закрепления»
+   (быстрый тап или свайп вверх) появляются крупные кнопки: удалить и отправить.
+   ========================================================================= */
+.recording-status {
+    left: 28px;
+    right: 28px;
+    bottom: 76px;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-size: inherit;
+    pointer-events: none;
+}
+.recording-status.video-recording { left: 28px; right: 28px; bottom: 76px; padding: 0; border-radius: 0; align-items: center; }
+
+.rec-stage { display: none; position: relative; width: 184px; height: 184px; animation: preview-pop .22s cubic-bezier(.2,.85,.25,1) both; }
+.recording-status.video-recording .rec-stage { display: block; }
+.rec-stage .recording-preview {
+    display: block;
+    position: absolute;
+    inset: 6px;
+    width: calc(100% - 12px);
+    height: calc(100% - 12px);
+    border-radius: 50%;
+    object-fit: cover;
+    transform: scaleX(-1);          /* зеркало, как в привычном селфи-превью (в записи — без зеркала) */
+    animation: none;
+    box-shadow: 0 10px 34px rgba(0,0,0,.28);
+}
+.rec-ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); pointer-events: none; }
+.rec-ring-track { fill: none; stroke: color-mix(in srgb, var(--surface) 70%, transparent); stroke-width: 3; }
+.rec-ring-progress { fill: none; stroke: #ef4444; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 295; stroke-dashoffset: 295; transition: stroke-dashoffset .25s linear; }
+
+.rec-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: min(100%, 440px);
+    min-height: 52px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 94%, transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    backdrop-filter: blur(18px) saturate(160%);
+    border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    box-shadow: 0 10px 30px rgba(0,0,0,.16);
+    pointer-events: auto;
+    animation: rec-bar-in .22s cubic-bezier(.2,.85,.25,1) both;
+}
+@keyframes rec-bar-in { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+
+.recording-dot { width: 10px; height: 10px; flex: 0 0 10px; background: #ef4444; }
+.rec-time { min-width: 44px; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+
+.recording-wave, .recording-status.audio-recording .recording-wave { display: flex; flex: 1; height: 30px; gap: 3px; align-items: center; justify-content: flex-end; min-width: 0; overflow: hidden; }
+.recording-wave span { width: 3px; height: 28px; flex: none; background: #ef4444; opacity: .85; transform: scaleY(.14); }
+.recording-wave.live span { animation: none; transition: transform .07s linear; }
+
+.rec-action { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; transition: transform .12s ease, background .15s ease; }
+.rec-action[hidden] { display: none; }
+.rec-action svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rec-action:active { transform: scale(.9); }
+.rec-trash { margin-left: -6px; background: color-mix(in srgb, #ef4444 14%, var(--surface2)); color: #ef4444; }
+.rec-trash:hover { background: #ef4444; color: #fff; }
+.record-stop-locked-btn.rec-send { width: 44px; height: 44px; margin: 0 -8px 0 0; background: var(--accent); color: var(--accent-text); font-size: inherit; }
+.record-stop-locked-btn.rec-send:hover { filter: brightness(1.08); }
+
+/* Жесты удержания: подсказка отмены едет по панели вместе с пальцем. */
+.record-cancel-hint { right: 74px; bottom: 87px; z-index: 3; }
+.record-lock-hint { bottom: calc(76px + 52px + 14px); right: 20px; z-index: 3; }
+body.recording-active .recording-status.video-recording ~ .record-lock-hint { bottom: calc(76px + 52px + 190px); }
+
+@media (max-width: 650px) {
+    .recording-status, .recording-status.video-recording { left: 10px; right: 10px; }
+    .rec-stage { width: 168px; height: 168px; }
+}
+
+/* ============================================================================
+   НИЖНИЙ БАР при узкой боковой панели: кнопки сжимаются, подписи прячутся,
+   а не вылезают за границы капсулы.
+   ========================================================================= */
+.bottom-nav { container-type: inline-size; container-name: bottomnav; box-sizing: border-box; overflow: hidden; }
+.bottom-nav-item { min-width: 0; flex: 1 1 0; }
+.bottom-nav-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container bottomnav (max-width: 330px) {
+    .bottom-nav-label { display: none; }
+    .bottom-nav-item { padding: 9px 2px; }
+}
+@container bottomnav (max-width: 250px) {
+    .bottom-nav-icon svg, .bottom-nav-avatar { width: 21px; height: 21px; }
+    .bottom-nav-story-ring { width: 21px; height: 21px; }
+    .bottom-nav-story.has-story .bottom-nav-story-ring { width: 23px; height: 23px; }
+    .bottom-nav-story.has-story .bottom-nav-story-ring svg { width: 19px; height: 19px; }
+    .bottom-nav-dot { right: calc(50% - 15px); }
+}
