@@ -661,23 +661,55 @@ function voiceSfxIncoming(call, payload) {
         return;
     }
 
-    // Свой звук другого участника: данные приходят вместе с первым запуском, дальше — из кэша.
+    // Свой звук другого участника: данные приходят вместе с первым запуском (маленький —
+    // прямо в этом сообщении, большой — заранее частями, см. voiceSfxChunkIncoming), дальше — из кэша.
     const key = `${payload.from}:${payload.id}`;
+    const label = `${who}: ${String(payload.name || "звук").slice(0, 24)}`;
     if (typeof payload.data === "string" && payload.data.length < 200000) {
         try { voiceSfxRemote.set(key, voiceSfxFromBase64(payload.data)); } catch { return; }
     }
     const buffer = voiceSfxRemote.get(key);
-    if (!buffer) return;
-    voiceSfxPlayBuffer(call, buffer);
-    voiceSfxFlash(`${who}: ${String(payload.name || "звук").slice(0, 24)}`);
+    if (!buffer) {
+        // Части ещё летят — сыграем, как только соберутся.
+        const pending = voiceSfxChunks.get(key);
+        if (pending) pending.playLabel = label;
+        return;
+    }
+    voiceSfxPlayBuffer(call, buffer, payload.from);
+    voiceSfxFlash(label);
 
+}
+
+// Большой звук (до 1 МБ) не помещается в одно сообщение канала (лимит ~256 КБ) —
+// он приходит частями по ~170 КБ и собирается здесь.
+const VOICE_SFX_CHUNK = 170000;
+const voiceSfxChunks = new Map();   // "userId:soundId" → { total, parts[], got, at, playLabel }
+
+function voiceSfxChunkIncoming(call, payload) {
+    if (!call.members[payload.from] || typeof payload.data !== "string" || payload.data.length > VOICE_SFX_CHUNK + 100) return;
+    const total = Number(payload.total), idx = Number(payload.idx);
+    if (!Number.isInteger(total) || total < 1 || total > 10 || !Number.isInteger(idx) || idx < 0 || idx >= total) return;
+    const key = `${payload.from}:${payload.id}`;
+    let entry = voiceSfxChunks.get(key);
+    if (!entry || entry.total !== total || Date.now() - entry.at > 60000) {
+        entry = { total, parts: new Array(total), got: 0, at: Date.now(), playLabel: null };
+        voiceSfxChunks.set(key, entry);
+    }
+    if (entry.parts[idx] == null) { entry.parts[idx] = payload.data; entry.got++; }
+    if (entry.got < total) return;
+    voiceSfxChunks.delete(key);
+    try { voiceSfxRemote.set(key, voiceSfxFromBase64(entry.parts.join(""))); } catch { return; }
+    if (entry.playLabel && !call.deafened && voiceSettings.sfx) {
+        voiceSfxPlayBuffer(call, voiceSfxRemote.get(key), payload.from);
+        voiceSfxFlash(entry.playLabel);
+    }
 }
 
 /* ---- свои звуки (мемы): хранятся локально, при запуске уходят остальным в комнате ---------------- */
 
-const VOICE_SFX_MAX_BYTES = 120 * 1024;
-const VOICE_SFX_MAX_SECONDS = 8;
-const VOICE_SFX_MAX_CUSTOM = 8;
+const VOICE_SFX_MAX_BYTES = 1024 * 1024;
+const VOICE_SFX_MAX_SECONDS = 20;
+const VOICE_SFX_MAX_CUSTOM = 16;
 const voiceSfxRemote = new Map();    // "userId:soundId" → ArrayBuffer
 let voiceCustomSfx = [];             // { id, name, data: ArrayBuffer }
 let voiceCustomSfxLoaded = false;
@@ -730,7 +762,10 @@ function voiceSfxFromBase64(text) {
     return bytes.buffer;
 }
 
-async function voiceSfxPlayBuffer(call, buffer) {
+// Новый звук того же человека обрывает его предыдущий — длинные звуки не наслаиваются.
+const voiceSfxPlaying = new Map();   // userId → источник звука
+
+async function voiceSfxPlayBuffer(call, buffer, owner) {
     const ctx = call?.local?.ctx;
     if (!ctx || !call.master) return;
     try {
@@ -742,6 +777,10 @@ async function voiceSfxPlayBuffer(call, buffer) {
         const bus = ctx.createGain();
         bus.gain.value = 0.9;
         src.connect(bus).connect(call.master);
+        const who = owner || myRealUserId;
+        try { voiceSfxPlaying.get(who)?.stop(); } catch { /* уже закончился */ }
+        voiceSfxPlaying.set(who, src);
+        src.onended = () => { if (voiceSfxPlaying.get(who) === src) voiceSfxPlaying.delete(who); };
         src.start();
     } catch { /* повреждённый файл — пропускаем */ }
 }
@@ -754,7 +793,7 @@ function voiceSfxPickFile() {
     input.onchange = async () => {
         const file = input.files?.[0];
         if (!file) return;
-        if (file.size > VOICE_SFX_MAX_BYTES) { toast("Файл слишком большой: до 120 КБ (≈ 8 секунд mp3)"); return; }
+        if (file.size > VOICE_SFX_MAX_BYTES) { toast("Файл слишком большой: до 1 МБ"); return; }
         try {
             const data = await file.arrayBuffer();
             const decoded = await voiceEnsureCtx().decodeAudioData(data.slice(0));
@@ -805,7 +844,15 @@ function voiceSfxSend(id) {
         const roster = Object.keys(call.members).sort().join(",");
         call.sfxShared = call.sfxShared || {};
         const payload = { type: "sfx", to: "*", id, name: custom.name };
-        if (call.sfxShared[id] !== roster) { payload.data = voiceSfxToBase64(custom.data); call.sfxShared[id] = roster; }
+        if (call.sfxShared[id] !== roster) {
+            const data = voiceSfxToBase64(custom.data);
+            if (data.length < 190000) payload.data = data;      // маленький — одним сообщением (так понимают и старые версии)
+            else {
+                const total = Math.ceil(data.length / VOICE_SFX_CHUNK);
+                for (let i = 0; i < total; i++) voiceSend(call, { type: "sfx-chunk", to: "*", id, idx: i, total, data: data.slice(i * VOICE_SFX_CHUNK, (i + 1) * VOICE_SFX_CHUNK) });
+            }
+            call.sfxShared[id] = roster;
+        }
         voiceSend(call, payload);
     } else {
         voiceSfxLastSent = now;
@@ -847,7 +894,7 @@ function voiceSfxRenderPanel() {
         VOICE_SFX.map(item).join("") +
         `<div class="voice-sfx-sep">Свои</div>` +
         voiceCustomSfx.map((s) => `<div class="voice-sfx-item custom" role="button" tabindex="0" onclick="voiceSfxSend('${s.id}')"><span>🔊</span><em>${escapeHTML(s.name)}</em><button type="button" class="voice-sfx-del" title="Удалить звук" onclick="event.stopPropagation();voiceSfxRemoveCustom('${s.id}')">×</button></div>`).join("") +
-        `<button type="button" class="voice-sfx-item add" onclick="voiceSfxPickFile()" title="Добавить свой звук (mp3/ogg до 120 КБ, до 8 с)"><span>＋</span><em>Свой звук</em></button>` +
+        `<button type="button" class="voice-sfx-item add" onclick="voiceSfxPickFile()" title="Добавить свой звук (mp3/ogg/wav до 1 МБ, до 20 с)"><span>＋</span><em>Свой звук</em></button>` +
         `<label class="voice-sfx-mute"><input type="checkbox" ${voiceSettings.sfx ? "checked" : ""} onchange="voiceSetSetting('sfx', this.checked)"> Слышать звуки других</label>`;
     pop.classList.toggle("cooling", cooling);
 
@@ -911,6 +958,7 @@ async function voiceHandleSig(payload) {
 
     const call = voiceCall;
     if (call && payload?.type === "sfx" && payload.from !== myRealUserId) { voiceSfxIncoming(call, payload); return; }
+    if (call && payload?.type === "sfx-chunk" && payload.from !== myRealUserId) { voiceSfxChunkIncoming(call, payload); return; }
     if (!call || !payload || payload.to !== myRealUserId) return;
 
     const from = payload.from;

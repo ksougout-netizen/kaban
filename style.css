@@ -11294,3 +11294,6 @@ body.recording-active .recording-status.video-recording ~ .record-lock-hint { bo
     .voice-stage { top: calc(10px + env(safe-area-inset-top)); left: 10px !important; right: 10px; width: auto !important; height: 42vh !important; resize: none; }
     .voice-stage.minimized { width: auto !important; }
 }
+
+/* Саундборд: до 12 встроенных + 16 своих звуков — панель прокручивается, а не вылезает за экран */
+.voice-sfx-pop { max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain; }

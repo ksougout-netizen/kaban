@@ -1,5 +1,5 @@
 {
- "version": "20261007-80",
+ "version": "20261007-81",
  "minShell": "1.0.0",
  "files": {
   "apple-touch-icon.png": {
@@ -39,7 +39,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "c29079f501d6728dacb11d3b016962488fd31b86d12e374e9d1c1f1f0747f972",
+   "sha256": "347fe53450263d9f8bbf5fdd254e85edce3f50cb4c36be4f0e0c9f0168a79687",
    "size": 212586
   },
   "listen.js": {
@@ -103,8 +103,8 @@
    "size": 21649
   },
   "style.css": {
-   "sha256": "a38871a17c24026f45486c60939583133185be69a1f2dcfb19ad6bf6b38c8018",
-   "size": 334260
+   "sha256": "e34a7b5113390962407482b3e55a01fd4c9b3efe6b0055a9192271a426c602b6",
+   "size": 334531
   },
   "supabaseClient.js": {
    "sha256": "417df75f6f042beb9d4bd0e2c191f6a36ef03676ab566fe815f260c869f67e70",
@@ -135,8 +135,8 @@
    "size": 16140
   },
   "voice.js": {
-   "sha256": "299f5c27549052ca7f38d7aef80f38e587ea368264de749d78a33eec9e02e2a9",
-   "size": 81502
+   "sha256": "37a723eed057a4b4d9586c7fabdbaddddaecabcade840e73e64dfffdd400a00b",
+   "size": 84501
   }
  }
 }
