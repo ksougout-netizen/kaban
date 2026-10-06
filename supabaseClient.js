@@ -186,7 +186,9 @@ const KabanAuth = {
     // onAuthStateChange ниже и script.js → initAuthGate.
     async resetPasswordForEmail(email) {
         const db = getSupabaseClient();
-        const redirectTo = window.location.href.split("#")[0].split("?")[0];
+        // В программе для ПК адрес страницы — kaban://app, ссылка из письма туда не откроется:
+        // восстановление пароля проходит на сайте, потом входим в программе с новым паролем.
+        const redirectTo = window.kabanDesktop ? "https://ksougout-netizen.github.io/kaban/" : window.location.href.split("#")[0].split("?")[0];
         const { error } = await db.auth.resetPasswordForEmail(email, { redirectTo });
         if (error) throw error;
     },
@@ -1384,7 +1386,7 @@ const KabanAPI = {
 
     // Канал одной комнаты: broadcast-сигналы WebRTC ("sig", адресные) + presence
     // участников (мета: имя, аватар, mute/deafen, момент входа).
-    async openVoiceChannel(chatId, roomId, { onSig, onPresence } = {}) {
+    async openVoiceChannel(chatId, roomId, { onSig, onPresence, onDrop } = {}) {
         const db = getSupabaseClient();
         const me = await KabanAuth.getCurrentUser();
         if (!me) throw new Error("Нужно войти в аккаунт");
@@ -1399,11 +1401,15 @@ const KabanAPI = {
                 onPresence?.(members);
             });
 
+        let closing = false;
         await new Promise((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error("Нет связи с сервером")), 9000);
+            let subscribed = false;
             channel.subscribe((status) => {
-                if (status === "SUBSCRIBED") { clearTimeout(timer); resolve(); }
-                else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") { clearTimeout(timer); reject(new Error("Канал недоступен")); }
+                if (status === "SUBSCRIBED") { subscribed = true; clearTimeout(timer); resolve(); }
+                else if (!subscribed && (status === "CHANNEL_ERROR" || status === "TIMED_OUT")) { clearTimeout(timer); reject(new Error("Канал недоступен")); }
+                // Канал оборвался уже после подключения (сервер закрыл, сеть) — пусть владелец переподключится.
+                else if (subscribed && !closing && (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT")) onDrop?.(status);
             });
         });
 
@@ -1411,7 +1417,7 @@ const KabanAPI = {
             send: (payload) => channel.send({ type: "broadcast", event: "sig", payload }),
             track: (meta) => channel.track(meta),
             untrack: () => channel.untrack(),
-            close: () => db.removeChannel(channel)
+            close: () => { closing = true; return db.removeChannel(channel); }
         };
     },
     // Ход/выбор в игре — тоже строка в reactions: emoji = "game:<данные>"

@@ -1,0 +1,142 @@
+{
+ "version": "20261007-80",
+ "minShell": "1.0.0",
+ "files": {
+  "apple-touch-icon.png": {
+   "sha256": "6876b2d50ad5444ebbb360b70601925654c2880eb46d36eb7f37e7761ef679e2",
+   "size": 917
+  },
+  "crypto.js": {
+   "sha256": "cbeeb7c88c19d5fdc9992a95ac662952e0e5a7163f22e342f9857fbc678233d5",
+   "size": 43511
+  },
+  "desktop-app.js": {
+   "sha256": "79f12fad7d4aef90f649f737ac1a24f0435ca30da760913bb7e5884f781c97b8",
+   "size": 27030
+  },
+  "effects.js": {
+   "sha256": "e84334324075c0892ad92f912b62f517d5b4546efcf4423bf04cdae78c382472",
+   "size": 21544
+  },
+  "emoji-data.js": {
+   "sha256": "c046ab30fbdd33e4d7b94ff9588a4e4d8d8b81ed8f6de670e5229b32eb65cb6b",
+   "size": 16188
+  },
+  "games.js": {
+   "sha256": "68f8d561441acbb0dbce62c56144ea2cc7e2cb2993b12876a12bcb4ebd62f28b",
+   "size": 14839
+  },
+  "icon-192.png": {
+   "sha256": "0ef86d3ebc6ad4c2ecb0117c20c8ad77fbd400295368bcac261bb5f9c67f868b",
+   "size": 1668
+  },
+  "icon-512.png": {
+   "sha256": "0330a8e9ecb9dda7f5fd05fe0217fa72923e5b4f09ee015d69e679d447420e89",
+   "size": 30701
+  },
+  "icon.svg": {
+   "sha256": "be89e0563fc359ddc6f47cbe344af5385a932191ba383792846245d72bfea75e",
+   "size": 4038
+  },
+  "index.html": {
+   "sha256": "c29079f501d6728dacb11d3b016962488fd31b86d12e374e9d1c1f1f0747f972",
+   "size": 212586
+  },
+  "listen.js": {
+   "sha256": "7f46243e7bd963c28115cb3b74344b865c1ad1ae2c7e070fd2a5e973d392ab48",
+   "size": 29129
+  },
+  "manifest.json": {
+   "sha256": "57c6f80bd3b04a43c50ea2bc4af987fbff264cede5f66c503c8353bf88a7589f",
+   "size": 778
+  },
+  "productivity.js": {
+   "sha256": "10a9ccba3771b1a7bf8d1137e2aa4c13f8a0b05d42bc9ce6606dcb76fa42a9e1",
+   "size": 38219
+  },
+  "reactions.js": {
+   "sha256": "3fafb4ed33b4582a8784ca4a04744342cccf2c1e2e56cbad1f34edbc56eb194d",
+   "size": 25578
+  },
+  "resilience.js": {
+   "sha256": "761d066523e8beda65d25543834eee3557e45078babb4344c4b58cfa0356e2db",
+   "size": 23520
+  },
+  "script-chats.js": {
+   "sha256": "b4f25c9843a3567e33da36c3520de25f398f4b6ef5da68ebe0ddcba6e3f6de48",
+   "size": 216032
+  },
+  "script-core.js": {
+   "sha256": "42077e8edd182a27f8a83f0960a524ec263f12d129eb048956225542e3184444",
+   "size": 258509
+  },
+  "script-messages.js": {
+   "sha256": "40ce7832989bb85702068b492799bbba13390388df7dbb1f6efe172866e60a76",
+   "size": 108560
+  },
+  "script-ui.js": {
+   "sha256": "c12c098fe8c6244aaacb4637fe262b85926e0eb5ac35b0e809a40b91387ad00a",
+   "size": 263247
+  },
+  "splash-1170x2532.png": {
+   "sha256": "143b4e1ec0f720e5d1422effa249d3bcf43f85a18d9b58609aa8fef65cb46f35",
+   "size": 27272
+  },
+  "splash-1179x2556.png": {
+   "sha256": "ce580cc0a3ab38b59e529532bec8592aa1c6ed23e6763033398d64e75c775a39",
+   "size": 27406
+  },
+  "splash-1284x2778.png": {
+   "sha256": "8f6dfbb7a12ea3eec3b74b2fb88300be39ef5489f2c83915426c199a1124e66f",
+   "size": 29243
+  },
+  "splash-1290x2796.png": {
+   "sha256": "22cf6376b419419c73c30f2e16844aa9b4f5b67fc4b9f6ef60135b2235713b85",
+   "size": 27786
+  },
+  "splash-750x1334.png": {
+   "sha256": "0ce0d4c090836dc5996085c56f44a7bd53b4e5366cb347707e220042dff6195f",
+   "size": 18344
+  },
+  "stories.js": {
+   "sha256": "71f346f7f28a6a3b2d21b75ceaa487530b0e0a5fe899607d50e3107bdb858b84",
+   "size": 21649
+  },
+  "style.css": {
+   "sha256": "a38871a17c24026f45486c60939583133185be69a1f2dcfb19ad6bf6b38c8018",
+   "size": 334260
+  },
+  "supabaseClient.js": {
+   "sha256": "417df75f6f042beb9d4bd0e2c191f6a36ef03676ab566fe815f260c869f67e70",
+   "size": 104663
+  },
+  "sw.js": {
+   "sha256": "6d912aaaf45d6146bc24272eaf1f4101f4876713c9830d3da7592a2df1fc9693",
+   "size": 3563
+  },
+  "vendor/lottie_light.min.js": {
+   "sha256": "23cd2c01be3d4da8bb664645d03afaff40879c62dc5f8dfe075ab3aa35c108f3",
+   "size": 168236
+  },
+  "vendor/qrcode.min.js": {
+   "sha256": "c541ef06327885a8415bca8df6071e14189b4855336def4f36db54bde8484f36",
+   "size": 19927
+  },
+  "vendor/supabase.js": {
+   "sha256": "59d39487c3589843b410322d8a3d562ce022aba1e5ccb16898ef3fb2a0da2ecd",
+   "size": 217945
+  },
+  "voice-ai.js": {
+   "sha256": "e8d1f4a185a42524e6d552306c6ba4f2b439fdd3e3fc56fbfbda99a3435691df",
+   "size": 9126
+  },
+  "voice-video.js": {
+   "sha256": "8f037c681a1c5d918377ed804f526c0b4f5c42a64fc2abf4034c035a33dcc4e4",
+   "size": 16140
+  },
+  "voice.js": {
+   "sha256": "299f5c27549052ca7f38d7aef80f38e587ea368264de749d78a33eec9e02e2a9",
+   "size": 81502
+  }
+ }
+}

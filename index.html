@@ -40,7 +40,7 @@
 
 <link rel="preconnect" href="https://ketvgmietommjqutejuj.supabase.co" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261006-78">
+<link rel="stylesheet" href="style.css?v=20261007-80">
 </head>
 
 <body>
@@ -1137,6 +1137,18 @@
             </button>
         </div>
 
+        <div class="settings-group-label" id="desktop-settings-group" hidden>Компьютер</div>
+        <div class="settings-section" id="desktop-settings-row" hidden>
+            <button type="button" class="settings-option settings-option-link" onclick="openDesktopSettings()">
+                <span class="settings-option-icon">🖥️</span>
+                <span class="settings-option-copy">
+                    <span class="settings-option-title" id="desktop-row-title">KABAN для Windows</span>
+                    <span class="settings-option-hint" id="desktop-row-hint">Программа с горячими клавишами для игр, трей и автозапуск</span>
+                </span>
+                <span class="settings-option-value" id="desktop-row-value">Скачать</span>
+                <span class="settings-option-chevron">›</span>
+            </button>
+        </div>
         <div class="settings-group-label">Приватность</div>
         <div class="settings-section">
             <button type="button" class="settings-option settings-option-link" onclick="openAppLockSetup()">
@@ -2295,7 +2307,17 @@
         </div>
     </section>
 </div>
-<!-- ИГРЫ В ЧАТЕ -->
+<!-- ПРИЛОЖЕНИЕ ДЛЯ ПК (только в программе KABAN для Windows, см. desktop-app.js) -->
+
+<div class="forward-backdrop" id="desktop-backdrop" aria-hidden="true" onclick="if (event.target === this) closeDesktopSettings()">
+    <section class="forward-modal group-info-modal desktop-modal" role="dialog" aria-modal="true" aria-label="Приложение для ПК">
+        <div class="forward-modal-header">
+            <span>Приложение для ПК</span>
+            <button type="button" class="settings-close" onclick="closeDesktopSettings()" aria-label="Закрыть">×</button>
+        </div>
+        <div class="desktop-settings-body" id="desktop-settings-body"></div>
+    </section>
+</div><!-- ИГРЫ В ЧАТЕ -->
 
 <div class="forward-backdrop" id="games-backdrop" aria-hidden="true" onclick="if (event.target === this) closeGamesModal()">
     <section class="forward-modal group-info-modal" role="dialog" aria-modal="true" aria-label="Игры">
@@ -2498,8 +2520,28 @@
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/></svg>
         </button>
     </div>
+    <div class="voice-dock-media">
+        <button type="button" class="voice-media-btn" id="voice-cam-btn" onclick="voiceToggleCamera()" title="Включить камеру">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2.5"/><path d="m16 10 5-3v10l-5-3z"/></svg><em>Камера</em>
+        </button>
+        <button type="button" class="voice-media-btn" id="voice-screen-btn" onclick="voiceToggleScreenMenu()" title="Показать экран всей комнате">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M9.5 10l2.5-2.5L14.5 10M12 7.5V13"/></svg><em>Экран</em>
+        </button>
+    </div>
     <div class="voice-sfx-pop" id="voice-sfx-pop" hidden></div>
+    <div class="voice-golive-pop" id="voice-golive-pop" hidden></div>
 </div>
+
+<!-- Сцена голосовой комнаты: камеры и трансляции экрана (voice-video.js) -->
+<section class="voice-stage" id="voice-stage" hidden aria-label="Видео голосовой комнаты">
+    <div class="voice-stage-head" id="voice-stage-head">
+        <span class="voice-stage-dot" aria-hidden="true"></span>
+        <span class="voice-stage-title" id="voice-stage-title">Видео</span>
+        <button type="button" class="voice-stage-btn" onclick="voiceStageFullscreen()" title="Во весь экран" aria-label="Во весь экран"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        <button type="button" class="voice-stage-btn" onclick="voiceStageToggleMinimize()" title="Свернуть / развернуть" aria-label="Свернуть"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+    </div>
+    <div class="voice-stage-grid" id="voice-stage-grid"></div>
+</section>
 
 <div class="forward-backdrop" id="voice-rooms-backdrop" aria-hidden="true" onclick="if (event.target === this) closeVoiceRooms()">
     <section class="forward-modal group-info-modal voice-rooms-modal" role="dialog" aria-modal="true" aria-label="Голосовые комнаты">
@@ -3072,27 +3114,29 @@
 
 <!-- Библиотеки лежат рядом с сайтом (vendor/): не зависим от CDN, которые бывают недоступны; версия supabase-js закреплена (2.117.2). -->
 <script src="vendor/supabase.js?v=2.117.2"></script>
-<script src="supabaseClient.js?v=20261006-78"></script>
-<script src="crypto.js?v=20261006-78"></script>
+<script src="supabaseClient.js?v=20261007-80"></script>
+<script src="crypto.js?v=20261007-80"></script>
 <!-- script.js разбит на 4 файла для удобства навигации (раньше был один
      файл ~350КБ/8300+ строк) — порядок подключения важен, см. комментарий
      в начале каждого файла. Это НЕ ES-модули: обычные классические
      скрипты, выполняются последовательно как один большой файл, функции
      между ними в общей глобальной области видимости, как и раньше. -->
-<script src="emoji-data.js?v=20261006-78"></script>
-<script src="script-core.js?v=20261006-78"></script>
-<script src="script-ui.js?v=20261006-78"></script>
-<script src="script-chats.js?v=20261006-78"></script>
-<script src="script-messages.js?v=20261006-78"></script>
-<script src="effects.js?v=20261006-78"></script>
-<script src="games.js?v=20261006-78"></script>
-<script src="voice-ai.js?v=20261006-78"></script>
-<script src="stories.js?v=20261006-78"></script>
-<script src="productivity.js?v=20261006-78"></script>
-<script src="reactions.js?v=20261006-78"></script>
-<script src="listen.js?v=20261006-78"></script>
-<script src="voice.js?v=20261006-78"></script>
-<script src="resilience.js?v=20261006-78"></script>
+<script src="emoji-data.js?v=20261007-80"></script>
+<script src="script-core.js?v=20261007-80"></script>
+<script src="script-ui.js?v=20261007-80"></script>
+<script src="script-chats.js?v=20261007-80"></script>
+<script src="script-messages.js?v=20261007-80"></script>
+<script src="effects.js?v=20261007-80"></script>
+<script src="games.js?v=20261007-80"></script>
+<script src="voice-ai.js?v=20261007-80"></script>
+<script src="stories.js?v=20261007-80"></script>
+<script src="productivity.js?v=20261007-80"></script>
+<script src="reactions.js?v=20261007-80"></script>
+<script src="listen.js?v=20261007-80"></script>
+<script src="voice.js?v=20261007-80"></script>
+<script src="voice-video.js?v=20261007-80"></script>
+<script src="resilience.js?v=20261007-80"></script>
+<script src="desktop-app.js?v=20261007-80"></script>
 
 </body>
 </html>

@@ -1803,9 +1803,26 @@ function showIncomingCallUI(offer) {
 
     if (appSettings.receiveSound) playReceiveSound();
 
+    // Окно не на виду (другая вкладка, свёрнуто, в трее) — системное уведомление о звонке.
+    if (typeof Notification !== "undefined" && Notification.permission === "granted" && (document.hidden || !document.hasFocus())) {
+        try {
+            const notification = new Notification(offer.callerName || "Входящий звонок", {
+                body: offer.isVideo ? "Входящий видеозвонок" : "Входящий звонок",
+                icon: offer.callerAvatarUrl || undefined,
+                tag: "kaban-call",
+                requireInteraction: true
+            });
+            notification.onclick = () => { window.focus(); notification.close(); };
+            const closeWhenDone = setInterval(() => {
+                if (pendingIncomingCall !== offer) { notification.close(); clearInterval(closeWhenDone); }
+            }, 1000);
+        } catch { /* без уведомления — окно звонка всё равно открыто */ }
+    }
+
 }
 
 function showInCallUI() {
+
 
     const backdrop = document.getElementById("call-backdrop");
     const dialog = backdrop.querySelector(".call-dialog");

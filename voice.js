@@ -110,16 +110,59 @@ function voiceHubAcquire(chatId, roomId, { onSig, onPresence } = {}) {
     let hub = voiceHubs.get(key);
 
     if (!hub) {
-        hub = { api: null, members: {}, sigListeners: new Set(), presenceListeners: new Set(), refs: 0, pending: [] };
+        // raw — присутствие (кто в комнате: имя, аватар, момент входа; отправляется
+        // ОДИН раз при входе). states — меняющееся состояние (микрофон, звук,
+        // камера, экран, музыка): приходит обычными сообщениями канала. Частые
+        // обновления присутствия Supabase не выдерживает — после нескольких
+        // подряд закрывает канал, и человек «пропадал» из комнаты у остальных.
+        hub = { api: null, raw: {}, states: {}, members: {}, sigListeners: new Set(), presenceListeners: new Set(), refs: 0, pending: [], identity: null, retry: 0 };
         voiceHubs.set(key, hub);
-        KabanAPI.openVoiceChannel(chatId, roomId, {
-            onSig: (payload) => hub.sigListeners.forEach((fn) => fn(payload)),
-            onPresence: (members) => { hub.members = members; hub.presenceListeners.forEach((fn) => fn(members)); }
+
+        const emit = () => {
+            Object.keys(hub.states).forEach((id) => { if (!hub.raw[id]) delete hub.states[id]; });
+            const merged = {};
+            Object.entries(hub.raw).forEach(([id, meta]) => { merged[id] = { ...meta, ...(hub.states[id] || {}) }; });
+            hub.members = merged;
+            hub.presenceListeners.forEach((fn) => fn(merged));
+        };
+        hub.emit = emit;
+
+        const open = () => KabanAPI.openVoiceChannel(chatId, roomId, {
+            onSig: (payload) => {
+                if (payload?.type === "state" && payload.from && payload.state && typeof payload.state === "object") {
+                    const s = payload.state;
+                    hub.states[payload.from] = { muted: !!s.muted, deafened: !!s.deafened, cam: !!s.cam, screen: !!s.screen, music: typeof s.music === "string" ? s.music.slice(0, 120) : null };
+                    if (hub.raw[payload.from]) emit();
+                    return;
+                }
+                hub.sigListeners.forEach((fn) => fn(payload));
+            },
+            onPresence: (members) => { hub.raw = members; emit(); },
+            onDrop: () => reconnect()
         }).then((api) => {
             if (voiceHubs.get(key) !== hub) { api.close(); return; }
             hub.api = api;
+            hub.retry = 0;
+            if (hub.identity) api.track(hub.identity);
             hub.pending.splice(0).forEach((fn) => fn(api));
-        }).catch((error) => { console.warn("Не удалось открыть голосовую комнату", error); hub.failed = true; });
+            hub.onReconnect?.();
+        });
+
+        const reconnect = () => {
+            if (voiceHubs.get(key) !== hub || hub.reconnecting) return;
+            hub.reconnecting = true;
+            const old = hub.api;
+            hub.api = null;
+            try { old?.close(); } catch { /* уже закрыт */ }
+            const delay = [800, 2000, 4000, 8000, 15000][Math.min(hub.retry++, 4)];
+            setTimeout(() => {
+                hub.reconnecting = false;
+                if (voiceHubs.get(key) !== hub) return;
+                open().catch(() => reconnect());
+            }, delay);
+        };
+
+        open().catch((error) => { console.warn("Не удалось открыть голосовую комнату", error); hub.failed = true; reconnect(); });
     }
 
     hub.refs++;
@@ -133,7 +176,7 @@ function voiceHubAcquire(chatId, roomId, { onSig, onPresence } = {}) {
             if (onSig) hub.sigListeners.delete(onSig);
             if (onPresence) hub.presenceListeners.delete(onPresence);
             hub.refs--;
-            if (hub.refs <= 0) { hub.api?.close(); voiceHubs.delete(key); }
+            if (hub.refs <= 0) { voiceHubs.delete(key); hub.api?.close(); }
         }
     };
 
@@ -213,21 +256,54 @@ function voiceUnwatch() {
 
 /* ---- мета участника ---------------------------------------------------------------------------------- */
 
-function voiceMeta() {
+// «Кто я» — в присутствие канала, один раз при входе.
+function voiceIdentity() {
     const call = voiceCall;
     return {
         name: cachedMyProfile?.display_name || "Участник",
         avatar: cachedMyProfile?.avatar_url || null,
+        joinedAt: call?.joinedAt || Date.now()
+    };
+}
+
+// Меняющееся состояние — сообщениями канала (voicePushMeta).
+function voiceState() {
+    const call = voiceCall;
+    return {
         muted: !!call?.muted,
         deafened: !!call?.deafened,
-        joinedAt: call?.joinedAt || Date.now(),
+        cam: !!call?.media?.camTrack,
+        screen: !!call?.media?.screenTrack,
         // Что играет в музыке комнаты — видно всем в списке комнат («🎵 …»).
         music: call && typeof listenRoomMusicTitle === "function" ? listenRoomMusicTitle(call.chatId, call.roomId) : null
     };
 }
 
+function voiceMeta() {
+    return { ...voiceIdentity(), ...voiceState() };
+}
+
+// Состояние (микрофон, звук, камера, экран, музыка) рассылается сообщением всем в
+// комнате. Несколько изменений подряд склеиваются в одно; кроме того, состояние
+// повторяется раз в 8 секунд (voicePingTick) и сразу, когда кто-то входит, —
+// так его знают и новые участники, и те, кто просто смотрит список комнат.
+let voiceMetaTimer = null;
+let voiceStateSentAt = 0;
 function voicePushMeta() {
-    voiceCall?.handle?.run((api) => api.track(voiceMeta()));
+    const call = voiceCall;
+    if (!call?.handle) return;
+    const hub = call.handle.hub;
+    hub.states[myRealUserId] = voiceState();   // своё состояние видно сразу, без эха с сервера
+    if (hub.raw[myRealUserId] && !hub.emitQueued) {
+        hub.emitQueued = true;
+        queueMicrotask(() => { hub.emitQueued = false; hub.emit(); });
+    }
+    clearTimeout(voiceMetaTimer);
+    voiceMetaTimer = setTimeout(() => {
+        if (voiceCall !== call) return;
+        voiceStateSentAt = Date.now();
+        voiceSend(call, { type: "state", to: "*", state: voiceState() });
+    }, 80);
 }
 
 function voiceMemberName(userId, meta) {
@@ -375,7 +451,11 @@ async function voiceJoin(chatId, roomId, roomName, groupName) {
     voiceApplyMicState();
 
     call.handle = voiceHubAcquire(chatId, roomId, { onSig: voiceHandleSig, onPresence: voiceOnRoomPresence });
-    call.handle.run((api) => api.track(voiceMeta()));
+    call.handle.hub.identity = voiceIdentity();
+    call.handle.hub.onReconnect = () => { if (voiceCall === call) voicePushMeta(); };
+    // Если канал ещё открывается — присутствие отправит сам хаб, как только подключится.
+    if (call.handle.hub.api) call.handle.hub.api.track(call.handle.hub.identity);
+    voicePushMeta();
 
     clearInterval(voiceTickTimer);
     clearInterval(voicePingTimer);
@@ -402,10 +482,17 @@ async function voiceLeave(silent) {
     voiceTickTimer = voicePingTimer = null;
 
     call.peers.forEach((peer, userId) => voiceClosePeer(call, userId));
+    if (typeof voiceStopAllMedia === "function") voiceStopAllMedia(call);
     call.local?.micStream?.getTracks().forEach((track) => track.stop());
     try { call.local?.src?.disconnect(); } catch { /* уже отключён */ }
     try { call.master?.disconnect(); } catch { /* уже отключён */ }
 
+    if (call.handle) {
+        call.handle.hub.identity = null;
+        call.handle.hub.onReconnect = null;
+        delete call.handle.hub.states[myRealUserId];
+    }
+    clearTimeout(voiceMetaTimer);
     call.handle?.run((api) => api.untrack());
     call.handle?.release();
     voiceCall = null;
@@ -425,7 +512,10 @@ function voiceOnRoomPresence(members) {
     const call = voiceCall;
     if (!call) return;
     members = voiceOnlyMembers(call.chatId, members);
+    // Кто-то новый вошёл — сразу сообщаем ему своё состояние (камера, микрофон…).
+    const newcomer = Object.keys(members).some((id) => id !== myRealUserId && !call.members[id]);
     call.members = members;
+    if (newcomer) setTimeout(() => { if (voiceCall === call) voicePushMeta(); }, 0);
 
     // Те, кто пропал, — закрываем соединение.
     call.peers.forEach((peer, userId) => { if (!members[userId]) voiceClosePeer(call, userId); });
@@ -459,7 +549,7 @@ function voiceCreatePeer(call, userId, epoch) {
         if (event.candidate) voiceSend(call, { type: "ice", to: userId, data: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate });
     };
 
-    pc.ontrack = (event) => voiceAttachRemote(call, peer, event.streams[0] || new MediaStream([event.track]));
+    pc.ontrack = (event) => voiceOnTrack(call, peer, event);
 
     pc.onconnectionstatechange = () => {
         peer.state = pc.connectionState;
@@ -781,6 +871,7 @@ async function voiceConnectTo(call, userId, meta) {
 
     try {
         peer.pc.addTrack(call.local.sendTrack, call.local.sendStream);
+        voiceAddMediaTransceivers(call, peer);
         const offer = await peer.pc.createOffer();
         offer.sdp = voiceTuneSdp(offer.sdp);
         await peer.pc.setLocalDescription(offer);
@@ -846,6 +937,9 @@ async function voiceHandleSig(payload) {
                 transceiver.direction = "sendrecv";
                 await transceiver.sender.replaceTrack(call.local.sendTrack);
             }
+            // Камера, экран и звук экрана — слоты 1–3 (см. voiceAddMediaTransceivers).
+            peer.pc.getTransceivers().slice(1, 4).forEach((t) => { t.direction = "sendrecv"; });
+            voiceApplyMediaToPeer(call, peer);
             const answer = await peer.pc.createAnswer();
             answer.sdp = voiceTuneSdp(answer.sdp);
             await peer.pc.setLocalDescription(answer);
@@ -891,7 +985,13 @@ function voiceClosePeer(call, userId) {
         peer.nodes.audio.srcObject = null;
         peer.nodes.audio.remove();
     }
+    if (peer.screenNodes) {
+        try { peer.screenNodes.src.disconnect(); peer.screenNodes.gain.disconnect(); } catch { /* ок */ }
+        peer.screenNodes.audio.srcObject = null;
+        peer.screenNodes.audio.remove();
+    }
     call.speaking.delete(userId);
+    if (typeof voiceVideoRefresh === "function") voiceVideoRefresh();
 
 }
 
@@ -924,9 +1024,69 @@ function voiceAttachRemote(call, peer, stream) {
 }
 
 function voiceApplyPeerVolume(peer) {
-    if (!peer.nodes) return;
     const pref = voiceUserPref(peer.userId);
-    peer.nodes.gain.gain.value = pref.muted ? 0 : Math.max(0, pref.vol) / 100;
+    const value = pref.muted ? 0 : Math.max(0, pref.vol) / 100;
+    if (peer.nodes) peer.nodes.gain.gain.value = value;
+    if (peer.screenNodes) peer.screenNodes.gain.gain.value = value;
+}
+
+/* ---- видео в комнате: камера и трансляция экрана ---------------------------------------------------------------------
+   У каждой пары соединений кроме голоса (слот 0) заранее заведены ещё три канала:
+   1 — камера, 2 — экран, 3 — звук экрана. Включение/выключение камеры или экрана —
+   просто подмена трека (replaceTrack), без переподключения и без пересогласования.
+   Слоты совпадают у обеих сторон: отвечающий получает их в том же порядке из предложения.
+   Интерфейс (сцена с видео, кнопки) — в voice-video.js. */
+
+const VOICE_SLOT_CAM = 1, VOICE_SLOT_SCREEN = 2, VOICE_SLOT_SCREEN_AUDIO = 3;
+
+function voiceAddMediaTransceivers(call, peer) {
+    peer.pc.addTransceiver("video", { direction: "sendrecv" });
+    peer.pc.addTransceiver("video", { direction: "sendrecv" });
+    peer.pc.addTransceiver("audio", { direction: "sendrecv" });
+    voiceApplyMediaToPeer(call, peer);
+}
+
+function voiceApplyMediaToPeer(call, peer) {
+    const t = peer.pc.getTransceivers();
+    const media = call.media || {};
+    const set = (slot, track) => {
+        const sender = t[slot]?.sender;
+        if (!sender || sender.track === (track || null)) return;
+        sender.replaceTrack(track || null).catch(() => {});
+    };
+    set(VOICE_SLOT_CAM, media.camTrack);
+    set(VOICE_SLOT_SCREEN, media.screenTrack);
+    set(VOICE_SLOT_SCREEN_AUDIO, media.screenAudioTrack);
+    if (typeof voiceTuneVideoSenders === "function") voiceTuneVideoSenders(call, peer);
+}
+
+function voiceOnTrack(call, peer, event) {
+    const slot = peer.pc.getTransceivers().indexOf(event.transceiver);
+    if (slot === VOICE_SLOT_CAM) peer.camTrack = event.track;
+    else if (slot === VOICE_SLOT_SCREEN) peer.screenTrack = event.track;
+    else if (slot === VOICE_SLOT_SCREEN_AUDIO) voiceAttachScreenAudio(call, peer, event.track);
+    else if (event.track.kind === "audio") voiceAttachRemote(call, peer, event.streams[0] || new MediaStream([event.track]));
+    if ((slot === VOICE_SLOT_CAM || slot === VOICE_SLOT_SCREEN) && typeof voiceVideoRefresh === "function") {
+        event.track.addEventListener("unmute", () => voiceVideoRefresh());
+        voiceVideoRefresh();
+    }
+}
+
+// Звук чужой трансляции идёт в общий выход (значит, «выключить звук» глушит и его).
+function voiceAttachScreenAudio(call, peer, track) {
+    if (peer.screenNodes || !call.local) return;
+    const stream = new MediaStream([track]);
+    const audio = document.createElement("audio");
+    audio.muted = true;
+    audio.autoplay = true;
+    audio.srcObject = stream;
+    document.getElementById("voice-audio-sink")?.appendChild(audio);
+    audio.play?.().catch(() => {});
+    const src = call.local.ctx.createMediaStreamSource(stream);
+    const gain = call.local.ctx.createGain();
+    src.connect(gain).connect(call.master);
+    peer.screenNodes = { audio, src, gain };
+    voiceApplyPeerVolume(peer);
 }
 
 /* ---- «говорит», шумовой порог, качество связи --------------------------------------------------------------- */
@@ -987,6 +1147,8 @@ async function voicePingTick() {
 
     const call = voiceCall;
     if (!call) return;
+
+    if (Date.now() - voiceStateSentAt > 8000) voicePushMeta();
 
     const samples = [];
     for (const peer of call.peers.values()) {
@@ -1103,7 +1265,36 @@ document.addEventListener("keyup", (event) => {
     voiceApplyMicState();
 });
 
-window.addEventListener("blur", () => { if (voicePttDown) { voicePttDown = false; voiceApplyMicState(); } });
+// Рация на кнопку мыши (колёсико или боковые кнопки «назад/вперёд» — как в Discord).
+const VOICE_MOUSE_CODES = { 1: "Mouse3", 3: "Mouse4", 4: "Mouse5" };
+
+document.addEventListener("mousedown", (event) => {
+    const code = VOICE_MOUSE_CODES[event.button];
+    if (!code) return;
+    if (voiceCapturingPtt) {
+        event.preventDefault();
+        voiceSettings.pttKey = code;
+        voiceSettings.pttLabel = "Мышь " + code.slice(5);
+        voiceCapturingPtt = false;
+        saveVoiceSettings();
+        voiceRenderSettings();
+        return;
+    }
+    if (voiceSettings.mode !== "ptt" || !voiceCall || code !== voiceSettings.pttKey) return;
+    event.preventDefault();
+    voicePttDown = true;
+    voiceApplyMicState();
+});
+
+document.addEventListener("mouseup", (event) => {
+    if (VOICE_MOUSE_CODES[event.button] !== voiceSettings.pttKey || !voicePttDown) return;
+    event.preventDefault();
+    voicePttDown = false;
+    voiceApplyMicState();
+});
+
+// В программе для ПК рация ловится системно (и в играх) — потеря фокуса окном её не сбрасывает.
+window.addEventListener("blur", () => { if (voicePttDown && !(window.kabanDesktop?.features || []).includes("global-ptt")) { voicePttDown = false; voiceApplyMicState(); } });
 window.addEventListener("pagehide", () => { if (voiceCall) voiceLeave(true); });
 
 let voiceCapturingPtt = false;
@@ -1148,6 +1339,7 @@ function voiceAvatarHTML(userId, meta, small) {
 }
 
 function voiceRefreshUi() {
+    if (typeof voiceVideoRefresh === "function") voiceVideoRefresh();
     voiceRenderDock();
     voiceRenderRooms();
     voiceRenderBanner();
@@ -1248,6 +1440,8 @@ function voicePersonRow(userId, meta, roomId) {
     const connecting = inThisCall && !mine && (!peer || peer.state !== "connected");
     const pref = voiceUserPref(userId);
     const status = [
+        meta.screen ? `<span class="vp-live" title="Показывает экран">В ЭФИРЕ</span>` : "",
+        meta.cam ? `<span class="vp-flag cam" title="Камера включена"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2.5"/><path d="m16 10 5-3v10l-5-3z"/></svg></span>` : "",
         meta.deafened ? `<span class="vp-flag" title="Звук выключен">${voiceSvg("headphonesOff")}</span>` : (meta.muted ? `<span class="vp-flag" title="Микрофон выключен">${voiceSvg("micOff")}</span>` : ""),
         pref.muted && !mine ? `<span class="vp-flag muted-by-me" title="Вы его не слышите">${voiceSvg("speaker")}</span>` : ""
     ].join("");
@@ -1496,7 +1690,7 @@ function voiceRenderSettings() {
 
     document.querySelectorAll("[data-voice-mode]").forEach((btn) => btn.classList.toggle("active", btn.dataset.voiceMode === voiceSettings.mode));
     document.getElementById("voice-ptt-row").hidden = voiceSettings.mode !== "ptt";
-    document.getElementById("voice-ptt-key").textContent = voiceCapturingPtt ? "Нажмите клавишу…" : voiceSettings.pttLabel;
+    document.getElementById("voice-ptt-key").textContent = voiceCapturingPtt ? "Клавиша или кнопка мыши…" : voiceSettings.pttLabel;
     document.getElementById("voice-sens-row").hidden = voiceSettings.mode === "ptt";
     document.getElementById("voice-auto-input").checked = voiceSettings.autoSensitivity;
     document.getElementById("voice-threshold-wrap").hidden = voiceSettings.autoSensitivity;

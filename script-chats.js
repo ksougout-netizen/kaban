@@ -36,6 +36,8 @@ function urlBase64ToUint8Array(base64String) {
 // pushManager.subscribe() всё равно откажет).
 async function setupPushSubscription() {
 
+    // Программа для ПК получает сообщения сама (живёт в трее) — веб-push ей не нужен.
+    if (window.kabanDesktop) return;
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
 
