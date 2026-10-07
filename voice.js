@@ -64,6 +64,9 @@ function voiceEnsureCtx() {
     if (!voiceCtx) {
         voiceCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
         if (voiceCtx.setSinkId && voiceSettings.outputId) voiceCtx.setSinkId(voiceSettings.outputId).catch(() => {});
+        // Для журнала программы: звук комнаты «встал» (устройство вывода пропало и т. п.).
+        const ctx = voiceCtx;
+        ctx.addEventListener?.("statechange", () => { if (ctx.state !== "running") console.error("[sfx] звуковой контекст: " + ctx.state); });
     }
     if (voiceCtx.state === "suspended") voiceCtx.resume().catch(() => {});
     return voiceCtx;
@@ -720,9 +723,14 @@ function voiceSfxIncoming(call, payload) {
     }
     const buffer = voiceSfxRemote.get(key);
     if (!buffer) {
-        // Части ещё летят — сыграем, как только соберутся.
+        // Части ещё летят — сыграем, как только соберутся (если не слишком поздно).
         const pending = voiceSfxChunks.get(key);
-        if (pending) pending.playLabel = label;
+        if (pending) { pending.playLabel = label; pending.pressedAt = Date.now(); }
+        else voiceSfxWaiting.set(key, { label, pressedAt: Date.now() });
+        // Данных нет (части потерялись в сети, или мы вошли позже) — просим владельца
+        // прислать их заново. Раньше звук передавался один раз «на состав комнаты», и
+        // если хоть одна часть терялась, у этого человека он не играл больше никогда.
+        voiceSfxRequestData(call, payload.from, payload.id);
         return;
     }
     voiceSfxPlayBuffer(call, buffer, payload.from);
@@ -746,12 +754,52 @@ function voiceSfxChunkIncoming(call, payload) {
         voiceSfxChunks.set(key, entry);
     }
     if (entry.parts[idx] == null) { entry.parts[idx] = payload.data; entry.got++; }
+    const waiting = voiceSfxWaiting.get(key);
+    if (waiting && !entry.playLabel) { entry.playLabel = waiting.label; entry.pressedAt = waiting.pressedAt; voiceSfxWaiting.delete(key); }
     if (entry.got < total) return;
     voiceSfxChunks.delete(key);
     try { voiceSfxRemote.set(key, voiceSfxFromBase64(entry.parts.join(""))); } catch { return; }
-    if (entry.playLabel && !call.deafened && voiceSettings.sfx) {
+    // Доиграть нажатие, только если оно было только что: звук через 10 секунд после
+    // нажатия (данные долго шли) — уже не к месту.
+    if (entry.playLabel && Date.now() - (entry.pressedAt || 0) < 4000 && !call.deafened && voiceSettings.sfx) {
         voiceSfxPlayBuffer(call, voiceSfxRemote.get(key), payload.from);
         voiceSfxFlash(entry.playLabel);
+    }
+}
+
+// Нажатия своих звуков других участников, для которых ещё нет данных.
+const voiceSfxWaiting = new Map();   // "userId:soundId" → { label, pressedAt }
+const voiceSfxAskedAt = new Map();   // "userId:soundId" → когда последний раз просили данные
+
+function voiceSfxRequestData(call, owner, id) {
+    const key = `${owner}:${id}`;
+    if (Date.now() - (voiceSfxAskedAt.get(key) || 0) < 5000) return;
+    voiceSfxAskedAt.set(key, Date.now());
+    voiceSend(call, { type: "sfx-need", to: owner, id });
+}
+
+// Кто-то просит данные моего звука — отправляем (не чаще раза в 4 с на звук).
+function voiceSfxNeedIncoming(call, payload) {
+    if (!call.members[payload.from]) return;
+    const custom = voiceCustomSfx.find((s) => s.id === payload.id);
+    if (!custom) return;
+    voiceSfxShareData(call, custom);
+}
+
+// Отправить данные своего звука комнате. Большой — частями, с паузами между ними:
+// раньше все части (до ~1,4 МБ) уходили одной пачкой, и при упоре в лимиты канала
+// часть из них терялась.
+function voiceSfxShareData(call, custom) {
+    call.sfxSendingAt = call.sfxSendingAt || {};
+    if (Date.now() - (call.sfxSendingAt[custom.id] || 0) < 4000) return;
+    call.sfxSendingAt[custom.id] = Date.now();
+    const data = voiceSfxToBase64(custom.data);
+    const total = Math.ceil(data.length / VOICE_SFX_CHUNK);
+    for (let i = 0; i < total; i++) {
+        setTimeout(() => {
+            if (voiceCall !== call) return;
+            voiceSend(call, { type: "sfx-chunk", to: "*", id: custom.id, idx: i, total, data: data.slice(i * VOICE_SFX_CHUNK, (i + 1) * VOICE_SFX_CHUNK) });
+        }, i * 250);
     }
 }
 
@@ -773,19 +821,29 @@ function voiceSfxDb() {
     });
 }
 
-async function voiceSfxLoadCustom() {
-    if (voiceCustomSfxLoaded) return;
+// Повторный вызов ждёт ту же загрузку: раньше он возвращался сразу, и горячая
+// клавиша своего звука, нажатая, пока список ещё читался с диска, звук не
+// находила — нажатие молча пропадало.
+let voiceCustomSfxLoading = null;
+function voiceSfxLoadCustom() {
+    if (voiceCustomSfxLoading) return voiceCustomSfxLoading;
     voiceCustomSfxLoaded = true;
-    try {
-        const db = await voiceSfxDb();
-        voiceCustomSfx = await new Promise((resolve) => {
-            const req = db.transaction("s").objectStore("s").getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = () => resolve([]);
-        });
-        voiceCustomSfx.sort((a, b) => a.id.localeCompare(b.id));
-        voiceSfxRenderPanel();
-    } catch { /* без IndexedDB свои звуки недоступны */ }
+    voiceCustomSfxLoading = (async () => {
+        try {
+            const db = await voiceSfxDb();
+            const stored = await new Promise((resolve) => {
+                const req = db.transaction("s").objectStore("s").getAll();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => resolve([]);
+            });
+            // Добавленные, пока шло чтение, не теряем.
+            const ids = new Set(stored.map((s) => s.id));
+            voiceCustomSfx = [...stored, ...voiceCustomSfx.filter((s) => !ids.has(s.id))];
+            voiceCustomSfx.sort((a, b) => a.id.localeCompare(b.id));
+            voiceSfxRenderPanel();
+        } catch { /* без IndexedDB свои звуки недоступны */ }
+    })();
+    return voiceCustomSfxLoading;
 }
 
 async function voiceSfxSaveCustom(item) {
@@ -821,7 +879,7 @@ async function voiceSfxPlayBuffer(call, buffer, owner) {
     try {
         if (ctx.state === "suspended") ctx.resume().catch(() => {});
         const decoded = await ctx.decodeAudioData(buffer.slice(0));
-        if (decoded.duration > VOICE_SFX_MAX_SECONDS + 0.5) return;
+        if (decoded.duration > VOICE_SFX_MAX_SECONDS + 0.5) { voiceSfxDiag("звук длиннее лимита", decoded.duration.toFixed(1) + " с"); return; }
         voiceSfxDuckMusic(decoded.duration * 1000 + 300);
         const src = ctx.createBufferSource();
         src.buffer = decoded;
@@ -833,7 +891,11 @@ async function voiceSfxPlayBuffer(call, buffer, owner) {
         voiceSfxPlaying.set(who, src);
         src.onended = () => { if (voiceSfxPlaying.get(who) === src) voiceSfxPlaying.delete(who); };
         src.start();
-    } catch { /* повреждённый файл — пропускаем */ }
+    } catch (error) {
+        // Раньше молча: файл не декодировался — и человек не понимал, почему тишина.
+        voiceSfxDiag("не удалось воспроизвести звук", (owner ? "чужой " : "свой ") + (buffer?.byteLength || 0) + " байт: " + (error?.message || error));
+        if (!owner) toast("Не удалось воспроизвести этот звук — попробуйте другой файл (mp3, ogg, wav)");
+    }
 }
 
 function voiceSfxPickFile() {
@@ -881,10 +943,22 @@ function voiceSfxFlash(text) {
     voiceSfxFlashTimer = setTimeout(() => { sub.classList.remove("sfx"); voiceRenderDock(); }, 1800);
 }
 
+// Диагностика саундборда: в программе для ПК ошибки страницы пишутся в журнал
+// (%APPDATA%\KABAN\logs\main.log) — по нему видно, почему нажатие не дало звука.
+function voiceSfxDiag(reason, extra) {
+    try { console.error("[sfx] " + reason + (extra ? " " + extra : "")); } catch { /* ок */ }
+}
+
 function voiceSfxSend(id) {
 
     const call = voiceCall;
-    if (!call) return;
+    if (!call) { voiceSfxDiag("нажатие вне голосовой комнаты", id); return; }
+    const ctx = call.local?.ctx;
+    if (!ctx || !call.master) voiceSfxDiag("нет звукового тракта комнаты", id);
+    else if (ctx.state !== "running") {
+        voiceSfxDiag("звуковой контекст не работает: " + ctx.state, id);
+        ctx.resume().then(() => { if (ctx.state !== "running") voiceSfxDiag("не удалось возобновить звук: " + ctx.state); }).catch((e) => voiceSfxDiag("resume упал", e?.message));
+    }
     const now = Date.now();
     const wait = VOICE_SFX_COOLDOWN_MS - (now - voiceSfxLastSent);
     if (wait > 0 || voiceSfxQueue.length) {
@@ -907,19 +981,19 @@ function voiceSfxSendNow(call, id) {
         call.sfxShared = call.sfxShared || {};
         const payload = { type: "sfx", to: "*", id, name: custom.name };
         if (call.sfxShared[id] !== roster) {
-            const data = voiceSfxToBase64(custom.data);
-            if (data.length < 190000) payload.data = data;      // маленький — одним сообщением (так понимают и старые версии)
-            else {
-                const total = Math.ceil(data.length / VOICE_SFX_CHUNK);
-                for (let i = 0; i < total; i++) voiceSend(call, { type: "sfx-chunk", to: "*", id, idx: i, total, data: data.slice(i * VOICE_SFX_CHUNK, (i + 1) * VOICE_SFX_CHUNK) });
-            }
+            if (custom.data.byteLength < 140000) payload.data = voiceSfxToBase64(custom.data);   // маленький — одним сообщением (так понимают и старые версии)
+            else voiceSfxShareData(call, custom);
             call.sfxShared[id] = roster;
         }
         voiceSend(call, payload);
-    } else {
+    } else if (VOICE_SFX.some((s) => s.id === id)) {
         voiceSfxLastSent = now;
         voiceSfxPlay(call, id);
         voiceSend(call, { type: "sfx", to: "*", id });
+    } else {
+        // На клавишу назначен звук, которого больше нет (удалили) — не молчим.
+        toast("Этого звука больше нет — назначьте другой в настройках горячих клавиш");
+        return;
     }
     document.getElementById("voice-sfx-pop")?.classList.add("cooling");
     setTimeout(() => document.getElementById("voice-sfx-pop")?.classList.remove("cooling"), VOICE_SFX_COOLDOWN_MS);
@@ -1088,6 +1162,7 @@ async function voiceHandleSig(payload) {
     const call = voiceCall;
     if (call && payload?.type === "sfx" && payload.from !== myRealUserId) { voiceSfxIncoming(call, payload); return; }
     if (call && payload?.type === "sfx-chunk" && payload.from !== myRealUserId) { voiceSfxChunkIncoming(call, payload); return; }
+    if (call && payload?.type === "sfx-need" && payload.to === myRealUserId) { voiceSfxNeedIncoming(call, payload); return; }
     if (!call || !payload || payload.to !== myRealUserId) return;
 
     const from = payload.from;

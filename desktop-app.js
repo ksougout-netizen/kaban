@@ -76,9 +76,9 @@ function desktopSfxOptions() {
 }
 
 async function desktopPlaySfxSlot(index) {
-    if (typeof voiceCall === "undefined" || !voiceCall) return;
+    if (typeof voiceCall === "undefined" || !voiceCall) { console.error(`[sfx] горячая клавиша звука ${index + 1} вне голосовой комнаты`); return; }
     const id = desktopSfxSlots()[index];
-    if (!id) return;
+    if (!id) { toast(`На клавишу звука ${index + 1} ничего не назначено`); return; }
     if (typeof voiceSfxLoadCustom === "function" && !VOICE_SFX.some((s) => s.id === id)) await voiceSfxLoadCustom();
     voiceSfxSend(id);
 }
