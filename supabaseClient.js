@@ -171,11 +171,21 @@ const KabanAuth = {
     // получало лишний сетевой round-trip, это и был главный источник общих
     // "лагов". Для клиента нужен только id пользователя; реальную проверку
     // прав всё равно делает сервер (RLS по JWT) на каждом запросе.
+    // Ошибка (а не просто «нет сессии») — обычно сеть: после сна ноутбука токен
+    // истёк, а обновить его с первой попытки не получилось, потому что Wi-Fi ещё
+    // поднимается. Раньше это сразу считалось «вы не вошли»: звонок не начинался,
+    // чат не открывался («Сессия прервалась»). Теперь — пара повторов.
     async getCurrentUser() {
         const db = getSupabaseClient();
-        const { data, error } = await db.auth.getSession();
-        if (error) console.warn("Не удалось прочитать сессию", error);
-        return data?.session?.user || null;
+        for (let attempt = 0; ; attempt++) {
+            const { data, error } = await db.auth.getSession();
+            if (data?.session?.user) return data.session.user;
+            if (!error || attempt >= 2) {
+                if (error) console.warn("Не удалось прочитать сессию", error);
+                return null;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+        }
     },
 
     // Письмо со ссылкой "сбросить пароль" — Supabase сам генерирует
@@ -1701,12 +1711,14 @@ const KabanAPI = {
     // привязаны к конкретному callId, а не к пользователю (иначе стало бы
     // не различить сигналы разных, пусть даже не пересекающихся по времени,
     // звонков одному и тому же собеседнику).
-    joinCallChannel(callId, { onAnswer, onIceCandidate, onEnd, onRenegotiate, onRestartRequest, onState } = {}) {
+    joinCallChannel(callId, { onAnswer, onIceCandidate, onEnd, onRenegotiate, onRestartRequest, onState, onClaim } = {}) {
         const db = getSupabaseClient();
         const channel = db
             .channel(`call:${callId}`)
             // Состояние собеседника: микрофон / камера / показ экрана (как в Telegram).
             .on("broadcast", { event: "state" }, ({ payload }) => onState?.(payload))
+            // «Беру звонок» от одного из устройств собеседника и подтверждение звонящего.
+            .on("broadcast", { event: "claim" }, ({ payload }) => onClaim?.(payload))
             .on("broadcast", { event: "answer" }, ({ payload }) => onAnswer?.(payload))
             .on("broadcast", { event: "ice-candidate" }, ({ payload }) => onIceCandidate?.(payload))
             .on("broadcast", { event: "end" }, ({ payload }) => onEnd?.(payload))
@@ -1722,6 +1734,7 @@ const KabanAPI = {
             sendRenegotiate: (payload) => channel.send({ type: "broadcast", event: "renegotiate", payload }),
             sendRestartRequest: () => channel.send({ type: "broadcast", event: "restart-request", payload: {} }),
             sendState: (payload) => channel.send({ type: "broadcast", event: "state", payload }),
+            sendClaim: (payload) => channel.send({ type: "broadcast", event: "claim", payload }),
             sendAnswer: (payload) => channel.send({ type: "broadcast", event: "answer", payload }),
             sendIceCandidate: (payload) => channel.send({ type: "broadcast", event: "ice-candidate", payload }),
             sendEnd: (payload) => channel.send({ type: "broadcast", event: "end", payload: payload || {} }),
@@ -1814,10 +1827,13 @@ const KabanAPI = {
     // изменении. track(meta) объявляет МЕНЯ присутствующим.
     joinGroupCallRoom(chatId, myUserId, { onSignal, onParticipants } = {}) {
         const db = getSupabaseClient();
-        const channel = db.channel(`gcall:${chatId}`, { config: { presence: { key: myUserId }, broadcast: { self: false } } });
+        let channel = null;
+        let myMeta = null;      // что я объявил о себе — повторяем после переподключения
+        let left = false;
+        let retry = 0;
 
         const readParticipants = () => {
-            const state = channel.presenceState();
+            const state = channel ? channel.presenceState() : {};
             const participants = new Map();
             Object.entries(state).forEach(([key, metas]) => {
                 const meta = metas[metas.length - 1];
@@ -1826,20 +1842,63 @@ const KabanAPI = {
             return participants;
         };
 
-        channel
-            .on("broadcast", { event: "signal" }, ({ payload }) => onSignal?.(payload))
-            .on("presence", { event: "sync" }, () => onParticipants?.(readParticipants()));
+        // Канал оборвался посреди звонка (сон ноутбука, смена сети): раньше он так и
+        // оставался мёртвым — меня не было в списке участников у остальных, сигналы
+        // не ходили, и переподключение соединений было невозможно. Теперь канал
+        // пересоздаётся, а своё присутствие объявляется заново.
+        const open = () => {
+            const ch = db.channel(`gcall:${chatId}`, { config: { presence: { key: myUserId }, broadcast: { self: false } } });
+            channel = ch;
+            ch.on("broadcast", { event: "signal" }, ({ payload }) => { if (channel === ch) onSignal?.(payload); })
+              .on("presence", { event: "sync" }, () => { if (channel === ch) onParticipants?.(readParticipants()); });
+            let subscribed = false;
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error("Не удалось подключиться к каналу связи (таймаут)")), 12000);
+                ch.subscribe((status) => {
+                    if (channel !== ch || left) return;
+                    if (status === "SUBSCRIBED") {
+                        clearTimeout(timer);
+                        retry = 0;
+                        // Повторное подключение того же канала (библиотека переподключает сама) — снова объявляем себя.
+                        if (subscribed && myMeta) ch.track(myMeta).catch(() => {});
+                        subscribed = true;
+                        resolve();
+                    } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+                        if (!subscribed) { clearTimeout(timer); reject(new Error("Не удалось подключиться к каналу связи (" + status + ")")); return; }
+                        if (status === "CLOSED") reopen();
+                    }
+                });
+            });
+        };
 
-        const ready = waitForChannelSubscribed(channel);
+        const reopen = () => {
+            if (left) return;
+            const old = channel;
+            channel = null;
+            try { db.removeChannel(old); } catch {}
+            const delay = [700, 2000, 4000, 8000][Math.min(retry++, 3)];
+            setTimeout(() => {
+                if (left) return;
+                open().then(() => { if (myMeta && !left) channel?.track(myMeta).catch(() => {}); }).catch(() => reopen());
+            }, delay);
+        };
+
+        const ready = open();
+        ready.catch(() => {});
 
         return {
             ready,
-            track: (meta) => channel.track(meta),
-            sendSignal: (payload) => channel.send({ type: "broadcast", event: "signal", payload }),
-            getParticipants: readParticipants,
+            track: (meta) => { myMeta = meta; return channel ? channel.track(meta) : Promise.resolve(); },
+            sendSignal: (payload) => (channel ? channel.send({ type: "broadcast", event: "signal", payload }) : Promise.resolve("closed")),
+            // null — канал прямо сейчас переподключается: список неизвестен (а не пуст).
+            getParticipants: () => (channel ? readParticipants() : null),
             leave: async () => {
-                try { await channel.untrack(); } catch {}
-                db.removeChannel(channel);
+                left = true;
+                const ch = channel;
+                channel = null;
+                if (!ch) return;
+                try { await ch.untrack(); } catch {}
+                db.removeChannel(ch);
             }
         };
     },

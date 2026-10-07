@@ -3314,6 +3314,14 @@ body[data-tint] .sidebar {
     align-self: flex-start;
     position: relative;
     touch-action: pan-y;
+    /* Строки за пределами экрана не раскладываются и не рисуются: новое сообщение
+       в переписке на 1000 строк стоило ~13 мс раскладки, так — вдвое меньше.
+       auto в contain-intrinsic-size запоминает настоящую высоту уже показанной
+       строки. content-visibility обрезает отрисовку по краю строки, поэтому
+       запас под реакции (висят на 14px ниже), тени и полоску свайпа. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 64px;
+    overflow-clip-margin: 48px;
     /* transform — свайп-жест ответа; margin-left — чтобы переключение между
        "свои сообщения справа" (телефон/узкий чат) и единой левой колонкой
        (широкий чат, см. @container chat-main ниже) при перетаскивании
@@ -6315,12 +6323,16 @@ body.dark .composer-send {
 .call-bg { position: absolute; inset: 0; z-index: 0; overflow: hidden; background: linear-gradient(160deg, var(--c1), var(--c2)); transition: background 1s ease; }
 .call-bg-photo { position: absolute; inset: -20%; background: center / cover no-repeat; filter: blur(46px) saturate(1.35) brightness(.72); opacity: .6; }
 .call-bg-photo[hidden] { display: none; }
-.call-blob { position: absolute; width: 70%; aspect-ratio: 1; border-radius: 50%; filter: blur(60px); opacity: .55; mix-blend-mode: screen; }
+/* Пятна двигаются только сдвигом (без scale): размытый слой растеризуется один раз,
+   дальше его двигает видеокарта. С масштабом размытие пересчитывалось заново и
+   грузило систему всё время звонка. Под видео собеседника их не видно — стоят. */
+.call-blob { position: absolute; width: 70%; aspect-ratio: 1; border-radius: 50%; filter: blur(60px); opacity: .55; mix-blend-mode: screen; will-change: transform; }
+.call-dialog.has-remote-video .call-blob { animation: none; visibility: hidden; }
 .call-blob.b1 { background: var(--c3); left: -20%; top: -15%; animation: call-blob-a 14s ease-in-out infinite alternate; }
 .call-blob.b2 { background: var(--c1); right: -25%; top: 30%; animation: call-blob-b 18s ease-in-out infinite alternate; }
 .call-blob.b3 { background: var(--c2); left: 10%; bottom: -30%; animation: call-blob-a 22s ease-in-out infinite alternate-reverse; }
-@keyframes call-blob-a { to { transform: translate(25%, 20%) scale(1.15); } }
-@keyframes call-blob-b { to { transform: translate(-30%, -15%) scale(.9); } }
+@keyframes call-blob-a { to { transform: translate(25%, 20%); } }
+@keyframes call-blob-b { to { transform: translate(-30%, -15%); } }
 body.reduce-motion .call-blob { animation: none; }
 
 /* верхняя строка */
@@ -6473,9 +6485,13 @@ body.reduce-motion .call-control.accept-call .call-control-icon, body.reduce-mot
 .call-mini-video { width: 72px; height: 46px; flex: none; border-radius: 12px; object-fit: cover; background: #000; }
 .call-mini-video[hidden] { display: none; }
 .call-mini-video:not([hidden]) + .call-mini-avatar { display: none; }
-.call-mini-avatar { display: grid; place-items: center; width: 42px; height: 42px; flex: none; border-radius: 50%; background: rgba(255,255,255,.2); font-weight: 650; box-shadow: 0 0 0 3px rgba(255,255,255,.25); animation: call-mini-pulse 2s ease-in-out infinite; }
+/* Пульс — кольцом-псевдоэлементом через transform/opacity (видеокарта); раньше
+   анимировалась box-shadow — перерисовка на каждом кадре всё время свёрнутого звонка. */
+.call-mini-avatar { position: relative; display: grid; place-items: center; width: 42px; height: 42px; flex: none; border-radius: 50%; background: rgba(255,255,255,.2); font-weight: 650; box-shadow: 0 0 0 3px rgba(255,255,255,.25); }
+.call-mini-avatar::after { content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 3px solid rgba(255,255,255,.22); pointer-events: none; animation: call-mini-pulse 2s ease-in-out infinite; will-change: transform, opacity; }
+body.reduce-motion .call-mini-avatar::after, html.app-inactive .call-mini-avatar::after { animation: none; }
 .call-mini-avatar .avatar-initials { font-size: 15px; }
-@keyframes call-mini-pulse { 50% { box-shadow: 0 0 0 6px rgba(255,255,255,.08); } }
+@keyframes call-mini-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.14); opacity: .3; } }
 .call-mini-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .call-mini-copy b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .call-mini-copy em { font-style: normal; font-size: 12px; opacity: .88; font-variant-numeric: tabular-nums; }
@@ -9841,7 +9857,7 @@ body.reduce-motion .anim-glyph { animation: none !important; }
 /* Живые обои: отдельный слой, который дрейфует и сдвигается за курсором. */
 .chat-area { isolation: isolate; overflow: hidden; }
 
-.chat-area.has-wallpaper::before {
+.chat-area.has-wallpaper > .chat-wallpaper-layer::before {
     content: "";
     position: absolute;
     inset: -9%;
@@ -9858,14 +9874,14 @@ body.reduce-motion .anim-glyph { animation: none !important; }
     to { transform: translate3d(var(--px, 0px), var(--py, 0px), 0) rotate(5deg) scale(1.16); }
 }
 
-body.reduce-motion .chat-area.has-wallpaper::before { animation: none; }
+body.reduce-motion .chat-area.has-wallpaper > .chat-wallpaper-layer::before { animation: none; }
 /* Пока лента прокручивается, «дрейф» обоев на паузе: под размытой шапкой каждый кадр
    анимации заставлял заново считать blur — прокрутка дёргалась. */
-.chat-area.is-scrolling.has-wallpaper::before { animation-play-state: paused; }
+.chat-area.is-scrolling.has-wallpaper > .chat-wallpaper-layer::before { animation-play-state: paused; }
 .message-reply-quote[data-reply-to] { cursor: pointer; }
 .message-forwarded { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 600; color: var(--accent); opacity: .9; }
 .message-row.sent .message-forwarded { color: inherit; opacity: .75; }
-body.no-live-wallpapers .chat-area.has-wallpaper::before { animation: none; transform: scale(1.06); }
+body.no-live-wallpapers .chat-area.has-wallpaper > .chat-wallpaper-layer::before { animation: none; transform: scale(1.06); }
 
 /* Плавный вход в чат: лента и шапка мягко «выезжают». */
 .chat-area.chat-enter .messages { animation: chat-enter .3s cubic-bezier(.2,.8,.2,1) both; }
@@ -11476,7 +11492,7 @@ body.messages-left .message-row:not(.system-message) .message-reactions { left: 
 /* ============================================================================
    УЗОРЫ ДЛЯ ФОНА ЧАТА — слой-маска поверх градиента обоев
    ========================================================================= */
-.chat-area.has-pattern::after {
+.chat-area.has-pattern > .chat-wallpaper-layer::after {
     content: "";
     position: absolute;
     inset: -9%;
@@ -11487,9 +11503,9 @@ body.messages-left .message-row:not(.system-message) .message-reactions { left: 
     mask: var(--wpp) 0 0 / 260px 260px repeat;
     transform: translate3d(calc(var(--px, 0px) * 1.6), calc(var(--py, 0px) * 1.6), 0);
 }
-body.dark .chat-area.has-pattern::after { --wpp-strength: 9%; }
-body[data-pattern-strength="1"] .chat-area.has-pattern::after { --wpp-strength: 6%; }
-body[data-pattern-strength="3"] .chat-area.has-pattern::after { --wpp-strength: 17%; }
+body.dark .chat-area.has-pattern > .chat-wallpaper-layer::after { --wpp-strength: 9%; }
+body[data-pattern-strength="1"] .chat-area.has-pattern > .chat-wallpaper-layer::after { --wpp-strength: 6%; }
+body[data-pattern-strength="3"] .chat-area.has-pattern > .chat-wallpaper-layer::after { --wpp-strength: 17%; }
 .wp-tile-preview { position: relative; overflow: hidden; }
 .wp-tile-pattern {
     position: absolute; inset: 0;
@@ -11553,7 +11569,12 @@ body.reduce-motion .sk-avatar, body.reduce-motion .sk-line { animation: none; }
 .call-backdrop:not(.open) .call-wave,
 .call-backdrop:not(.open) .call-control-icon,
 .call-backdrop:not(.open) .call-control-icon::before { animation-play-state: paused !important; }
-html.app-inactive .chat-area.has-wallpaper::before,
+html.app-inactive .chat-area.has-wallpaper > .chat-wallpaper-layer::before,
 html.app-inactive .sk-avatar, html.app-inactive .sk-line,
 html.app-inactive .recording-wave span,
 html.app-inactive .anim-emoji .anim-glyph { animation-play-state: paused !important; }
+/* Обои и узор — в отдельном слое .chat-wallpaper-layer (см. applyChatWallpaper).
+   Параллакс меняет CSS-переменную каждый кадр движения мыши: раньше она стояла
+   на .chat-area, и браузер пересчитывал стили ВСЕХ сообщений ленты — на 1000
+   сообщений это 14,8 мс на кадр (микрофризы). На отдельном слое — 0,1 мс. */
+.chat-wallpaper-layer { position: absolute; inset: 0; z-index: -1; pointer-events: none; }

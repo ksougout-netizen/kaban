@@ -1224,6 +1224,33 @@ function stopCallInbox() {
     if (callInboxUnsubscribe) { callInboxUnsubscribe(); callInboxUnsubscribe = null; }
 }
 
+// Запустить звук/видео собеседника. Браузер (особенно на телефоне, если звонок
+// принят из уведомления или вкладка давно без касаний) может отказать в play() —
+// раньше это глоталось, и разговор шёл в полной тишине. Теперь отказ запоминается,
+// и всё отложенное запускается по первому же касанию или нажатию клавиши.
+const blockedMediaElements = new Set();
+function playOrUnlock(el) {
+    if (!el?.play) return;
+    Promise.resolve(el.play()).then(() => blockedMediaElements.delete(el)).catch((error) => {
+        if (error?.name !== "NotAllowedError") return;
+        if (!blockedMediaElements.size) toast("Нажмите в любом месте, чтобы включить звук");
+        blockedMediaElements.add(el);
+    });
+}
+["pointerdown", "keydown", "touchend"].forEach((type) => document.addEventListener(type, () => {
+    if (!blockedMediaElements.size) return;
+    blockedMediaElements.forEach((el) => {
+        if (!el.isConnected || !el.srcObject) { blockedMediaElements.delete(el); return; }
+        Promise.resolve(el.play()).then(() => blockedMediaElements.delete(el)).catch(() => {});
+    });
+    // Заодно будим AudioContext голосовой комнаты — он тоже мог стоять «на паузе».
+    try { if (typeof voiceCall !== "undefined" && voiceCall?.local?.ctx?.state === "suspended") voiceCall.local.ctx.resume(); } catch {}
+}, true));
+
+// Метка этой вкладки/окна в сигналах звонка: у одного аккаунта может быть
+// открыто несколько устройств, и ответить должен ровно один из них.
+const CALL_TAB_ID = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+
 function handleIncomingCallOffer(payload) {
 
     saveCallHistoryEntry({
@@ -1254,8 +1281,11 @@ function handleIncomingCallOffer(payload) {
     // Пока звонок только звонит — слушаем канал звонка: звонящий мог сбросить
     // вызов или не дождаться ответа. Раньше отмена сюда не доходила, и окно
     // «Звонит вам…» (теперь ещё и с мелодией) висело у собеседника бесконечно.
+    // Ответ с ДРУГОГО устройства этого же аккаунта (телефон + ПК) — гасим звонок здесь.
     payload._watch = KabanAPI.joinCallChannel(payload.callId, {
-        onEnd: () => { if (pendingIncomingCall === payload) dismissIncomingCall(payload); }
+        onAnswer: (p) => { if (pendingIncomingCall === payload && p?.tab !== CALL_TAB_ID) dismissIncomingCall(payload, "elsewhere"); },
+        onClaim: (p) => { if (pendingIncomingCall === payload && !p?.ok && p?.tab && p.tab !== CALL_TAB_ID) dismissIncomingCall(payload, "elsewhere"); },
+        onEnd: (p) => { if (pendingIncomingCall === payload) dismissIncomingCall(payload, p?.reason); }
     });
     payload._ringTimer = setTimeout(() => {
         if (pendingIncomingCall === payload) dismissIncomingCall(payload);
@@ -1272,15 +1302,19 @@ function closeIncomingWatch(offer) {
 }
 
 // Звонящий сбросил или не дождался ответа — тихо убрать входящий, записать «пропущенный».
-function dismissIncomingCall(offer) {
+// reason "elsewhere"/"declined" — ответили или отклонили на другом своём устройстве:
+// это не пропущенный звонок.
+function dismissIncomingCall(offer, reason) {
     closeIncomingWatch(offer);
     if (pendingIncomingCall !== offer) return;
     pendingIncomingCall = null;
     stopCallTone();
-    updateCallHistoryEntry(offer.callId, { result: "missed", seen: false });
+    const handledElsewhere = reason === "elsewhere" || reason === "declined";
+    updateCallHistoryEntry(offer.callId, { result: "missed", seen: handledElsewhere });
     if (typeof updateCallHistoryBadge === "function") updateCallHistoryBadge();
     hideCallUI();
-    toast(`Пропущенный звонок${offer.callerName ? " от " + offer.callerName : ""}`);
+    if (reason === "elsewhere") toast("Звонок принят на другом устройстве");
+    else if (!handledElsewhere) toast(`Пропущенный звонок${offer.callerName ? " от " + offer.callerName : ""}`);
 }
 
 // kind: "audio" | "video" — вызывается с кнопок в шапке/карточке чата,
@@ -1317,6 +1351,9 @@ async function startCall(kind) {
         return;
     }
     startingCall = true;
+    // Звоним — выходим из голосовой комнаты (как в Discord): иначе микрофон шёл бы
+    // и в звонок, и в комнату, а собеседник слышал бы всю комнату.
+    if (typeof voiceCall !== "undefined" && voiceCall) { await voiceLeave(); toast("Вы вышли из голосовой комнаты"); }
 
     // Снимок на момент нажатия — getUserMedia может висеть на запросе
     // разрешения сколь угодно долго, и если за это время пользователь
@@ -1374,6 +1411,22 @@ async function startCall(kind) {
         channelHandle = KabanAPI.joinCallChannel(callId, {
             onAnswer: async (payload) => {
                 if (!activeCall || activeCall.callId !== callId) return;
+                // Звонок уже отдан другому устройству собеседника по заявке (см. onClaim).
+                if (activeCall.claimedBy && payload?.tab && payload.tab !== activeCall.claimedBy) {
+                    Promise.resolve(channelHandle.sendEnd({ reason: "answered-elsewhere", target: payload.tab })).catch(() => {});
+                    return;
+                }
+                // Ответил уже другой экземпляр собеседника (два устройства нажали
+                // «Принять» почти одновременно): второй ответ к соединению не
+                // применяем — раньше он падал с ошибкой и обрывал идущий разговор, —
+                // а опоздавшему устройству адресно сообщаем, что звонок занят.
+                if (activeCall.answeredBy !== undefined) {
+                    if (payload?.tab && payload.tab !== activeCall.answeredBy) {
+                        Promise.resolve(channelHandle.sendEnd({ reason: "answered-elsewhere", target: payload.tab })).catch(() => {});
+                    }
+                    return;
+                }
+                activeCall.answeredBy = payload?.tab || null;
                 try {
                     await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
                     for (const candidate of pendingRemoteCandidates.splice(0)) {
@@ -1400,8 +1453,25 @@ async function startCall(kind) {
             onRenegotiate: (payload) => handleCallRenegotiate(callId, payload),
             onRestartRequest: () => { if (activeCall?.callId === callId) restartCallIce(callId); },
             onState: (payload) => handleCallRemoteState(callId, payload),
+            // Устройство собеседника просит звонок себе ДО того, как применит наше
+            // предложение. Если «Принять» нажали на двух устройствах сразу, оба
+            // начинали проверку связи с нашими же ключами, и проигравшее портило
+            // рукопожатие шифрования — не соединялся никто. Теперь звонок получает
+            // первая заявка, остальным сразу отказ.
+            onClaim: (payload) => {
+                if (!activeCall || activeCall.callId !== callId || !payload?.tab || payload.ok) return;
+                if (!activeCall.claimedBy) activeCall.claimedBy = payload.tab;
+                if (payload.tab === activeCall.claimedBy) {
+                    Promise.resolve(channelHandle.sendClaim({ ok: true, target: payload.tab })).catch(() => {});
+                    // Кандидаты, собранные после отправки предложения, — теперь собеседник их услышит.
+                    (activeCall.lateCandidates || []).forEach((candidate) => Promise.resolve(channelHandle.sendIceCandidate({ candidate })).catch(() => {}));
+                } else {
+                    Promise.resolve(channelHandle.sendEnd({ reason: "answered-elsewhere", target: payload.tab })).catch(() => {});
+                }
+            },
             onEnd: (payload) => {
                 if (!activeCall || activeCall.callId !== callId) return;
+                if (payload?.target) return;   // адресовано одному из устройств собеседника, не нам
                 toast(payload?.reason === "busy" ? "Собеседник сейчас на другом звонке" : "Звонок завершён");
                 teardownActiveCall(payload?.reason === "declined" ? "declined" : payload?.reason === "timeout" ? "missed" : undefined);
             }
@@ -1414,9 +1484,9 @@ async function startCall(kind) {
 
         // Собеседник подключается к каналу звонка только после того, как
         // нажмёт «Принять», — кандидаты, разосланные до этого по одному, уходили
-        // в пустоту. Ждём сбора кандидатов (до 2,5 с) и отправляем их прямо
+        // в пустоту. Ждём сбора кандидатов (до 1,2 с; запоздавшие дошлём по заявке собеседника) и отправляем их прямо
         // внутри предложения: так они гарантированно дойдут.
-        await waitForIceGathering(pc, 2500);
+        await waitForIceGathering(pc, 1200);
 
         await KabanAPI.sendCallOffer(remoteUserId, {
             callId,
@@ -1426,6 +1496,7 @@ async function startCall(kind) {
             callerAvatarUrl: cachedMyProfile?.avatar_url || null,
             isVideo
         });
+        if (activeCall?.callId === callId) activeCall.sdpSent = true;
 
     } catch (error) {
         // Любой сбой настройки/сигнализации до showOutgoingCallUI — без этого
@@ -1478,6 +1549,7 @@ async function acceptIncomingCall() {
     pendingIncomingCall = null;
     stopCallTone();
     const watchClosed = closeIncomingWatch(offer);
+    if (typeof voiceCall !== "undefined" && voiceCall) { await voiceLeave(); toast("Вы вышли из голосовой комнаты"); }
 
     let localStream;
     try {
@@ -1524,7 +1596,10 @@ async function acceptIncomingCall() {
     setupCallPeerConnection(pc, offer.callId);
 
     const pendingRemoteCandidates = [];
+    let claimGranted;
+    const claimOk = new Promise((resolve) => { claimGranted = resolve; });
     const channelHandle = KabanAPI.joinCallChannel(offer.callId, {
+        onClaim: (payload) => { if (payload?.ok && payload.target === CALL_TAB_ID) claimGranted(true); },
         onIceCandidate: (payload) => {
             if (!activeCall || activeCall.callId !== offer.callId || !payload?.candidate) return;
             const candidate = new RTCIceCandidate(payload.candidate);
@@ -1534,8 +1609,15 @@ async function acceptIncomingCall() {
         },
         onRenegotiate: (payload) => handleCallRenegotiate(offer.callId, payload),
         onState: (payload) => handleCallRemoteState(offer.callId, payload),
-        onEnd: () => {
+        onEnd: (payload) => {
             if (!activeCall || activeCall.callId !== offer.callId) return;
+            // Адресовано другому устройству (опоздавшему с ответом) — не нам.
+            if (payload?.target && payload.target !== CALL_TAB_ID) return;
+            if (payload?.reason === "answered-elsewhere") {
+                toast("Звонок принят на другом устройстве");
+                teardownActiveCall("missed");
+                return;
+            }
             toast("Звонок завершён");
             const connected = activeCall.state === "connected";
             teardownActiveCall(connected ? "completed" : "missed", !connected);
@@ -1543,8 +1625,20 @@ async function acceptIncomingCall() {
     });
     activeCall.channel = channelHandle;
 
+    const myCall = activeCall;
     try {
         await channelHandle.ready;
+        // Заявка «беру звонок» — и только после подтверждения звонящего применяем
+        // его предложение (см. onClaim у звонящего). Звонящий старой версии не
+        // ответит — тогда через 2,5 с продолжаем как раньше. Повтор заявки — на
+        // случай, если первое сообщение потерялось.
+        const claim = () => Promise.resolve(channelHandle.sendClaim({ tab: CALL_TAB_ID })).catch(() => {});
+        claim();
+        const retry = setTimeout(claim, 700);
+        await Promise.race([claimOk, new Promise((resolve) => setTimeout(resolve, 2500))]);
+        clearTimeout(retry);
+        // Пока ждали — звонок отдали другому устройству или его сбросили.
+        if (activeCall !== myCall) return;
         await pc.setRemoteDescription(new RTCSessionDescription(offer.sdp));
         for (const candidate of pendingRemoteCandidates.splice(0)) {
             await pc.addIceCandidate(candidate).catch(() => {});
@@ -1558,8 +1652,9 @@ async function acceptIncomingCall() {
         await pc.setLocalDescription(answer);
         // Свои кандидаты — внутри ответа (как и у звонящего): не зависят от
         // того, успел ли он их принять по одному.
-        await waitForIceGathering(pc, 2000);
-        await channelHandle.sendAnswer({ sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : answer });
+        await waitForIceGathering(pc, 800);
+        await channelHandle.sendAnswer({ sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : answer, tab: CALL_TAB_ID });
+        if (activeCall === myCall) myCall.sdpSent = true;
     } catch (error) {
         toast("Не удалось установить соединение");
         teardownActiveCall("missed");
@@ -1602,6 +1697,24 @@ function declineIncomingCall() {
     hideCallUI();
 }
 
+// Голос важнее картинки: при нехватке канала браузер должен сначала урезать видео
+// и экран, а не звук. priority/networkPriority «high» у звуковых отправителей —
+// это и порядок внутри браузера, и метка DSCP для роутеров. Ставится один раз на
+// отправителя (повторы ничего не стоят — флаг _kabanPrio).
+function prioritizeAudioSenders(pc) {
+    if (!pc || pc.connectionState === "closed") return;
+    for (const sender of pc.getSenders()) {
+        if (sender.track?.kind !== "audio" || sender._kabanPrio) continue;
+        try {
+            const params = sender.getParameters();
+            if (!params.encodings || !params.encodings.length) continue;   // ещё не согласовано
+            params.encodings.forEach((e) => { e.priority = "high"; e.networkPriority = "high"; });
+            sender._kabanPrio = true;
+            sender.setParameters(params).catch(() => { sender._kabanPrio = false; });
+        } catch { /* браузер не умеет — обойдёмся */ }
+    }
+}
+
 // Дождаться, пока браузер соберёт сетевые кандидаты (или истечёт время): тогда
 // localDescription уже содержит их все и годится для отправки «одним куском».
 function waitForIceGathering(pc, timeoutMs) {
@@ -1616,10 +1729,18 @@ function waitForIceGathering(pc, timeoutMs) {
 
 function setupCallPeerConnection(pc, callId) {
 
+    // Кандидаты, собранные до отправки предложения/ответа, уже лежат внутри SDP —
+    // отправлять их ещё и по одному незачем (раньше это 20–40 сообщений подряд на
+    // каждый звонок и каждое переподключение: лишняя нагрузка на канал, у которого
+    // есть лимит сообщений в секунду). Поштучно — только запоздавшие.
     pc.onicecandidate = (event) => {
-        if (event.candidate && activeCall?.channel && activeCall.callId === callId) {
-            activeCall.channel.sendIceCandidate({ candidate: event.candidate });
-        }
+        const call = activeCall;
+        if (!event.candidate || !call?.channel || call.callId !== callId || !call.sdpSent) return;
+        const candidate = event.candidate.toJSON ? event.candidate.toJSON() : event.candidate;
+        // Звонящий: собеседник подключится к каналу звонка только после «Принять» —
+        // всё, что отправлено раньше, до него не дойдёт. Копим и повторяем по заявке.
+        if (call.isCaller && !call.claimedBy && call.answeredBy === undefined) (call.lateCandidates ||= []).push(candidate);
+        call.channel.sendIceCandidate({ candidate });
     };
 
     pc.ontrack = (event) => {
@@ -1638,7 +1759,7 @@ function setupCallPeerConnection(pc, callId) {
         }
         // Мобильные браузеры (особенно iPhone) не всегда сами запускают
         // воспроизведение после смены источника — без этого был чёрный экран без звука.
-        remoteVideoOrAudio?.play?.().catch(() => {});
+        if (remoteVideoOrAudio) playOrUnlock(remoteVideoOrAudio);
         if (event.track.kind === "audio") startCallVoiceMeter(activeCall);
         renderCallMedia();
     };
@@ -1660,6 +1781,7 @@ function setupCallPeerConnection(pc, callId) {
                 clearTimeout(activeCall.recoveryTimer);
             }
             activeCall.state = "connected";
+            prioritizeAudioSenders(pc);
             if (!activeCall.connectedAt) {
                 activeCall.connectedAt = Date.now();
                 updateCallHistoryEntry(callId, { result: "completed", seen: true });
@@ -1743,35 +1865,53 @@ async function restartCallIce(callId) {
     if (!call || call.callId !== callId || !call.isCaller || call.renegotiating) return;
     call.renegotiating = true;
     try {
+        call.sdpSent = false;
         const offer = await call.pc.createOffer({ iceRestart: true });
         await call.pc.setLocalDescription(offer);
         await waitForIceGathering(call.pc, 1500);
         if (activeCall !== call) return;
-        await call.channel?.sendRenegotiate?.({ kind: "offer", sdp: call.pc.localDescription.toJSON() });
+        call.restartSeq = (call.restartSeq || 0) + 1;
+        await call.channel?.sendRenegotiate?.({ kind: "offer", sdp: call.pc.localDescription.toJSON(), seq: call.restartSeq });
     } catch (error) {
         console.warn("Не удалось переподключить звонок", error);
     } finally {
+        call.sdpSent = true;
         setTimeout(() => { if (activeCall === call) call.renegotiating = false; }, 2500);
     }
 }
 
-async function handleCallRenegotiate(callId, payload) {
+// Повторные предложения переподключения (звонящий шлёт их каждые 6 с, пока
+// связь не вернётся) обрабатываем строго по очереди: два одновременных
+// setRemoteDescription/createAnswer ломали друг друга, и ответ не уходил вовсе.
+function handleCallRenegotiate(callId, payload) {
     const call = activeCall;
     if (!call || call.callId !== callId || !payload?.sdp) return;
+    call.renegQueue = (call.renegQueue || Promise.resolve()).then(() => applyCallRenegotiate(call, payload));
+    return call.renegQueue;
+}
+
+async function applyCallRenegotiate(call, payload) {
+    if (activeCall !== call) return;
     try {
         if (payload.kind === "offer" && !call.isCaller) {
+            call.sdpSent = false;
             await call.pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
             const answer = await call.pc.createAnswer();
             await call.pc.setLocalDescription(answer);
             await waitForIceGathering(call.pc, 1500);
+            call.sdpSent = true;
             if (activeCall !== call) return;
-            await call.channel?.sendRenegotiate?.({ kind: "answer", sdp: call.pc.localDescription.toJSON() });
+            await call.channel?.sendRenegotiate?.({ kind: "answer", sdp: call.pc.localDescription.toJSON(), seq: payload.seq });
         } else if (payload.kind === "answer" && call.isCaller && call.pc.signalingState === "have-local-offer") {
+            // Ответ на ПРЕДЫДУЩУЮ попытку (пока он шёл, мы отправили новую) — к
+            // текущему предложению он не подходит, ждём ответ на свежее.
+            if (payload.seq !== undefined && payload.seq !== call.restartSeq) return;
             await call.pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
         }
         // Через пару секунд после обмена — если связь жива, переподключение закончено.
         setTimeout(() => { if (activeCall === call) finishCallRecoveryIfConnected(call); }, 2000);
     } catch (error) {
+        call.sdpSent = true;
         console.warn("Ошибка переподключения звонка", error);
     }
 }
@@ -2432,17 +2572,22 @@ function startCallVoiceMeter(call) {
         source.connect(analyser);
         const buffer = new Float32Array(analyser.fftSize);
         const wrap = document.querySelector("#call-backdrop .call-avatar-wrap");
-        let raf = 0, last = 0, level = 0;
+        let raf = 0, last = 0, level = 0, shown = "";
+        const dialog = wrap?.closest(".call-dialog");
         const tick = (now) => {
             raf = requestAnimationFrame(tick);
             if (now - last < 66) return;
             last = now;
+            // Аватар скрыт (видео собеседника на весь экран) — анализ и перерисовка не нужны.
+            if (dialog?.classList.contains("has-remote-video")) return;
             analyser.getFloatTimeDomainData(buffer);
             let sum = 0;
             for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
             const target = call.remote.muted ? 0 : Math.min(1, Math.sqrt(sum / buffer.length) * 7);
             level = level * 0.55 + target * 0.45;
-            wrap?.style.setProperty("--level", level.toFixed(3));
+            // Пишем только изменившееся значение: в тишине — ни одной перерисовки.
+            const value = level < 0.01 ? "0" : level.toFixed(2);
+            if (value !== shown) { shown = value; wrap?.style.setProperty("--level", value); }
         };
         raf = requestAnimationFrame(tick);
         call.voiceMeter = { stop: () => { cancelAnimationFrame(raf); try { source.disconnect(); } catch {} wrap?.style.setProperty("--level", "0"); } };
@@ -3420,6 +3565,7 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
         toast("У вас уже есть активный звонок");
         return;
     }
+    if (typeof voiceCall !== "undefined" && voiceCall) { await voiceLeave(); toast("Вы вышли из голосовой комнаты"); }
     if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) {
         toast("Звонки не поддерживаются в этом браузере");
         return;
@@ -3477,6 +3623,7 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
     };
     activeGroupCall = call;
     showGroupCallUI(call);
+    call.watchTimer = setInterval(() => watchGroupCallPeers(call), 3500);
 
     try {
 
@@ -3495,7 +3642,7 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
         const syncDeadline = Date.now() + 4000;
         while (!call.syncedOnce && Date.now() < syncDeadline) await new Promise((r) => setTimeout(r, 100));
 
-        let existing = call.room.getParticipants();
+        let existing = call.room.getParticipants() || new Map();
         existing.delete(me.id);
 
         // Приглашённый пришёл по звонку, который идёт: список присутствующих
@@ -3506,7 +3653,7 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
             const waitUntil = Date.now() + 10000;
             while (existing.size === 0 && Date.now() < waitUntil && activeGroupCall === call) {
                 await new Promise((r) => setTimeout(r, 300));
-                existing = call.room.getParticipants();
+                existing = call.room.getParticipants() || new Map();
                 existing.delete(me.id);
             }
             if (activeGroupCall !== call) return; // успели выйти сами
@@ -3645,14 +3792,34 @@ function reconcileGroupCallPeers(call) {
 
 }
 
-function limitGroupCallVideoSender(sender) {
+// Видео уходит КАЖДОМУ участнику отдельно (сетка), поэтому битрейт на одного —
+// из общего бюджета: раньше было по 1,6 Мбит/с каждому (при 5 участниках —
+// 6,4 Мбит/с исходящего), домашний и мобильный интернет захлёбывались, и вместе
+// с картинкой заикался голос. Пересчитывается при соединении и раз в 3,5 с из
+// сторожа (кто-то вошёл/вышел); без изменений — ничего не делает.
+const GCALL_UPLOAD_BUDGET = 4000000;
+
+function limitGroupCallVideoSender(sender, call) {
+    if (!sender) return;
+    const others = Math.max(1, call?.peers?.size || 1);
+    const maxBitrate = Math.round(Math.min(GCALL_VIDEO_BITRATE, GCALL_UPLOAD_BUDGET / others));
+    if (sender._kabanTune === maxBitrate) return;
     try {
         const params = sender.getParameters();
-        if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-        params.encodings[0].maxBitrate = GCALL_VIDEO_BITRATE;
+        if (!params.encodings || !params.encodings.length) return;   // ещё не согласовано — повторим
+        params.encodings[0].maxBitrate = maxBitrate;
         params.encodings[0].maxFramerate = 30;
-        sender.setParameters(params).catch(() => {});
+        sender._kabanTune = maxBitrate;
+        sender.setParameters(params).catch(() => { sender._kabanTune = null; });
     } catch {}
+}
+
+function tuneGroupCallSenders(call) {
+    call.peers.forEach((peer) => {
+        if (peer.pc.connectionState !== "connected") return;
+        limitGroupCallVideoSender(peer.videoSender, call);
+        prioritizeAudioSenders(peer.pc);
+    });
 }
 
 // asInitiator=true — я шлю offer: заранее закладываем аудио- и видеотрансиверы
@@ -3671,14 +3838,15 @@ function createGroupCallPeer(call, userId, meta, asInitiator) {
         userId, pc, remoteStream,
         name: meta?.name || "Участник", avatar: meta?.avatar || null,
         pendingCandidates: [], remoteSet: false, connected: false,
-        mic: true, cam: false, videoSender: null, graceTimer: null
+        mic: true, cam: false, videoSender: null, graceTimer: null,
+        initiator: !!asInitiator, sdpSent: false, createdAt: Date.now(), negotiatedAt: Date.now(), badSince: Date.now()
     };
 
     if (asInitiator) {
         pc.addTransceiver(call.audioTrack || "audio", { direction: "sendrecv", streams: [call.localStream] });
         const videoTransceiver = pc.addTransceiver(call.videoTrack || "video", { direction: "sendrecv", streams: [call.localStream] });
         peer.videoSender = videoTransceiver.sender;
-        limitGroupCallVideoSender(peer.videoSender);
+        limitGroupCallVideoSender(peer.videoSender, call);
     }
 
     pc.ontrack = (event) => {
@@ -3686,15 +3854,19 @@ function createGroupCallPeer(call, userId, meta, asInitiator) {
         try { event.receiver.jitterBufferTarget = 100; } catch {}
         updateGroupCallTile(call, peer);
     };
+    // Собранные до отправки offer/answer кандидаты уже внутри SDP — поштучно только запоздавшие.
     pc.onicecandidate = (event) => {
-        if (event.candidate) {
-            call.room?.sendSignal({ to: userId, from: call.me.id, kind: "ice", data: event.candidate });
+        if (event.candidate && peer.sdpSent) {
+            call.room?.sendSignal({ to: userId, from: call.me.id, kind: "ice", data: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate });
         }
     };
     pc.onconnectionstatechange = () => {
         if (activeGroupCall !== call || call.peers.get(userId) !== peer) return;
+        if (pc.connectionState === "connected") peer.badSince = 0;
+        else if (!peer.badSince) peer.badSince = Date.now();
         if (pc.connectionState === "connected") {
             clearTimeout(peer.graceTimer);
+            tuneGroupCallSenders(call);
             if (!peer.connected) {
                 peer.connected = true;
                 if (!call.startedAt) startGroupCallTimer(call);
@@ -3733,13 +3905,39 @@ function retryGroupCallPeer(call, userId) {
     }, 1500);
 }
 
+// sid — метка этого соединения: ответ от прежнего (уже пересозданного)
+// соединения к новому не применяется.
 async function startGroupCallOffer(call, peer) {
     try {
+        peer.sid = Math.random().toString(36).slice(2, 10);
         const offer = await peer.pc.createOffer();
         await peer.pc.setLocalDescription(offer);
-        call.room.sendSignal({ to: peer.userId, from: call.me.id, kind: "offer", data: offer });
+        await waitForIceGathering(peer.pc, 600);
+        if (activeGroupCall !== call || call.peers.get(peer.userId) !== peer) return;
+        call.room.sendSignal({ to: peer.userId, from: call.me.id, kind: "offer", data: peer.pc.localDescription.toJSON(), sid: peer.sid });
+        peer.sdpSent = true;
+        peer.negotiatedAt = Date.now();
     } catch (error) {
         console.warn("Не удалось отправить offer участнику звонка", error);
+    }
+}
+
+// Сторож (раз в 3,5 с): соединения с участниками, застрявшие не в «connected»
+// (потерялся offer/answer, сеть пропала в одну сторону). Раньше такой участник
+// навсегда оставался «соединяется…» — без звука до перезахода.
+function watchGroupCallPeers(call) {
+    if (activeGroupCall !== call || call.ended) { clearInterval(call.watchTimer); return; }
+    tuneGroupCallSenders(call);   // битрейт под текущее число участников
+    const now = Date.now();
+    for (const peer of [...call.peers.values()]) {
+        if (peer.pc.connectionState === "connected") continue;
+        const stuckFor = now - Math.max(peer.negotiatedAt, peer.badSince || peer.createdAt);
+        if (peer.initiator) {
+            if (stuckFor > 9000) retryGroupCallPeer(call, peer.userId);
+        } else if (stuckFor > 12000 && now - (peer.restartAskedAt || 0) > 6000) {
+            peer.restartAskedAt = now;
+            call.room?.sendSignal({ to: peer.userId, from: call.me.id, kind: "restart" });
+        }
     }
 }
 
@@ -3780,10 +3978,21 @@ async function handleGroupCallSignal(call, message) {
             await flushGroupCallCandidates(peer);
             const answer = await peer.pc.createAnswer();
             await peer.pc.setLocalDescription(answer);
-            call.room.sendSignal({ to: from, from: call.me.id, kind: "answer", data: answer });
+            await waitForIceGathering(peer.pc, 600);
+            if (activeGroupCall !== call || call.peers.get(from) !== peer || peer.pc.signalingState !== "stable") return;
+            call.room.sendSignal({ to: from, from: call.me.id, kind: "answer", data: peer.pc.localDescription.toJSON(), sid: message.sid });
+            peer.sdpSent = true;
+            peer.negotiatedAt = Date.now();
         } catch (error) {
             console.warn("Не удалось ответить участнику звонка", error);
         }
+        return;
+    }
+
+    // Участник просит переподключиться (у него соединение со мной не поднялось).
+    if (message.kind === "restart") {
+        if (peer?.initiator) retryGroupCallPeer(call, from);
+        else if (!peer) reconcileGroupCallPeers(call);
         return;
     }
 
@@ -3791,6 +4000,7 @@ async function handleGroupCallSignal(call, message) {
 
     if (message.kind === "answer") {
         if (peer.pc.signalingState !== "have-local-offer") return;
+        if (message.sid && peer.sid && message.sid !== peer.sid) return;   // ответ прежнему соединению
         try {
             await peer.pc.setRemoteDescription(new RTCSessionDescription(message.data));
             peer.remoteSet = true;
@@ -3823,7 +4033,7 @@ async function attachGroupCallLocalTracks(call, peer) {
             if (call.videoTrack) await transceiver.sender.replaceTrack(call.videoTrack).catch(() => {});
             try { transceiver.sender.setStreams?.(call.localStream); } catch {}
             peer.videoSender = transceiver.sender;
-            limitGroupCallVideoSender(transceiver.sender);
+            limitGroupCallVideoSender(transceiver.sender, call);
         }
     }
 }
@@ -3911,6 +4121,7 @@ function leaveGroupCall(reason = "left") {
     startingGroupCall = false;
 
     clearInterval(call.timer);
+    clearInterval(call.watchTimer);
     call.peers.forEach((peer) => { clearTimeout(peer.graceTimer); try { peer.pc.close(); } catch {} });
     call.peers.clear();
     call.localStream.getTracks().forEach((track) => track.stop());

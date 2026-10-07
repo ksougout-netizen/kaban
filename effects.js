@@ -509,8 +509,10 @@ function sendWithEffect(effectId) {
         if (Math.abs(targetX - appliedX) < 0.6 && Math.abs(targetY - appliedY) < 0.6) return;
         appliedX = targetX;
         appliedY = targetY;
-        area.style.setProperty("--px", targetX.toFixed(1) + "px");
-        area.style.setProperty("--py", targetY.toFixed(1) + "px");
+        // На отдельном слое обоев, а не на .chat-area — иначе пересчитывались стили всей ленты.
+        const layer = area.querySelector(":scope > .chat-wallpaper-layer") || area;
+        layer.style.setProperty("--px", targetX.toFixed(1) + "px");
+        layer.style.setProperty("--py", targetY.toFixed(1) + "px");
     }
 
     function schedule(x, y) {

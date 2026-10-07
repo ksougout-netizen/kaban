@@ -124,23 +124,35 @@ function voiceMediaChanged(call) {
 }
 
 // Битрейт: экран — по выбранному качеству, но суммарно на всех зрителей не больше VOICE_MAX_UPLOAD.
+// Раньше ограничение почти никогда не применялось: вызывалось сразу после
+// replaceTrack, а трек у отправителя появляется позже (replaceTrack асинхронный), —
+// и молча пропускалось. Экран уходил каждому
+// зрителю без ограничения, забивал исходящий канал, и в комнате заикался голос.
+// Теперь вызывается и после replaceTrack, и раз в 3,5 с (voicePingTick); setParameters —
+// только когда значение реально изменилось (например, в комнату зашёл новый зритель).
 function voiceTuneVideoSenders(call, peer) {
+    if (peer.pc.connectionState === "closed") return;
     const viewers = Math.max(1, call.peers.size);
     const t = peer.pc.getTransceivers();
     const tune = (slot, maxBitrate, degradation) => {
         const sender = t[slot]?.sender;
         if (!sender?.track) return;
+        maxBitrate = Math.round(maxBitrate);
+        const key = maxBitrate + "|" + (degradation || "");
+        if (sender._kabanTune === key) return;
         try {
             const params = sender.getParameters();
-            if (!params.encodings || !params.encodings.length) return;
+            if (!params.encodings || !params.encodings.length) return;   // ещё не согласовано — повторим позже
             params.encodings[0].maxBitrate = maxBitrate;
             if (degradation) params.degradationPreference = degradation;
-            sender.setParameters(params).catch(() => {});
-        } catch { /* до согласования параметров нет — применим позже */ }
+            sender._kabanTune = key;
+            sender.setParameters(params).catch(() => { sender._kabanTune = null; });
+        } catch { /* повторим на следующей проверке */ }
     };
     tune(VOICE_SLOT_CAM, Math.min(450000, VOICE_MAX_UPLOAD / viewers / 3));
     const preset = call.media?.screenPreset || VOICE_SCREEN_PRESETS[0];
     tune(VOICE_SLOT_SCREEN, Math.max(600000, Math.min(preset.bitrate, VOICE_MAX_UPLOAD / viewers)), preset.fps >= 60 ? "maintain-framerate" : "maintain-resolution");
+    if (typeof prioritizeAudioSenders === "function") prioritizeAudioSenders(peer.pc);
 }
 
 /* ---- сцена с видео ---- */
@@ -212,7 +224,7 @@ function voiceVideoRefresh() {
         const known = voiceStageVideos.get(tile.id);
         if (!known || known.track !== tile.track) {
             video.srcObject = new MediaStream([tile.track]);
-            video.play().catch(() => {});
+            playOrUnlock(video);
             voiceStageVideos.set(tile.id, { el: video, track: tile.track });
         }
         el.classList.toggle("mirror", !!tile.mirror);

@@ -123,16 +123,34 @@ async function listenEnsureYt(videoId, startSeconds, autoplay) {
 
 }
 
+// YouTube-плеер после переключения трека ещё какое-то время отдаёт время и
+// ДЛИТЕЛЬНОСТЬ ПРОШЛОГО видео — ползунок и перемотка в начале нового трека
+// работали по чужой длительности. Верим ему, только когда загружено именно наше видео.
+function listenYtMatches(track) {
+    try { return !!listenYt && listenYt.getVideoData?.()?.video_id === track.src; } catch { return false; }
+}
+
+function listenAudioMatches(track) {
+    return !!track && listenRoom?.loadedTrackId === track.id && listenAudio.readyState >= 1;
+}
+
 function listenEngineTime() {
     const track = listenCurrentTrack();
-    if (track?.kind === "youtube") return listenYt?.getCurrentTime?.() || 0;
-    return listenAudio.currentTime || 0;
+    if (track?.kind === "youtube") return listenYtMatches(track) ? (listenYt.getCurrentTime?.() || 0) : 0;
+    return listenAudioMatches(track) ? (listenAudio.currentTime || 0) : 0;
 }
 
 function listenEngineDuration() {
     const track = listenCurrentTrack();
-    if (track?.kind === "youtube") return listenYt?.getDuration?.() || 0;
-    return Number.isFinite(listenAudio.duration) ? listenAudio.duration : 0;
+    if (track?.kind === "youtube") return listenYtMatches(track) ? (listenYt.getDuration?.() || 0) : 0;
+    return listenAudioMatches(track) && Number.isFinite(listenAudio.duration) ? listenAudio.duration : 0;
+}
+
+// Плеер действительно играет нужный трек (а не грузится) — только тогда имеет смысл подгонять время.
+function listenEngineReady(track) {
+    if (!track) return false;
+    if (track.kind === "youtube") return listenYtMatches(track) && listenYt.getPlayerState?.() === 1;
+    return listenAudioMatches(track) && !listenAudio.paused && listenAudio.readyState >= 3;
 }
 
 function listenEngineSeek(seconds) {
@@ -172,6 +190,10 @@ async function listenReconcile(force) {
 
     if (room.loadedTrackId !== track.id) {
         room.loadedTrackId = track.id;
+        // Новый трек — сразу сбрасываем время и ползунок, а не показываем прошлые до загрузки.
+        document.getElementById("listen-cur").textContent = formatListenTime(target);
+        document.getElementById("listen-dur").textContent = "–:––";
+        document.getElementById("listen-seek").value = "0";
         if (track.kind === "youtube") {
             listenAudio.pause();
             await listenEnsureYt(track.src, target, room.state.playing);
@@ -193,7 +215,7 @@ async function listenReconcile(force) {
 function listenOnTrackEnded() {
     const room = listenRoom;
     if (!room) return;
-    room.handle.run((api) => api.send({ type: "ended", index: room.state.index, at: Date.now() }));
+    room.handle.run((api) => api.send({ type: "ended", index: room.state.index, at: Date.now(), sentAt: Date.now() }));
 }
 
 listenAudio.addEventListener("ended", () => listenOnTrackEnded());
@@ -201,13 +223,29 @@ listenAudio.addEventListener("error", () => { if (listenRoom && listenCurrentTra
 
 /* ---- события канала ------------------------------------------------------------------------------ */
 
+// Часы на разных компьютерах расходятся на секунды (Windows подводит время редко),
+// а «момент старта» трека (state.at) записан по часам того, кто нажал ▶. Раньше
+// его брали как есть — и участники слышали разные места трека ровно на величину
+// расхождения часов, подгонка этого не исправляла. Теперь каждое сообщение несёт
+// sentAt — время отправки по часам отправителя, и все отметки переводятся в свои
+// часы: остаётся только задержка сети (~0,1 с). У старых версий sentAt нет — как раньше.
+function listenLocalTime(remoteTime, sentAt) {
+    if (typeof remoteTime !== "number" || typeof sentAt !== "number") return remoteTime;
+    return remoteTime + (Date.now() - sentAt);
+}
+
+function listenLocalizeState(state, sentAt) {
+    if (typeof sentAt !== "number" || typeof state.at !== "number") return state;
+    return { ...state, at: listenLocalTime(state.at, sentAt) };
+}
+
 function listenHandleEvent(payload) {
 
     const room = listenRoom;
     if (!room || !payload) return;
 
     if (payload.type === "state" && payload.state) {
-        const next = payload.state;
+        const next = listenLocalizeState(payload.state, payload.sentAt);
         if (next.rev <= room.state.rev) return;
         const previousTrack = listenCurrentTrack();
         room.state = next;
@@ -220,7 +258,7 @@ function listenHandleEvent(payload) {
     if (payload.type === "hello") {
         if (payload.from === myRealUserId || !room.state.queue.length) return;
         // Отвечают все, у кого есть состояние; у кого оно свежее, тот и «выигрывает» по rev.
-        setTimeout(() => room.handle.run((api) => api.send({ type: "state", state: room.state })), Math.random() * 250);
+        setTimeout(() => room.handle.run((api) => api.send({ type: "state", state: room.state, sentAt: Date.now() })), Math.random() * 250);
         return;
     }
 
@@ -234,7 +272,7 @@ function listenHandleEvent(payload) {
             index: hasNext ? nextIndex : payload.index,
             playing: hasNext,
             position: 0,
-            at: payload.at,
+            at: listenLocalTime(payload.at, payload.sentAt),
             rev: room.state.rev + 1
         };
         room.loadedTrackId = null;
@@ -258,7 +296,7 @@ function listenCommit(mutator) {
     const track = listenCurrentTrack();
     if (!previousTrack || !track || previousTrack.id !== track.id) room.loadedTrackId = null;
 
-    room.handle.run((api) => api.send({ type: "state", state: draft }));
+    room.handle.run((api) => api.send({ type: "state", state: draft, sentAt: Date.now() }));
     listenReconcile(true);
 
 }
@@ -314,7 +352,9 @@ let listenDuckTarget = 1;
 let listenDuckTimer = null;
 
 function listenApplyVolume() {
-    const volume = Math.max(0, Math.min(1, listenBaseVolume * listenDuckCurrent));
+    // «Выключить звук» в голосовой комнате глушит и музыку комнаты (как в Discord).
+    const deafened = !!listenRoom?.voiceRoomId && typeof voiceCall !== "undefined" && !!voiceCall?.deafened;
+    const volume = deafened ? 0 : Math.max(0, Math.min(1, listenBaseVolume * listenDuckCurrent));
     listenAudio.volume = volume;
     listenYt?.setVolume?.(Math.round(volume * 100));
 }
@@ -562,15 +602,19 @@ function listenTick() {
 
     if (listenRoom.state.playing) {
         const target = listenTargetTime();
-        if (listenRoom.loadedTrackId === track.id && Math.abs(listenEngineTime() - target) > LISTEN_DRIFT_LIMIT) listenEngineSeek(target);
+        // Подгоняем только когда трек реально играет: пока он грузится, «время плеера» —
+        // ноль или чужое, и раньше это вызывало перемотку каждые полсекунды (трек заикался).
+        if (listenRoom.loadedTrackId === track.id && listenEngineReady(track) && Math.abs(listenEngineTime() - target) > LISTEN_DRIFT_LIMIT) listenEngineSeek(target);
     }
 
     if (!listenSeeking) {
         const duration = listenEngineDuration();
-        const time = listenEngineTime();
-        document.getElementById("listen-cur").textContent = formatListenTime(time);
-        document.getElementById("listen-dur").textContent = formatListenTime(duration);
-        document.getElementById("listen-seek").value = duration ? String(Math.round((time / duration) * 1000)) : "0";
+        const time = duration ? listenEngineTime() : Math.max(0, listenTargetTime());
+        // Только изменившееся (дважды в секунду, всё время, пока идёт музыка).
+        const set = (id, prop, value) => { const el = document.getElementById(id); if (el && el[prop] !== value) el[prop] = value; };
+        set("listen-cur", "textContent", formatListenTime(time));
+        set("listen-dur", "textContent", duration ? formatListenTime(duration) : "–:––");
+        set("listen-seek", "value", duration ? String(Math.round(Math.min(1, time / duration) * 1000)) : "0");
     }
 
 }

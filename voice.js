@@ -419,6 +419,12 @@ async function voiceJoin(chatId, roomId, roomName, groupName) {
         if (voiceCall.chatId === chatId && voiceCall.roomId === roomId) { openVoiceRooms(); return; }
         await voiceLeave(true);
     }
+    // Во время обычного звонка в комнату не заходим: микрофон ушёл бы в оба места сразу.
+    if ((typeof activeCall !== "undefined" && activeCall) || (typeof pendingIncomingCall !== "undefined" && pendingIncomingCall)
+        || (typeof activeGroupCall !== "undefined" && activeGroupCall)) {
+        toast("Сначала завершите звонок");
+        return;
+    }
 
     const present = voiceWatch && voiceWatch.chatId === chatId ? Object.keys(voiceWatch.presence.get(roomId) || {}).filter((id) => id !== myRealUserId).length : 0;
     if (present >= VOICE_MAX_PARTICIPANTS) { toast(`В комнате уже ${VOICE_MAX_PARTICIPANTS} человек — это максимум`); return; }
@@ -542,21 +548,28 @@ function voiceOnRoomPresence(members) {
 function voiceCreatePeer(call, userId, epoch) {
 
     const pc = new RTCPeerConnection(RTC_CONFIG);
-    const peer = { pc, userId, epoch, pendingIce: [], remoteSet: false, state: "connecting", nodes: null, restarting: false, initiator: false };
+    const peer = { pc, userId, epoch, pendingIce: [], remoteSet: false, state: "connecting", nodes: null, restarting: false, initiator: false, sdpSent: false, createdAt: Date.now(), negotiatedAt: Date.now() };
     call.peers.set(userId, peer);
 
+    // Кандидаты, собранные до отправки offer/answer, уходят внутри самого SDP
+    // (см. voiceSendDescription); поштучно — только запоздавшие. Раньше каждый
+    // кандидат был отдельным сообщением: при входе в комнату на 5 человек — десятки
+    // сообщений разом, часть терялась при переподключении канала, и соединение
+    // с кем-то одним «висело» без звука.
     pc.onicecandidate = (event) => {
-        if (event.candidate) voiceSend(call, { type: "ice", to: userId, data: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate });
+        if (event.candidate && peer.sdpSent) voiceSend(call, { type: "ice", to: userId, data: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate });
     };
 
     pc.ontrack = (event) => voiceOnTrack(call, peer, event);
 
     pc.onconnectionstatechange = () => {
         peer.state = pc.connectionState;
-        if (pc.connectionState === "failed") voiceRestartPeer(call, peer);
+        if (pc.connectionState === "connected") { peer.everConnected = true; peer.badSince = 0; }
+        else if (!peer.badSince) peer.badSince = Date.now();
+        if (pc.connectionState === "failed") voiceRecoverPeer(call, peer);
         if (pc.connectionState === "disconnected") {
             clearTimeout(peer.disconnectTimer);
-            peer.disconnectTimer = setTimeout(() => { if (pc.connectionState === "disconnected") voiceRestartPeer(call, peer); }, 5000);
+            peer.disconnectTimer = setTimeout(() => { if (pc.connectionState === "disconnected") voiceRecoverPeer(call, peer); }, 5000);
         }
         voiceRefreshUi();
     };
@@ -593,9 +606,45 @@ function voiceSfxMelody(notes, type, vol) {
     return notes.map(([f0, d]) => { const step = { t, d: d * 0.95, f0, ty: type, v: vol }; t += d; return step; });
 }
 
-const VOICE_SFX_COOLDOWN_MS = 1400;
+// Пауза между своими звуками. Раньше было 1,4 с, и нажатие чаще МОЛЧА выбрасывалось:
+// быстро нажали Ctrl+Alt+1, затем Ctrl+Alt+2 — второй звук просто пропадал
+// («горячие клавиши иногда не работают»). Теперь пауза короче, а нажатие во время
+// неё не теряется: встаёт в очередь (одно, последнее) и играет, как только можно.
+const VOICE_SFX_COOLDOWN_MS = 600;
+const VOICE_SFX_INCOMING_GAP_MS = 400;   // защита от спама у получателей
 let voiceSfxLastSent = 0;
+const voiceSfxQueue = [];
+let voiceSfxQueueTimer = null;
+
+function voiceSfxDrainQueue(call, wait) {
+    if (voiceSfxQueueTimer) return;
+    voiceSfxQueueTimer = setTimeout(() => {
+        voiceSfxQueueTimer = null;
+        if (voiceCall !== call) { voiceSfxQueue.length = 0; return; }
+        const next = voiceSfxQueue.shift();
+        if (!next) return;
+        voiceSfxLastSent = 0;          // пауза уже выдержана
+        voiceSfxSendNow(call, next);
+        if (voiceSfxQueue.length) voiceSfxDrainQueue(call, VOICE_SFX_COOLDOWN_MS);
+    }, wait + 20);
+}
 let voiceSfxLastHeard = new Map(); // userId → время последнего звука (защита от спама)
+
+// На время звука музыка комнаты мягко притихает — иначе короткие звуки в ней тонули.
+function voiceSfxDuckMusic(ms) {
+    if (typeof listenDuck !== "function" || typeof listenRoom === "undefined" || !listenRoom?.voiceRoomId) return;
+    listenDuck(true);
+    clearTimeout(voiceSfxDuckMusic.timer);
+    voiceSfxDuckMusic.timer = setTimeout(() => {
+        voiceSfxDuckMusic.timer = null;
+        const othersSpeaking = !!voiceCall && [...(voiceCall.speaking || [])].some((id) => id !== myRealUserId);
+        if (!othersSpeaking) listenDuck(false);
+    }, Math.min(Math.max(ms, 600), 20000));
+}
+
+function voiceSfxLength(def) {
+    return def ? Math.max(...def.steps.map((s) => (s.t + s.d) * 1000)) : 1000;
+}
 
 function voiceSfxPlay(call, id) {
 
@@ -605,6 +654,7 @@ function voiceSfxPlay(call, id) {
 
     try {
         if (ctx.state === "suspended") ctx.resume().catch(() => {});
+        voiceSfxDuckMusic(voiceSfxLength(def) + 300);
         const bus = ctx.createGain();
         bus.gain.value = 0.9;
         bus.connect(call.master);
@@ -649,7 +699,7 @@ function voiceSfxIncoming(call, payload) {
 
     if (call.deafened || !voiceSettings.sfx) return;
     const now = Date.now();
-    if (now - (voiceSfxLastHeard.get(payload.from) || 0) < VOICE_SFX_COOLDOWN_MS * 0.7) return;
+    if (now - (voiceSfxLastHeard.get(payload.from) || 0) < VOICE_SFX_INCOMING_GAP_MS) return;
     if (!call.members[payload.from]) return;   // только участники этой комнаты
     voiceSfxLastHeard.set(payload.from, now);
 
@@ -772,6 +822,7 @@ async function voiceSfxPlayBuffer(call, buffer, owner) {
         if (ctx.state === "suspended") ctx.resume().catch(() => {});
         const decoded = await ctx.decodeAudioData(buffer.slice(0));
         if (decoded.duration > VOICE_SFX_MAX_SECONDS + 0.5) return;
+        voiceSfxDuckMusic(decoded.duration * 1000 + 300);
         const src = ctx.createBufferSource();
         src.buffer = decoded;
         const bus = ctx.createGain();
@@ -835,7 +886,18 @@ function voiceSfxSend(id) {
     const call = voiceCall;
     if (!call) return;
     const now = Date.now();
-    if (now - voiceSfxLastSent < VOICE_SFX_COOLDOWN_MS) return;
+    const wait = VOICE_SFX_COOLDOWN_MS - (now - voiceSfxLastSent);
+    if (wait > 0 || voiceSfxQueue.length) {
+        // Не выбрасываем — ставим в очередь (до 3 звуков) и играем по порядку.
+        if (voiceSfxQueue.length < 3) voiceSfxQueue.push(id);
+        voiceSfxDrainQueue(call, Math.max(wait, 0));
+        return;
+    }
+    voiceSfxSendNow(call, id);
+}
+
+function voiceSfxSendNow(call, id) {
+    const now = Date.now();
     const custom = voiceCustomSfx.find((s) => s.id === id);
     if (custom) {
         voiceSfxLastSent = now;
@@ -915,6 +977,9 @@ async function voiceConnectTo(call, userId, meta) {
 
     const peer = voiceCreatePeer(call, userId, meta.joinedAt || 0);
     peer.initiator = true;
+    // Метка этого соединения: если мы его пересоздадим (например, после обрыва канала),
+    // собеседник по новой метке поймёт, что старое соединение надо выбросить.
+    peer.sid = Math.random().toString(36).slice(2, 10);
 
     try {
         peer.pc.addTrack(call.local.sendTrack, call.local.sendStream);
@@ -922,7 +987,7 @@ async function voiceConnectTo(call, userId, meta) {
         const offer = await peer.pc.createOffer();
         offer.sdp = voiceTuneSdp(offer.sdp);
         await peer.pc.setLocalDescription(offer);
-        voiceSend(call, { type: "offer", to: userId, sdp: offer.sdp });
+        await voiceSendDescription(call, peer, "offer", { sid: peer.sid });
     } catch (error) {
         console.warn("Не удалось начать соединение", error);
         voiceClosePeer(call, userId);
@@ -930,21 +995,85 @@ async function voiceConnectTo(call, userId, meta) {
 
 }
 
+// Отправить offer/answer, дождавшись сбора сетевых кандидатов (не дольше 0,6 с):
+// так они приходят одним сообщением вместе с SDP. Запоздавшие уйдут поштучно.
+async function voiceSendDescription(call, peer, type, extra) {
+    // Пока ждём кандидатов, могло начаться новое согласование (повторный offer) —
+    // тогда это описание устарело, отправит своё более поздний вызов.
+    const seq = peer.descSeq = (peer.descSeq || 0) + 1;
+    if (typeof waitForIceGathering === "function") await waitForIceGathering(peer.pc, 600);
+    if (voiceCall !== call || call.peers.get(peer.userId) !== peer || peer.descSeq !== seq) return;
+    const desc = peer.pc.localDescription;
+    const expectState = type === "answer" ? "stable" : "have-local-offer";
+    if (!desc || desc.type !== type || peer.pc.signalingState !== expectState) return;
+    voiceSend(call, { type, to: peer.userId, sdp: desc.sdp, ...extra });
+    peer.sdpSent = true;
+    peer.negotiatedAt = Date.now();
+}
+
 async function voiceRestartPeer(call, peer) {
 
     if (!peer.initiator || peer.restarting || voiceCall !== call) return;
     peer.restarting = true;
     try {
+        peer.sdpSent = false;
         const offer = await peer.pc.createOffer({ iceRestart: true });
         offer.sdp = voiceTuneSdp(offer.sdp);
         await peer.pc.setLocalDescription(offer);
-        voiceSend(call, { type: "offer", to: peer.userId, sdp: offer.sdp });
+        await voiceSendDescription(call, peer, "offer", { sid: peer.sid });
     } catch (error) {
         console.warn("Не удалось восстановить соединение", error);
+        peer.sdpSent = true;
     } finally {
         setTimeout(() => { peer.restarting = false; }, 4000);
     }
 
+}
+
+// Соединение упало или так и не установилось. Инициатор перезапускает его сам;
+// отвечающий раньше просто ждал — и если инициатор обрыва не заметил (сеть
+// пропала только в одну сторону), участники так и не слышали друг друга.
+// Теперь отвечающий просит инициатора переподключиться.
+function voiceRecoverPeer(call, peer) {
+    if (voiceCall !== call || call.peers.get(peer.userId) !== peer) return;
+    if (peer.initiator) { voiceRestartPeer(call, peer); return; }
+    if (Date.now() - (peer.restartAskedAt || 0) < 6000) return;
+    peer.restartAskedAt = Date.now();
+    voiceSend(call, { type: "restart", to: peer.userId });
+}
+
+// Пересоздать соединение с нуля (новая метка sid — собеседник выбросит старое).
+// Нужен, когда перезапуск ICE не помогает: например, предложение потерялось
+// при переподключении канала, и у собеседника соединения нет вовсе.
+function voiceRebuildPeer(call, peer) {
+    if (voiceCall !== call || call.peers.get(peer.userId) !== peer || !peer.initiator) return;
+    const meta = call.members?.[peer.userId];
+    if (!meta) return;
+    voiceClosePeer(call, peer.userId);
+    voiceConnectTo(call, peer.userId, meta);
+}
+
+// Сторож (раз в 3,5 с из voicePingTick): соединения, застрявшие не в «connected».
+function voiceWatchPeers(call) {
+    const now = Date.now();
+    for (const peer of [...call.peers.values()]) {
+        const st = peer.pc.connectionState;
+        if (st === "connected" || st === "closed") { peer.stuckRestarts = 0; continue; }
+        // Отсчёт — от последнего согласования или от момента, когда связь пропала
+        // (короткое «disconnected» на секунду-две браузер обычно лечит сам).
+        const stuckFor = now - Math.max(peer.negotiatedAt, peer.badSince || peer.createdAt);
+        if (peer.initiator) {
+            // Ни разу не соединились за 8 с (потерялся offer/answer) или
+            // перезапуск ICE не помог за 12 с — пересоздаём полностью.
+            if (stuckFor > (peer.everConnected ? 12000 : 8000) && !peer.restarting) {
+                peer.stuckRestarts = (peer.stuckRestarts || 0) + 1;
+                if (!peer.everConnected || peer.stuckRestarts > 1) voiceRebuildPeer(call, peer);
+                else voiceRestartPeer(call, peer);
+            }
+        } else if (stuckFor > 15000) {
+            voiceRecoverPeer(call, peer);
+        }
+    }
 }
 
 async function voiceFlushIce(peer) {
@@ -976,7 +1105,11 @@ async function voiceHandleSig(payload) {
         if (!voiceOnlyMembers(call.chatId, { [from]: 1 })[from]) return;   // не участник группы
         // Новый вход того же человека (другая эпоха) — старое соединение заменяем.
         if (peer && payload.epoch !== peer.epoch && !peer.initiator) { voiceClosePeer(call, from); peer = null; }
+        // Собеседник пересоздал соединение (обрыв канала, переподключение) — новое
+        // предложение к старому соединению не подойдёт (другие ключи), заводим новое.
+        if (peer && !peer.initiator && payload.sid && peer.remoteSid && payload.sid !== peer.remoteSid) { voiceClosePeer(call, from); peer = null; }
         if (!peer) peer = voiceCreatePeer(call, from, payload.epoch);
+        if (payload.sid) peer.remoteSid = payload.sid;
         try {
             await peer.pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
             // Отвечающий отдаёт свой голос по уже созданному приёмнику (иначе слышно только в одну сторону).
@@ -990,9 +1123,10 @@ async function voiceHandleSig(payload) {
             voiceApplyMediaToPeer(call, peer);
             const answer = await peer.pc.createAnswer();
             answer.sdp = voiceTuneSdp(answer.sdp);
+            peer.sdpSent = false;
             await peer.pc.setLocalDescription(answer);
-            voiceSend(call, { type: "answer", to: from, sdp: answer.sdp });
             await voiceFlushIce(peer);
+            await voiceSendDescription(call, peer, "answer", {});
         } catch (error) {
             console.warn("Не удалось ответить на предложение", error);
             voiceClosePeer(call, from);
@@ -1001,6 +1135,14 @@ async function voiceHandleSig(payload) {
     }
 
     if (!peer) return;
+
+    // Отвечающий просит переподключиться (у него соединение упало или не установилось).
+    if (payload.type === "restart") {
+        if (!peer.initiator) return;
+        if (peer.pc.connectionState === "connected" && peer.everConnected) voiceRestartPeer(call, peer);
+        else voiceRebuildPeer(call, peer);
+        return;
+    }
 
     if (payload.type === "answer") {
         try {
@@ -1057,7 +1199,7 @@ function voiceAttachRemote(call, peer, stream) {
     audio.autoplay = true;
     audio.srcObject = stream;
     document.getElementById("voice-audio-sink")?.appendChild(audio);
-    audio.play?.().catch(() => {});
+    playOrUnlock(audio);
 
     const src = ctx.createMediaStreamSource(stream);
     const analyser = ctx.createAnalyser();
@@ -1097,15 +1239,18 @@ function voiceAddMediaTransceivers(call, peer) {
 function voiceApplyMediaToPeer(call, peer) {
     const t = peer.pc.getTransceivers();
     const media = call.media || {};
+    const tuneLater = () => { if (typeof voiceTuneVideoSenders === "function") voiceTuneVideoSenders(call, peer); };
     const set = (slot, track) => {
         const sender = t[slot]?.sender;
         if (!sender || sender.track === (track || null)) return;
-        sender.replaceTrack(track || null).catch(() => {});
+        // Ограничение битрейта — когда трек у отправителя уже стоит (replaceTrack асинхронный).
+        sender._kabanTune = null;
+        sender.replaceTrack(track || null).then(tuneLater).catch(() => {});
     };
     set(VOICE_SLOT_CAM, media.camTrack);
     set(VOICE_SLOT_SCREEN, media.screenTrack);
     set(VOICE_SLOT_SCREEN_AUDIO, media.screenAudioTrack);
-    if (typeof voiceTuneVideoSenders === "function") voiceTuneVideoSenders(call, peer);
+    tuneLater();
 }
 
 function voiceOnTrack(call, peer, event) {
@@ -1129,7 +1274,7 @@ function voiceAttachScreenAudio(call, peer, track) {
     audio.autoplay = true;
     audio.srcObject = stream;
     document.getElementById("voice-audio-sink")?.appendChild(audio);
-    audio.play?.().catch(() => {});
+    playOrUnlock(audio);
     const src = call.local.ctx.createMediaStreamSource(stream);
     const gain = call.local.ctx.createGain();
     src.connect(gain).connect(call.master);
@@ -1183,7 +1328,9 @@ function voiceTick() {
         voiceApplySpeakingClasses();
         // Кто-то (кроме меня) говорит — музыка комнаты плавно тише, замолчали — громче.
         if (typeof listenDuck === "function" && voiceSettings.musicDuck !== false && listenRoom?.voiceRoomId === call.roomId) {
-            listenDuck([...speaking].some((id) => id !== myRealUserId));
+            // Пока играет звук саундборда, приглушение не снимаем (см. voiceSfxDuckMusic).
+            const someoneSpeaks = [...speaking].some((id) => id !== myRealUserId);
+            if (someoneSpeaks || !voiceSfxDuckMusic.timer) listenDuck(someoneSpeaks);
         }
     }
 
@@ -1197,10 +1344,14 @@ async function voicePingTick() {
     if (!call) return;
 
     if (Date.now() - voiceStateSentAt > 8000) voicePushMeta();
+    voiceWatchPeers(call);
 
     const samples = [];
     for (const peer of call.peers.values()) {
         if (peer.pc.connectionState !== "connected") continue;
+        // Битрейт видео под текущее число зрителей и приоритет голоса (без лишних setParameters).
+        if (typeof voiceTuneVideoSenders === "function") voiceTuneVideoSenders(call, peer);
+        else if (typeof prioritizeAudioSenders === "function") prioritizeAudioSenders(peer.pc);
         try {
             const stats = await peer.pc.getStats();
             stats.forEach((report) => {
@@ -1237,6 +1388,7 @@ function voiceApplyDeafen() {
     const call = voiceCall;
     if (!call?.master) return;
     call.master.gain.setTargetAtTime(call.deafened ? 0 : voiceSettings.outputVolume / 100, call.local.ctx.currentTime, 0.02);
+    if (typeof listenApplyVolume === "function") listenApplyVolume();   // музыка комнаты — тоже
 }
 
 function voiceToggleDeafen() {
@@ -1386,13 +1538,48 @@ function voiceAvatarHTML(userId, meta, small) {
     return `<span class="voice-avatar${small ? " small" : ""}" data-voice-user="${escapeHTML(userId)}"${style}>${url ? "" : escapeHTML((name === "Вы" ? (cachedMyProfile?.display_name || "Я") : name).trim().charAt(0).toUpperCase())}</span>`;
 }
 
+// Перерисовка интерфейса комнаты. Поводов много (присутствие, состояние каждого
+// участника раз в 8 с, смена состояния каждого соединения) и часто по 2–3 за раз —
+// склеиваем их в одну перерисовку на кадр (таймер — если вкладка скрыта и кадров нет).
+let voiceUiScheduled = false;
 function voiceRefreshUi() {
-    if (typeof voiceVideoRefresh === "function") voiceVideoRefresh();
-    voiceRenderDock();
-    voiceRenderRooms();
-    voiceRenderBanner();
-    voiceRenderHeaderButton();
+    if (voiceUiScheduled) return;
+    voiceUiScheduled = true;
+    let done = false;
+    const run = () => {
+        if (done) return;
+        done = true;
+        voiceUiScheduled = false;
+        if (typeof voiceVideoRefresh === "function") voiceVideoRefresh();
+        voiceRenderDock();
+        voiceRenderRooms();
+        voiceRenderBanner();
+        voiceRenderHeaderButton();
+    };
+    requestAnimationFrame(run);
+    setTimeout(run, 120);
 }
+
+// innerHTML / textContent — только если правда изменилось: иначе браузер
+// пересоздаёт элементы (картинки аватаров мигают) и пересчитывает раскладку.
+function voiceSetHtml(el, html) {
+    if (el && el._voiceHtml !== html) { el.innerHTML = html; el._voiceHtml = html; }
+}
+function voiceSetText(el, text) {
+    if (el && el.textContent !== text) el.textContent = text;
+}
+
+// Пока зажат ползунок громкости участника, список комнат не перерисовываем —
+// иначе ползунок пересоздавался прямо под пальцем и перетаскивание обрывалось.
+let voiceSliderHeld = false;
+document.addEventListener("pointerdown", (event) => {
+    if (event.target.closest?.(".vp-vol input")) voiceSliderHeld = true;
+}, true);
+["pointerup", "pointercancel"].forEach((type) => document.addEventListener(type, () => {
+    if (!voiceSliderHeld) return;
+    voiceSliderHeld = false;
+    voiceRenderRooms();
+}, true));
 
 function voiceApplySpeakingClasses() {
     const speaking = voiceCall?.speaking || new Set();
@@ -1423,25 +1610,25 @@ function voiceRenderDock() {
     const others = Object.keys(call.members).filter((id) => id !== myRealUserId).length;
     const status = others === 0 ? "Вы одни в комнате" : (connected < others ? "Соединяемся…" : "Голосовая связь");
 
-    document.getElementById("voice-dock-title").textContent = status;
-    document.getElementById("voice-dock-sub").textContent = `${call.roomName} · ${call.groupName}`;
+    voiceSetText(document.getElementById("voice-dock-title"), status);
+    voiceSetText(document.getElementById("voice-dock-sub"), `${call.roomName} · ${call.groupName}`);
 
     const quality = voiceQualityLevel(call);
     const q = document.getElementById("voice-quality");
-    q.dataset.level = String(quality);
+    if (q.dataset.level !== String(quality)) q.dataset.level = String(quality);
     q.title = call.pingMs != null ? `Задержка ${call.pingMs} мс` : "Связь устанавливается";
 
-    document.getElementById("voice-dock-avatar").innerHTML = voiceAvatarHTML(myRealUserId, voiceMeta(), true);
+    voiceSetHtml(document.getElementById("voice-dock-avatar"), voiceAvatarHTML(myRealUserId, voiceMeta(), true));
 
     const mic = document.getElementById("voice-mic-btn");
     mic.classList.toggle("off", call.muted);
-    mic.innerHTML = voiceSvg(call.muted ? "micOff" : "mic");
+    voiceSetHtml(mic, voiceSvg(call.muted ? "micOff" : "mic"));
     mic.title = call.muted ? "Включить микрофон" : "Выключить микрофон";
     mic.setAttribute("aria-pressed", String(call.muted));
 
     const ear = document.getElementById("voice-deafen-btn");
     ear.classList.toggle("off", call.deafened);
-    ear.innerHTML = voiceSvg(call.deafened ? "headphonesOff" : "headphones");
+    voiceSetHtml(ear, voiceSvg(call.deafened ? "headphonesOff" : "headphones"));
     ear.title = call.deafened ? "Включить звук" : "Выключить звук (и микрофон)";
     ear.setAttribute("aria-pressed", String(call.deafened));
 
@@ -1519,13 +1706,14 @@ function voiceRenderRooms() {
     const list = document.getElementById("voice-rooms-list");
     const watch = voiceWatch;
 
-    if (!watch) { list.innerHTML = '<div class="group-perms-hint">Откройте группу, чтобы увидеть её голосовые комнаты.</div>'; return; }
+    if (!watch) { voiceSetHtml(list, '<div class="group-perms-hint">Откройте группу, чтобы увидеть её голосовые комнаты.</div>'); return; }
+    if (voiceSliderHeld) return;   // догоним по отпусканию (см. voiceSliderHeld)
 
-    document.getElementById("voice-rooms-title").textContent = `Голосовые комнаты · ${currentChatTitle || ""}`;
+    voiceSetText(document.getElementById("voice-rooms-title"), `Голосовые комнаты · ${currentChatTitle || ""}`);
 
     const manage = voiceCanManageRooms();
 
-    list.innerHTML = watch.rooms.map((room) => {
+    voiceSetHtml(list, watch.rooms.map((room) => {
         const members = watch.presence.get(room.id) || {};
         const ids = Object.keys(members);
         const joinedHere = voiceCall && voiceCall.chatId === watch.chatId && voiceCall.roomId === room.id;
@@ -1547,7 +1735,7 @@ function voiceRenderRooms() {
             </div>
             ${ids.length ? `<div class="vroom-people">${people}</div>` : '<div class="vroom-empty">Пока никого — зайдите первым</div>'}
         </div>`;
-    }).join("");
+    }).join(""));
 
     document.getElementById("voice-rooms-manage").hidden = !manage;
     voiceApplySpeakingClasses();

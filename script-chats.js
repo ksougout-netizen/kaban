@@ -432,6 +432,13 @@ function applyChatWallpaper(chatId) {
         // Обои рисуются отдельным слоем (.chat-area::before) — он плавно дрейфует
         // и сдвигается за курсором, не перерисовывая ленту сообщений.
         chatArea.style.removeProperty("background");
+        // Отдельный слой под обои (см. .chat-wallpaper-layer в style.css) — один раз.
+        if (!chatArea.querySelector(":scope > .chat-wallpaper-layer")) {
+            const layer = document.createElement("div");
+            layer.className = "chat-wallpaper-layer";
+            layer.setAttribute("aria-hidden", "true");
+            chatArea.prepend(layer);
+        }
         if (wallpaper.css) chatArea.style.setProperty("--wp", wallpaper.css);
         else chatArea.style.removeProperty("--wp");
         chatArea.classList.toggle("has-wallpaper", !!wallpaper.css);
