@@ -1664,9 +1664,15 @@ function applyContactProfile(profile) {
             el.style.backgroundSize = "cover";
             el.style.backgroundPosition = "center";
         } else {
-            el.textContent = profile.avatar;
+            // Градиент + инициалы вместо эмодзи-заглушки (как в списке чатов).
+            const kind = profile.isSaved ? "saved" : profile.isBot ? "bot" : profile.avatar === "👥" ? "group" : "user";
+            const av = avatarParts({ name: profile.isSaved ? "Избранное" : profile.name, kind });
+            el.innerHTML = av.inner;
             el.style.backgroundImage = "";
+            el.style.background = (av.style.match(/background:([^;"]+)/) || [])[1] || "";
+            el.style.color = "#fff";
         }
+        el.classList.toggle("has-initials", !profile.photo);
         el.classList.toggle("chat-avatar-saved", !!profile.isSaved);
         el.classList.toggle("chat-avatar-bot", !!profile.isBot);
         applyAvatarVideo(el, profile.avatarVideo || null);
@@ -2202,12 +2208,10 @@ function filterNewGroupResults() {
 
 function buildNewGroupResultRowHTML(user) {
     const selected = newGroupSelectedMembers.has(user.id);
-    const avatarStyle = user.avatar_url
-        ? ` style="background-image:${escapeHTML(cssUrlValue(user.avatar_url))};background-size:cover;background-position:center"`
-        : "";
+    const av = avatarParts({ id: user.id, name: user.display_name || user.username, url: user.avatar_url, kind: user.is_bot && !user.avatar_url ? "bot" : "user" });
     return `
         <button class="new-chat-result-row" type="button" data-user-id="${escapeHTML(user.id)}" data-user-name="${escapeHTML(user.display_name)}" onclick="toggleGroupMemberSelection(this.dataset.userId, this.dataset.userName)">
-            <span class="new-chat-result-avatar${selected ? " selected" : ""}${user.is_bot ? " chat-avatar-bot" : ""}"${avatarStyle}>${user.avatar_url ? "" : (user.is_bot ? "🤖" : "👤")}${selected ? `<span class="new-chat-result-check">✓</span>` : ""}</span>
+            <span class="new-chat-result-avatar${av.cls}${selected ? " selected" : ""}${user.is_bot ? " chat-avatar-bot" : ""}"${av.style}>${av.inner}${selected ? `<span class="new-chat-result-check">✓</span>` : ""}</span>
             <span>${escapeHTML(user.display_name || user.username || "Пользователь")} <span style="opacity:.6">@${escapeHTML(user.username || "")}</span></span>
         </button>
     `;
@@ -2683,10 +2687,8 @@ function applyGroupChatUpdate(chat) {
 }
 
 function buildGroupAvatarHTML(user, size = "") {
-    const avatarStyle = user.avatar_url
-        ? ` style="background-image:${escapeHTML(cssUrlValue(user.avatar_url))};background-size:cover;background-position:center"`
-        : "";
-    return `<span class="new-chat-result-avatar${user.is_bot ? " chat-avatar-bot" : ""}${size}"${avatarStyle}>${user.avatar_url ? "" : (user.is_bot ? "🤖" : "👤")}</span>`;
+    const av = avatarParts({ id: user.id, name: user.display_name || user.username, url: user.avatar_url, kind: user.is_bot && !user.avatar_url ? "bot" : "user" });
+    return `<span class="new-chat-result-avatar${av.cls}${user.is_bot ? " chat-avatar-bot" : ""}${size}"${av.style}>${av.inner}</span>`;
 }
 
 function renderGroupInfoModal() {
@@ -4141,7 +4143,11 @@ function applyInlineMarkup(html) {
     html = html.replace(/(^|[^\w*])\*([^\n*]+?)\*(?!\w)/g, "$1<strong>$2</strong>");
     html = html.replace(/(^|[^\w_])_([^\n_]+?)_(?!\w)/g, "$1<em>$2</em>");
     html = html.replace(/(^|[^\w~])~([^\n~]+?)~(?!\w)/g, "$1<s>$2</s>");
-    html = html.replace(/(^|\n)&gt; ?(.*)/g, (m, pre, quote) => `${pre}<blockquote class="msg-quote">${quote}</blockquote>`);
+    // Перевод строки сразу ПОСЛЕ цитаты съедаем: блок цитаты и так начинается/кончается с новой строки,
+    // а лишний \n в pre-wrap давал пустую строку между цитатой и ответом.
+    html = html.replace(/(^|\n)&gt; ?(.*)(\n(?!&gt;))?/g, (m, pre, quote) => `${pre}<blockquote class="msg-quote">${quote}</blockquote>`);
+    // Несколько строк цитаты подряд — один блок, а не стопка отдельных.
+    html = html.replace(/<\/blockquote>\n<blockquote class="msg-quote">/g, "<br>");
 
     return html;
 
@@ -5928,3 +5934,79 @@ function positionInfoWindow(reset) {
 // Лента сообщений и панель эмодзи: подключаем анимации к уже и вновь добавленным эмодзи.
 observeAnimEmojiIn(document.getElementById("messages"));
 observeAnimEmojiIn(document.getElementById("emoji-popover"));
+
+/* ============================================================================
+   ПАПКИ ЧАТОВ: при узкой панели не все вкладки помещаются. Как в Telegram
+   Desktop — колесо мыши листает их вбок, можно тянуть мышью, по краям мягкое
+   затухание («там ещё есть»), выбранная вкладка сама въезжает в видимую часть.
+   ========================================================================= */
+(function initChatFoldersScroller() {
+    const bar = document.getElementById("chat-folders");
+    if (!bar) return;
+
+    const syncEdges = () => {
+        const max = bar.scrollWidth - bar.clientWidth;
+        bar.classList.toggle("fade-left", bar.scrollLeft > 4);
+        bar.classList.toggle("fade-right", max - bar.scrollLeft > 4);
+    };
+
+    bar.addEventListener("wheel", (event) => {
+        if (bar.scrollWidth <= bar.clientWidth) return;
+        const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+        if (!delta) return;
+        // Дошли до края — отдаём колесо дальше (прокрутка самой боковой панели).
+        const max = bar.scrollWidth - bar.clientWidth;
+        if ((delta < 0 && bar.scrollLeft <= 0) || (delta > 0 && bar.scrollLeft >= max - 1)) return;
+        event.preventDefault();
+        bar.scrollBy({ left: delta, behavior: Math.abs(delta) > 40 ? "smooth" : "auto" });
+    }, { passive: false });
+
+    // Перетаскивание мышью (на сенсоре прокрутка и так работает пальцем).
+    let drag = null;
+    bar.addEventListener("pointerdown", (event) => {
+        if (event.pointerType !== "mouse" || event.button !== 0 || bar.scrollWidth <= bar.clientWidth) return;
+        drag = { x: event.clientX, left: bar.scrollLeft, moved: false, id: event.pointerId };
+    });
+    bar.addEventListener("pointermove", (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        const dx = event.clientX - drag.x;
+        if (!drag.moved && Math.abs(dx) < 5) return;
+        if (!drag.moved) { drag.moved = true; bar.setPointerCapture(event.pointerId); bar.classList.add("dragging"); }
+        bar.scrollLeft = drag.left - dx;
+    });
+    const endDrag = () => {
+        if (!drag) return;
+        const moved = drag.moved;
+        drag = null;
+        bar.classList.remove("dragging");
+        // Отпустили после перетаскивания — это не клик по вкладке. Если клика так и
+        // не последовало (отпустили за пределами полосы), перехватчик снимаем сразу,
+        // иначе он «съел» бы следующий настоящий клик.
+        if (moved) {
+            const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
+            bar.addEventListener("click", swallow, { capture: true, once: true });
+            setTimeout(() => bar.removeEventListener("click", swallow, { capture: true }), 0);
+        }
+    };
+    bar.addEventListener("pointerup", endDrag);
+    bar.addEventListener("pointercancel", endDrag);
+
+    bar.addEventListener("scroll", syncEdges, { passive: true });
+    if (typeof ResizeObserver === "function") new ResizeObserver(syncEdges).observe(bar);
+    // Список вкладок перерисовывается при каждом новом сообщении — выбранную вкладку
+    // подкручиваем в видимую часть ТОЛЬКО когда сменилась сама папка, иначе полоса
+    // дёргалась бы назад, пока человек листает её.
+    let lastActiveFolder = null;
+    new MutationObserver(() => {
+        syncEdges();
+        const active = bar.querySelector(".chat-folder-tab.active");
+        const key = active ? (active.dataset.folder || active.dataset.folderId || active.textContent) : null;
+        if (!active || drag || key === lastActiveFolder) return;
+        lastActiveFolder = key;
+        const left = active.getBoundingClientRect().left - bar.getBoundingClientRect().left + bar.scrollLeft;
+        const right = left + active.offsetWidth;
+        if (left < bar.scrollLeft + 28) bar.scrollTo({ left: Math.max(0, left - 28), behavior: "smooth" });
+        else if (right > bar.scrollLeft + bar.clientWidth - 28) bar.scrollTo({ left: right - bar.clientWidth + 28, behavior: "smooth" });
+    }).observe(bar, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "hidden"] });
+    syncEdges();
+})();

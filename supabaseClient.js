@@ -387,6 +387,48 @@ const KabanAPI = {
         return data;
     },
 
+    // Телефон, день рождения, цвет профиля (таблица user_private, см. profile_extras.sql).
+    // null — таблицы ещё нет в базе (SQL не запущен): интерфейс тогда просто прячет эти поля.
+    async getMyExtras() {
+        const db = getSupabaseClient();
+        const me = await KabanAuth.getCurrentUser();
+        if (!me) throw new Error("Нужно войти в аккаунт");
+        const { data, error } = await db.from("user_private")
+            .select("phone, phone_visibility, birthday, birthday_visibility, profile_color")
+            .eq("user_id", me.id).maybeSingle();
+        if (error) {
+            if (/user_private|PGRST205|42P01|does not exist|schema cache/i.test(`${error.code} ${error.message}`)) return null;
+            throw error;
+        }
+        return data || { phone: null, phone_visibility: "contacts", birthday: null, birthday_visibility: "contacts", profile_color: null };
+    },
+
+    async saveMyExtras(patch) {
+        const db = getSupabaseClient();
+        const me = await KabanAuth.getCurrentUser();
+        if (!me) throw new Error("Нужно войти в аккаунт");
+        const row = { user_id: me.id, updated_at: new Date().toISOString() };
+        ["phone", "phone_visibility", "birthday", "birthday_visibility", "profile_color"].forEach((key) => { if (patch[key] !== undefined) row[key] = patch[key]; });
+        const { data, error } = await db.from("user_private").upsert(row, { onConflict: "user_id" }).select().single();
+        if (error) throw error;
+        return data;
+    },
+
+    // Чужие телефон/день рождения — только то, что владелец разрешил вам видеть.
+    async getUserExtras(userId) {
+        const db = getSupabaseClient();
+        const { data, error } = await db.rpc("get_user_extras", { target: userId });
+        if (error) return null;
+        return Array.isArray(data) ? (data[0] || null) : data;
+    },
+
+    // Устройства: завершить все сеансы, кроме этого.
+    async signOutOtherSessions() {
+        const db = getSupabaseClient();
+        const { error } = await db.auth.signOut({ scope: "others" });
+        if (error) throw error;
+    },
+
     // Сохранить изменения профиля (имя/юзернейм/статус/эмодзи-статус).
     // Передавайте только те поля, которые реально поменялись — остальные
     // можно не указывать.
@@ -1659,10 +1701,12 @@ const KabanAPI = {
     // привязаны к конкретному callId, а не к пользователю (иначе стало бы
     // не различить сигналы разных, пусть даже не пересекающихся по времени,
     // звонков одному и тому же собеседнику).
-    joinCallChannel(callId, { onAnswer, onIceCandidate, onEnd, onRenegotiate, onRestartRequest } = {}) {
+    joinCallChannel(callId, { onAnswer, onIceCandidate, onEnd, onRenegotiate, onRestartRequest, onState } = {}) {
         const db = getSupabaseClient();
         const channel = db
             .channel(`call:${callId}`)
+            // Состояние собеседника: микрофон / камера / показ экрана (как в Telegram).
+            .on("broadcast", { event: "state" }, ({ payload }) => onState?.(payload))
             .on("broadcast", { event: "answer" }, ({ payload }) => onAnswer?.(payload))
             .on("broadcast", { event: "ice-candidate" }, ({ payload }) => onIceCandidate?.(payload))
             .on("broadcast", { event: "end" }, ({ payload }) => onEnd?.(payload))
@@ -1677,6 +1721,7 @@ const KabanAPI = {
             ready,
             sendRenegotiate: (payload) => channel.send({ type: "broadcast", event: "renegotiate", payload }),
             sendRestartRequest: () => channel.send({ type: "broadcast", event: "restart-request", payload: {} }),
+            sendState: (payload) => channel.send({ type: "broadcast", event: "state", payload }),
             sendAnswer: (payload) => channel.send({ type: "broadcast", event: "answer", payload }),
             sendIceCandidate: (payload) => channel.send({ type: "broadcast", event: "ice-candidate", payload }),
             sendEnd: (payload) => channel.send({ type: "broadcast", event: "end", payload: payload || {} }),

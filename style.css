@@ -3456,13 +3456,33 @@ body[data-tint] .sidebar {
     color: var(--text);
 }
 
+/* Цитата как в Telegram: подложка в оттенке текста + яркая полоса + знак кавычек.
+   Раньше была тонкая полоса цвета текста с прозрачностью — на ярком фиолетовом
+   (и любом насыщенном) пузыре почти пропадала. currentColor — значит видно на любом фоне. */
 .msg-quote {
+    position: relative;
     display: block;
     margin: 4px 0;
-    padding: 2px 0 2px 9px;
+    padding: 5px 28px 5px 10px;
     border-left: 3px solid currentColor;
-    opacity: .85;
+    border-radius: 4px 10px 10px 4px;
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    font-style: normal;
 }
+.msg-quote::after {
+    content: "";
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    width: 12px;
+    height: 12px;
+    opacity: .55;
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M10 7H6a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a2 2 0 0 1-2 2v1a3 3 0 0 0 4-3zm10 0h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a2 2 0 0 1-2 2v1a3 3 0 0 0 4-3z'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M10 7H6a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a2 2 0 0 1-2 2v1a3 3 0 0 0 4-3zm10 0h-4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2v2a2 2 0 0 1-2 2v1a3 3 0 0 0 4-3z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.message-row.received .msg-quote { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.message-row.received .msg-quote::after { background: var(--accent); }
 
 .msg-spoiler {
     background: color-mix(in srgb, currentColor 28%, transparent);
@@ -3608,9 +3628,15 @@ body.dark .message {
     font-size: 9px;
 }
 
-/* Настройка "Размер текста" */
-body.text-scale-sm .message { font-size: 11.5px; }
-body.text-scale-lg .message { font-size: 15px; }
+/* Настройка "Размер текста" — НЕ трогает одиночные эмодзи/стикеры (.emoji-only,
+   .sticker ниже сами задают свой крупный font-size в em-пропорции). Раньше
+   `body.text-scale-lg .message` (specificity 0,2,1) перебивал `.message.emoji-only`
+   (0,2,0) как более специфичный селектор — крупный текст делал смайлики МЕЛЬЧЕ
+   обычных 28px, а не крупнее. */
+body.text-scale-sm .message:not(.emoji-only):not(.sticker) { font-size: 11.5px; }
+body.text-scale-lg .message:not(.emoji-only):not(.sticker) { font-size: 15px; }
+body.text-scale-sm .message.emoji-only { font-size: 24px; }
+body.text-scale-lg .message.emoji-only { font-size: 32px; }
 
 /* Настройка "Крупные эмодзи": одиночные эмодзи без текста — крупнее
    обычного текста, но ПО-ПРЕЖНЕМУ в обычном пузыре (раньше пузырь совсем
@@ -3641,16 +3667,19 @@ body.dark .message-row.sent .message {
     .message-row { padding-left: 0; }
 }
 
+/* Ответ на сообщение — плашкой как в Telegram: оттенок + полоса слева. */
 .message-reply-quote {
     display: block;
     max-width: 100%;
-    margin-bottom: 5px;
-    padding-left: 7px;
-    border-left: 2px solid var(--accent);
+    margin: 1px 0 6px;
+    padding: 4px 9px;
+    border-left: 3px solid var(--accent);
+    border-radius: 4px 9px 9px 4px;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
     overflow: hidden;
     color: var(--text);
-    font-size: 10px;
-    line-height: 1.4;
+    font-size: 12.5px;
+    line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -3658,6 +3687,7 @@ body.dark .message-row.sent .message {
 .message-row.sent .message-reply-quote {
     color: var(--bubble-out-text);
     border-color: currentColor;
+    background: color-mix(in srgb, currentColor 14%, transparent);
 }
 
 body.dark .message-row.sent .message-reply-quote {
@@ -5974,18 +6004,7 @@ body.dark .composer-send {
     transform: translateY(0) scale(1);
 }
 
-.call-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    display: grid;
-    place-items: center;
-    padding: 20px;
-    background: rgba(0,0,0,.3);
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity .18s ease, visibility .18s ease;
-}
+/* .call-backdrop — см. блок «ОКНО ЗВОНКА» ниже */
 
 /* КОД-ПАРОЛЬ ПРИЛОЖЕНИЯ */
 
@@ -6250,200 +6269,224 @@ body.dark .composer-send {
     }
 }
 
-.call-backdrop.open {
-    opacity: 1;
-    visibility: visible;
+/* ============================================================================
+   ОКНО ЗВОНКА — в духе Telegram: живой градиент (синий при вызове, зелёный
+   в разговоре, оранжевый при переподключении), размытое фото собеседника,
+   большой аватар с волнами, стеклянные круглые кнопки, видео на весь экран.
+   ========================================================================= */
+.call-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(8, 10, 20, .45);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity .22s ease, visibility .22s ease;
 }
+.call-backdrop.open { opacity: 1; visibility: visible; }
 
 .call-dialog {
-    width: min(340px,100%);
-    padding: 20px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface);
-    color: var(--text);
-    box-shadow: 0 20px 60px rgba(0,0,0,.2);
-    transform: translateY(8px) scale(.98);
-    transition: transform .22s cubic-bezier(.2,.85,.25,1);
-}
-
-.call-backdrop.open .call-dialog {
-    transform: translateY(0) scale(1);
-}
-
-.call-topline {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    color: var(--muted);
-    font-size: 10px;
-}
-
-.call-close {
-    width: 28px;
-    height: 28px;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--muted);
-    font-size: 18px;
-    cursor: pointer;
-}
-
-.call-close:hover {
-    background: var(--surface2);
-    color: var(--text);
-}
-
-.call-person {
+    --c1: #4c6ef5; --c2: #7048e8; --c3: #22b8cf;
+    position: relative;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    padding: 20px 0 24px;
-    text-align: center;
-}
-
-.call-avatar {
-    display: grid;
-    place-items: center;
-    width: 74px;
-    height: 74px;
-    border: 1px solid var(--border);
-    border-radius: 24px;
-    background: var(--surface2);
-    color: var(--text);
-    font-size: 25px;
-    font-weight: 600;
-    position: relative;
-}
-
-/* Пульс вызова: раньше менялся сам box-shadow (repaint на каждом кадре всё
-   время звонка, а он идёт минутами). Кольцо теперь статичное на
-   псевдоэлементе, анимируется только opacity. */
-.call-avatar::after {
-    content: "";
-    position: absolute;
-    inset: -1px;
-    border-radius: inherit;
-    box-shadow: 0 0 0 7px rgba(128,128,128,.08);
-    opacity: 0;
-    pointer-events: none;
-    animation: call-pulse 2.2s ease-in-out infinite;
-}
-
-.call-name {
-    margin-top: 14px;
-    font-size: 16px;
-    font-weight: 600;
-}
-
-.call-state {
-    margin-top: 5px;
-    color: var(--muted);
-    font-size: 11px;
-}
-
-.call-controls {
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 13px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-}
-
-.call-control {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    border: 0;
-    background: transparent;
-    color: var(--muted);
-    font-size: 9px;
-    cursor: pointer;
-}
-
-.call-control-icon {
-    display: grid;
-    place-items: center;
-    width: 42px;
-    height: 42px;
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    background: var(--surface2);
-    color: var(--text);
-    transition: background .16s ease, transform .16s ease, color .16s ease;
-}
-
-.call-control:hover .call-control-icon {
-    transform: translateY(-2px);
-}
-
-.call-control[aria-pressed="true"] .call-control-icon {
-    background: var(--accent);
-    color: var(--accent-text);
-}
-
-.call-control.end-call .call-control-icon,
-.call-control.decline-call .call-control-icon {
-    border-color: #c83f45;
-    background: #c83f45;
-    color: #fff;
-}
-
-.call-control.accept-call .call-control-icon {
-    border-color: var(--green);
-    background: var(--green);
-    color: #fff;
-}
-
-/* Настоящее видео звонка (WebRTC) — см. script.js → showOutgoingCallUI и
-   т.п. Диалог для видеозвонка шире (.has-video), под аудио остаётся
-   компактным, как было. */
-.call-dialog.has-video {
-    width: min(420px, 100%);
-}
-
-.call-video-area {
-    position: relative;
-    margin: 14px 0;
-    border-radius: 12px;
+    width: min(440px, calc(100vw - 32px));
+    height: min(720px, calc(100dvh - 40px));
+    border-radius: 30px;
     overflow: hidden;
-    background: #000;
-    aspect-ratio: 4 / 3;
+    color: #fff;
+    background: linear-gradient(160deg, var(--c1), var(--c2));
+    box-shadow: 0 30px 90px rgba(0,0,0,.45);
+    transform: translateY(14px) scale(.96);
+    transition: transform .32s cubic-bezier(.2,.9,.3,1.1), width .35s cubic-bezier(.2,.8,.2,1), height .35s cubic-bezier(.2,.8,.2,1), --c1 1s, --c2 1s;
+    user-select: none;
 }
+.call-backdrop.open .call-dialog { transform: none; }
+.call-dialog.is-connected { --c1: #0ca678; --c2: #1c7ed6; --c3: #20c997; }
+.call-dialog.reconnecting { --c1: #f08c00; --c2: #e8590c; --c3: #fab005; }
+.call-dialog.has-remote-video, .call-dialog.has-local-video { width: min(980px, calc(100vw - 48px)); height: min(680px, calc(100dvh - 48px)); }
 
-.call-remote-video {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    background: #000;
+/* живой фон */
+.call-bg { position: absolute; inset: 0; z-index: 0; overflow: hidden; background: linear-gradient(160deg, var(--c1), var(--c2)); transition: background 1s ease; }
+.call-bg-photo { position: absolute; inset: -20%; background: center / cover no-repeat; filter: blur(46px) saturate(1.35) brightness(.72); opacity: .6; }
+.call-bg-photo[hidden] { display: none; }
+.call-blob { position: absolute; width: 70%; aspect-ratio: 1; border-radius: 50%; filter: blur(60px); opacity: .55; mix-blend-mode: screen; }
+.call-blob.b1 { background: var(--c3); left: -20%; top: -15%; animation: call-blob-a 14s ease-in-out infinite alternate; }
+.call-blob.b2 { background: var(--c1); right: -25%; top: 30%; animation: call-blob-b 18s ease-in-out infinite alternate; }
+.call-blob.b3 { background: var(--c2); left: 10%; bottom: -30%; animation: call-blob-a 22s ease-in-out infinite alternate-reverse; }
+@keyframes call-blob-a { to { transform: translate(25%, 20%) scale(1.15); } }
+@keyframes call-blob-b { to { transform: translate(-30%, -15%) scale(.9); } }
+body.reduce-motion .call-blob { animation: none; }
+
+/* верхняя строка */
+.call-topline { position: relative; z-index: 3; display: flex; align-items: center; gap: 10px; padding: 14px 14px 0; transition: opacity .3s ease; }
+.call-kind { flex: 1; text-align: center; font-size: 13px; font-weight: 600; opacity: .8; letter-spacing: .01em; }
+.call-top-btn { display: grid; place-items: center; width: 38px; height: 38px; flex: none; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.14); color: #fff; cursor: pointer; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); transition: background .15s ease, transform .12s ease; }
+.call-top-btn:hover { background: rgba(255,255,255,.26); }
+.call-top-btn:active { transform: scale(.92); }
+.call-top-btn svg, .call-key svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.call-key { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 10px; border: 0; border-radius: 999px; background: rgba(255,255,255,.14); color: #fff; font: inherit; font-size: 15px; letter-spacing: 2px; cursor: pointer; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.call-key[hidden] { display: none; }
+.call-key svg { width: 15px; height: 15px; }
+.call-key-hint, .call-devices {
+    position: absolute; z-index: 5; top: 62px; left: 50%; transform: translateX(-50%);
+    width: min(320px, calc(100% - 32px)); padding: 12px 14px; border-radius: 16px;
+    background: rgba(12, 14, 24, .62); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+    font-size: 13px; line-height: 1.45; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    animation: call-pop .2s cubic-bezier(.2,.9,.3,1.2) both;
 }
+.call-devices { left: auto; right: 14px; transform: none; text-align: left; display: flex; flex-direction: column; gap: 10px; }
+.call-key-hint[hidden], .call-devices[hidden] { display: none; }
+@keyframes call-pop { from { opacity: 0; transform: translateX(-50%) translateY(-6px) scale(.96); } }
+.call-devices { animation-name: call-pop-r; }
+@keyframes call-pop-r { from { opacity: 0; transform: translateY(-6px) scale(.96); } }
+.call-device-row { display: flex; flex-direction: column; gap: 4px; font-size: 12px; opacity: .95; }
+.call-device-row span { opacity: .75; }
+.call-device-row select { width: 100%; padding: 8px 10px; border: 1px solid rgba(255,255,255,.18); border-radius: 10px; background: rgba(255,255,255,.1); color: #fff; font: inherit; font-size: 13px; }
+.call-device-row select option { color: #111; }
+.call-device-empty { opacity: .8; }
 
+/* собеседник */
+.call-person { position: relative; z-index: 2; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 12px 20px; text-align: center; transition: opacity .3s ease; }
+.call-avatar-wrap { --level: 0; position: relative; width: 136px; height: 136px; margin-bottom: 22px; }
+.call-avatar {
+    position: relative; z-index: 1; display: grid; place-items: center; width: 100%; height: 100%;
+    border: 0; border-radius: 50%; background: rgba(255,255,255,.2); color: #fff; font-size: 48px; font-weight: 650;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25), 0 0 0 calc(var(--level) * 14px) rgba(255,255,255,.18);
+    transition: box-shadow .12s linear;
+}
+.call-avatar::after { display: none; }
+.call-avatar .avatar-initials { font-size: 50px; }
+.call-wave { position: absolute; inset: 0; border-radius: 50%; background: rgba(255,255,255,.22); opacity: 0; }
+.call-dialog[data-phase^="ringing"] .call-wave { animation: call-wave 2.4s cubic-bezier(.2,.6,.3,1) infinite; }
+.call-dialog[data-phase^="ringing"] .call-wave.w2 { animation-delay: .8s; }
+.call-dialog[data-phase^="ringing"] .call-wave.w3 { animation-delay: 1.6s; }
+@keyframes call-wave { from { transform: scale(1); opacity: .55; } to { transform: scale(1.75); opacity: 0; } }
+.call-name { max-width: 100%; font-size: 27px; font-weight: 650; letter-spacing: -.01em; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 8px rgba(0,0,0,.18); }
+.call-status-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 15px; opacity: .88; font-variant-numeric: tabular-nums; }
+.call-state { color: inherit; font-size: inherit; margin: 0; }
+.call-signal { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+.call-signal[hidden] { display: none; }
+.call-signal i { width: 3px; border-radius: 2px; background: rgba(255,255,255,.35); }
+.call-signal i:nth-child(1) { height: 4px; } .call-signal i:nth-child(2) { height: 6.5px; } .call-signal i:nth-child(3) { height: 9px; } .call-signal i:nth-child(4) { height: 12px; }
+.call-signal[data-level="1"] i:nth-child(-n+1), .call-signal[data-level="2"] i:nth-child(-n+2),
+.call-signal[data-level="3"] i:nth-child(-n+3), .call-signal[data-level="4"] i { background: #fff; }
+.call-signal[data-level="1"] i:nth-child(1) { background: #ffd43b; }
+.call-remote-muted { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; padding: 6px 12px; border-radius: 999px; background: rgba(0,0,0,.22); font-size: 13px; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.call-remote-muted[hidden] { display: none; }
+.call-remote-muted svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+/* кнопки */
+.call-controls { position: relative; z-index: 3; display: flex; align-items: flex-start; justify-content: center; gap: 22px; padding: 18px 16px 30px; border: 0; transition: opacity .3s ease, transform .3s ease; }
+.call-controls[hidden] { display: none; }
+.call-controls-incoming { gap: 96px; padding-bottom: 40px; }
+.call-control { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 64px; padding: 0; border: 0; background: none; color: #fff; font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.call-control[hidden] { display: none; }
+.call-control-label { opacity: .92; white-space: nowrap; }
+.call-control-icon {
+    display: grid; place-items: center; width: 60px; height: 60px; border: 0; border-radius: 50%;
+    background: rgba(255,255,255,.17); color: #fff; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    transition: background .18s ease, color .18s ease, transform .15s cubic-bezier(.34,1.56,.64,1);
+}
+.call-control:hover .call-control-icon { background: rgba(255,255,255,.28); transform: none; }
+.call-control:active .call-control-icon { transform: scale(.9); }
+.call-control svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+/* включено (камера / экран) и выключенный микрофон — белая кнопка, как в Telegram */
+.call-control[aria-pressed="true"] .call-control-icon { background: #fff; color: #1b1e2b; }
+.call-control-mic .ico-mic-off { display: none; }
+.call-control-mic[aria-pressed="true"] .ico-mic { display: none; }
+.call-control-mic[aria-pressed="true"] .ico-mic-off { display: block; }
+.call-control.end-call .call-control-icon, .call-control.decline-call .call-control-icon { background: #ff3b30; color: #fff; }
+.call-control.end-call:hover .call-control-icon, .call-control.decline-call:hover .call-control-icon { background: #ff5147; }
+.call-control.end-call svg, .call-control.decline-call svg { fill: currentColor; stroke: none; width: 28px; height: 28px; }
+.call-control.accept-call .call-control-icon { position: relative; width: 68px; height: 68px; background: #34c759; color: #fff; animation: call-accept-wiggle 2.2s ease-in-out infinite; }
+.call-control.accept-call .call-control-icon::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: #34c759; z-index: -1; animation: call-wave 1.8s ease-out infinite; }
+.call-control.decline-call .call-control-icon { width: 68px; height: 68px; }
+.call-control.accept-call svg { fill: currentColor; stroke: none; width: 28px; height: 28px; }
+@keyframes call-accept-wiggle { 0%, 70%, 100% { transform: rotate(0); } 75% { transform: rotate(-14deg); } 80% { transform: rotate(14deg); } 85% { transform: rotate(-10deg); } 90% { transform: rotate(8deg); } }
+body.reduce-motion .call-control.accept-call .call-control-icon, body.reduce-motion .call-control.accept-call .call-control-icon::before { animation: none; }
+
+/* видео */
+.call-video-area { position: absolute; inset: 0; z-index: 1; margin: 0; border-radius: 0; background: transparent; aspect-ratio: auto; overflow: hidden; }
+.call-video-area[hidden] { display: none; }
+.call-remote-video { position: absolute; inset: 0; display: none; width: 100%; height: 100%; object-fit: cover; background: #000; }
+.call-dialog.has-remote-video .call-remote-video { display: block; }
+.call-dialog.remote-screen .call-remote-video { object-fit: contain; background: #0b0d14; }
 .call-local-video {
-    position: absolute;
-    right: 10px;
-    bottom: 10px;
-    width: 84px;
-    height: 63px;
-    border-radius: 8px;
-    border: 2px solid rgba(255,255,255,.5);
-    object-fit: cover;
-    background: #111;
-    transform: scaleX(-1); /* зеркалим своё превью — привычнее видеть себя, как в зеркале */
+    position: absolute; z-index: 2; display: none; width: clamp(110px, 24%, 230px); aspect-ratio: 16 / 10; height: auto;
+    border: 2px solid rgba(255,255,255,.35); border-radius: 16px; object-fit: cover; background: #111;
+    box-shadow: 0 10px 30px rgba(0,0,0,.35); cursor: grab; transform: none;
+    transition: top .3s cubic-bezier(.2,.9,.3,1.1), left .3s cubic-bezier(.2,.9,.3,1.1), right .3s cubic-bezier(.2,.9,.3,1.1), bottom .3s cubic-bezier(.2,.9,.3,1.1), width .3s ease, border-radius .3s ease;
+    touch-action: none;
+}
+.call-local-video.mirror { transform: scaleX(-1); }
+.call-local-video.dragging { transition: none; cursor: grabbing; }
+.call-dialog.has-local-video .call-local-video { display: block; }
+.call-local-video[data-corner="tr"] { top: 66px; right: 16px; }
+.call-local-video[data-corner="tl"] { top: 66px; left: 16px; }
+.call-local-video[data-corner="br"] { bottom: 128px; right: 16px; }
+.call-local-video[data-corner="bl"] { bottom: 128px; left: 16px; }
+/* поменять местами: своё — крупно, собеседник — в углу */
+.call-dialog.swapped .call-local-video { inset: 0 !important; width: 100%; height: 100%; border: 0; border-radius: 0; z-index: 1; cursor: pointer; }
+.call-dialog.swapped .call-remote-video { inset: auto; top: 66px; right: 16px; width: clamp(110px, 24%, 230px); height: auto; aspect-ratio: 16 / 10; border: 2px solid rgba(255,255,255,.35); border-radius: 16px; z-index: 2; cursor: pointer; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+/* затемнения сверху и снизу — чтобы на видео читались имя и кнопки */
+.call-dialog.has-remote-video::before, .call-dialog.has-remote-video::after { content: ""; position: absolute; left: 0; right: 0; z-index: 2; pointer-events: none; transition: opacity .3s ease; }
+.call-dialog.has-remote-video::before { top: 0; height: 150px; background: linear-gradient(rgba(0,0,0,.5), transparent); }
+.call-dialog.has-remote-video::after { bottom: 0; height: 190px; background: linear-gradient(transparent, rgba(0,0,0,.6)); }
+/* при видео собеседника — имя и время компактно слева сверху */
+.call-dialog.has-remote-video .call-person { position: absolute; top: 60px; left: 20px; right: 40%; align-items: flex-start; justify-content: flex-start; padding: 0; text-align: left; }
+.call-dialog.has-remote-video .call-avatar-wrap { display: none; }
+.call-dialog.has-remote-video .call-name { font-size: 20px; }
+.call-dialog.has-remote-video .call-status-row { font-size: 13.5px; }
+.call-dialog.has-remote-video .call-controls { margin-top: auto; }
+/* без движения мыши — всё лишнее плавно прячется */
+.call-dialog.controls-idle { cursor: none; }
+.call-dialog.controls-idle .call-topline, .call-dialog.controls-idle .call-controls, .call-dialog.controls-idle .call-person, .call-dialog.controls-idle::before, .call-dialog.controls-idle::after { opacity: 0; pointer-events: none; }
+.call-dialog.controls-idle .call-controls { transform: translateY(16px); }
+
+@media (max-width: 650px) {
+    .call-backdrop { padding: 0; }
+    .call-dialog, .call-dialog.has-remote-video, .call-dialog.has-local-video { width: 100vw; height: 100dvh; border-radius: 0; }
+    .call-topline { padding-top: calc(12px + env(safe-area-inset-top)); }
+    .call-controls { gap: 14px; padding-bottom: calc(26px + env(safe-area-inset-bottom)); }
+    .call-controls-incoming { gap: 80px; }
+    .call-control-icon { width: 56px; height: 56px; }
+    .call-local-video { width: 30%; aspect-ratio: 3 / 4; }
+    .call-local-video[data-corner^="t"] { top: calc(64px + env(safe-area-inset-top)); }
 }
 
-.call-control svg {
-    width: 19px;
-    height: 19px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
+/* свёрнутый звонок */
+.call-mini {
+    position: fixed; z-index: 65; right: 20px; bottom: 96px;
+    display: flex; align-items: center; gap: 10px; width: min(320px, calc(100vw - 24px)); padding: 8px 8px 8px 8px;
+    border-radius: 20px; color: #fff; cursor: pointer;
+    background: linear-gradient(135deg, #0ca678, #1c7ed6);
+    box-shadow: 0 14px 40px rgba(0,0,0,.3);
+    animation: call-pop-r .25s cubic-bezier(.2,.9,.3,1.2) both;
 }
+.call-mini[hidden] { display: none; }
+.call-mini-video { width: 72px; height: 46px; flex: none; border-radius: 12px; object-fit: cover; background: #000; }
+.call-mini-video[hidden] { display: none; }
+.call-mini-video:not([hidden]) + .call-mini-avatar { display: none; }
+.call-mini-avatar { display: grid; place-items: center; width: 42px; height: 42px; flex: none; border-radius: 50%; background: rgba(255,255,255,.2); font-weight: 650; box-shadow: 0 0 0 3px rgba(255,255,255,.25); animation: call-mini-pulse 2s ease-in-out infinite; }
+.call-mini-avatar .avatar-initials { font-size: 15px; }
+@keyframes call-mini-pulse { 50% { box-shadow: 0 0 0 6px rgba(255,255,255,.08); } }
+.call-mini-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.call-mini-copy b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-mini-copy em { font-style: normal; font-size: 12px; opacity: .88; font-variant-numeric: tabular-nums; }
+.call-mini-btn { display: grid; place-items: center; width: 38px; height: 38px; flex: none; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.2); color: #fff; cursor: pointer; }
+.call-mini-btn:hover { background: rgba(255,255,255,.32); }
+.call-mini-btn.on { background: #fff; color: #1b1e2b; }
+.call-mini-btn.end { background: #ff3b30; }
+.call-mini-btn svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.call-mini-btn.end svg { fill: currentColor; stroke: none; }
+@media (max-width: 650px) { .call-mini { right: 12px; left: 12px; width: auto; top: calc(10px + env(safe-area-inset-top)); bottom: auto; } }
+
 
 @keyframes call-pulse {
     0%, 100% { opacity: 0; }
@@ -10226,7 +10269,22 @@ body.reduce-motion .dice-face.rolling, body.reduce-motion .ttt-cell, body.reduce
 .message.dice-message { max-width: none; }
 .message.dice-message .game-card { min-width: 0; }
 .message.dice-message .dice-wrap { padding: 0; }
-.message.dice-message .message-time { display: block; margin: 2px 0 0; text-align: center; }
+/* Время и галочки — всегда справа (как в Telegram): у кубика и стикеров без пузыря —
+   полупрозрачной «таблеткой» под правым краем, у карточек в пузыре — строкой справа. */
+.message.dice-message .message-time,
+.message.sticker .message-time {
+    display: flex; align-items: center; gap: 2px;
+    width: max-content; margin: 4px 0 0 auto; padding: 2px 8px;
+    border-radius: 999px; font-size: 10.5px; line-height: 1.4;
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    box-shadow: 0 1px 2px rgba(0,0,0,.08);
+    color: var(--muted) !important; text-align: right;
+}
+.message.has-block > .message-time {
+    display: flex; align-items: center; justify-content: flex-end; gap: 2px;
+    margin: 4px 0 -2px auto; width: max-content; text-align: right;
+}
 /* Голосовое: слева «плей», по центру волна, справа два одинаковых «пилюля»-переключателя друг под другом */
 .voice-message {
     display: grid;
@@ -11297,3 +11355,205 @@ body.recording-active .recording-status.video-recording ~ .record-lock-hint { bo
 
 /* Саундборд: до 12 встроенных + 16 своих звуков — панель прокручивается, а не вылезает за экран */
 .voice-sfx-pop { max-height: min(60vh, 420px); overflow-y: auto; overscroll-behavior: contain; }
+
+/* ============================================================================
+   КРУГЛЫЕ АВАТАРЫ ВЕЗДЕ — как в историях и в Telegram
+   ========================================================================= */
+.chat-avatar, .profile-avatar, .contact-modal-avatar, .contact-group-avatar,
+.new-chat-result-avatar, .info-avatar, .call-avatar { border-radius: 50% !important; }
+.chat-avatar { overflow: hidden; }
+.has-initials { color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.12); }
+.avatar-initials { font-weight: 650; letter-spacing: .02em; line-height: 1; user-select: none; }
+.chat-avatar .avatar-initials { font-size: 16px; }
+.new-chat-result-avatar .avatar-initials, .contact-group-avatar .avatar-initials { font-size: 12.5px; }
+.info-avatar .avatar-initials, .contact-modal-avatar .avatar-initials, .profile-hero-avatar .avatar-initials { font-size: 34px; }
+.avatar-icon { width: 54%; height: 54%; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.chat-avatar-saved .avatar-icon { fill: currentColor; stroke: none; }
+/* Точка «в сети» на круглом аватаре — на окружности, с вырезом цвета фона */
+.chat-avatar.online::after { right: 0; bottom: 0; width: 11px; height: 11px; border-width: 2.5px; }
+
+/* Дверь голосовых комнат: свет из щели; на наведение — дверь приоткрывается шире, в комнате — светится зелёным */
+.door-icon .door-light { fill: currentColor; stroke: none; opacity: .16; transition: opacity .25s ease; }
+.door-icon .door-knob { fill: currentColor; stroke: none; }
+.door-icon .door-leaf { transform-origin: 6px 12px; transition: transform .35s cubic-bezier(.34,1.56,.64,1); }
+.header-voice-button:hover .door-leaf { transform: scaleX(.78); }
+.header-voice-button:hover .door-light { opacity: .32; }
+.header-voice-button.in-call { color: #22c55e; }
+.header-voice-button.in-call .door-light { opacity: .4; animation: door-glow 2.4s ease-in-out infinite; }
+@keyframes door-glow { 50% { opacity: .15; } }
+
+/* Папки: затухание по краям, когда дальше есть ещё вкладки */
+.chat-folders { --fl: 0px; --fr: 0px; -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%); scroll-padding-inline: 28px; overscroll-behavior-x: contain; }
+.chat-folders.fade-left { --fl: 28px; }
+.chat-folders.fade-right { --fr: 28px; }
+.chat-folders.dragging { cursor: grabbing; user-select: none; }
+.chat-folders.dragging .chat-folder-tab { pointer-events: none; }
+
+/* Меню чата по правой кнопке мыши — всплывающее у курсора (на телефоне — прежняя шторка снизу) */
+.tab-quick-menu-backdrop.as-popover { background: transparent !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; align-items: flex-start !important; justify-content: flex-start !important; padding: 0 !important; }
+.tab-quick-menu-backdrop.as-popover .tab-quick-menu {
+    position: fixed; width: 240px; max-width: calc(100vw - 16px); padding: 6px;
+    border-radius: 14px; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+    box-shadow: 0 12px 36px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.08);
+    animation: ctx-pop .16s cubic-bezier(.2,.9,.3,1.2) both;
+}
+.tab-quick-menu-backdrop.as-popover .tab-quick-menu-item { padding: 8px 10px; border-radius: 9px; font-size: 13.5px; gap: 10px; }
+.tab-quick-menu-backdrop.as-popover .tab-quick-menu-item:hover { background: var(--surface2); }
+.tab-quick-menu-backdrop.as-popover .tab-quick-menu-item.danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
+@keyframes ctx-pop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+
+/* ============================================================================
+   «ВСЕ СООБЩЕНИЯ СЛЕВА» (как в Telegram Desktop) + аватары в ленте
+   ========================================================================= */
+.msg-avatar { display: none; }
+body.messages-left .message-row:not(.system-message) { margin-left: 0; padding-left: 42px; }
+body.messages-left .msg-avatar {
+    display: grid; place-items: center; position: absolute; left: 0; bottom: 0;
+    width: 34px; height: 34px; border-radius: 50%; overflow: hidden; font-size: 13px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.12);
+}
+body.messages-left .msg-avatar .avatar-initials { font-size: 13px; }
+body.messages-left .message-row.grouped-next > .msg-avatar { visibility: hidden; }
+body.messages-left .message-row.has-reactions > .msg-avatar { bottom: 0; }
+/* Свои сообщения слева: хвостик и «склейка» — тоже слева, как у входящих */
+body.messages-left .message-row.sent .message { border-radius: var(--bubble-r); }
+body.messages-left .message-row.sent.grouped-prev .message { border-top-left-radius: var(--bubble-r-small); }
+body.messages-left .message-row.sent.grouped-next .message,
+body.messages-left .message-row.sent:not(.grouped-next) .message { border-bottom-left-radius: var(--bubble-r-small); }
+body.messages-left .message-row.sent:not(.grouped-next) .message::before { right: auto; left: -5px; transform: none; }
+body.bubble-no-tail.messages-left .message-row.sent:not(.grouped-next) .message { border-bottom-left-radius: var(--bubble-r); }
+/* Чипы реакций и карточки стикеров у своих — тоже от левого края */
+body.messages-left .message-row:not(.system-message) .message-reactions { left: 52px; right: auto; justify-content: flex-start; }
+
+/* Цитата ответа: имя автора сверху (как в Telegram) */
+.message-reply-quote .reply-author { display: block; overflow: hidden; text-overflow: ellipsis; font-weight: 650; color: var(--accent); }
+.message-row.sent .message-reply-quote .reply-author { color: inherit; }
+.message-reply-quote .reply-text { display: block; overflow: hidden; text-overflow: ellipsis; opacity: .92; }
+
+/* ============================================================================
+   «МОЙ ПРОФИЛЬ» — телефон, день рождения, цвет профиля, устройства
+   ========================================================================= */
+.group-ico.tone-pink { background: linear-gradient(160deg, #ff7eb3, #ef4f8b); }
+.group-ico.tone-purple { background: linear-gradient(160deg, #b18cff, #7c4dff); }
+.group-ico.tone-gray { background: linear-gradient(160deg, #9aa3ae, #6b7480); }
+/* Иконки разделов как в iOS: мягкий градиент + лёгкий блик сверху */
+.group-ico { background-image: linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,0) 60%); box-shadow: inset 0 0 0 .5px rgba(0,0,0,.06); }
+.group-ico.tone-blue { background: linear-gradient(160deg, #5aa2ff, #2f7bf2); }
+.group-ico.tone-orange { background: linear-gradient(160deg, #ffbe4d, #f5890b); }
+.group-ico.tone-green { background: linear-gradient(160deg, #46d17f, #1fa85a); }
+.group-ico.tone-red { background: linear-gradient(160deg, #ff6b6b, #e53935); }
+
+.profile-inline { display: flex; gap: 8px; align-items: stretch; }
+.profile-inline input { flex: 1; min-width: 0; }
+.profile-vis {
+    flex: none; padding: 0 28px 0 10px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") right 8px center / 12px no-repeat;
+    color: var(--text); font: inherit; font-size: 13px; appearance: none; -webkit-appearance: none; cursor: pointer;
+}
+.profile-vis:focus { outline: none; border-color: var(--accent); }
+
+.profile-color-card { padding: 12px 14px; }
+.profile-color-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+.profile-color-swatch {
+    width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); transition: transform .18s cubic-bezier(.34,1.56,.64,1), box-shadow .15s ease;
+}
+.profile-color-swatch:hover { transform: scale(1.1); }
+.profile-color-swatch.selected { box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--accent); transform: scale(1.04); }
+
+.devices-current { padding: 4px; }
+.device-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.device-icon { display: grid; place-items: center; width: 42px; height: 42px; flex: none; border-radius: 12px; background: color-mix(in srgb, var(--accent) 12%, var(--surface2)); font-size: 22px; }
+.device-copy { display: flex; flex-direction: column; min-width: 0; }
+.device-copy b { font-size: 14.5px; }
+.device-copy em { font-style: normal; font-size: 12.5px; color: var(--muted); }
+.device-online { color: var(--accent); }
+.devices-terminate { width: 100%; margin: 12px 0 6px; }
+.contact-extra-row[hidden] { display: none !important; }
+
+/* ============================================================================
+   УЗОРЫ ДЛЯ ФОНА ЧАТА — слой-маска поверх градиента обоев
+   ========================================================================= */
+.chat-area.has-pattern::after {
+    content: "";
+    position: absolute;
+    inset: -9%;
+    z-index: -1;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--text) var(--wpp-strength, 11%), transparent);
+    -webkit-mask: var(--wpp) 0 0 / 260px 260px repeat;
+    mask: var(--wpp) 0 0 / 260px 260px repeat;
+    transform: translate3d(calc(var(--px, 0px) * 1.6), calc(var(--py, 0px) * 1.6), 0);
+}
+body.dark .chat-area.has-pattern::after { --wpp-strength: 9%; }
+body[data-pattern-strength="1"] .chat-area.has-pattern::after { --wpp-strength: 6%; }
+body[data-pattern-strength="3"] .chat-area.has-pattern::after { --wpp-strength: 17%; }
+.wp-tile-preview { position: relative; overflow: hidden; }
+.wp-tile-pattern {
+    position: absolute; inset: 0;
+    background: color-mix(in srgb, var(--text) 14%, transparent);
+    -webkit-mask: var(--wpp) 0 0 / 90px 90px repeat; mask: var(--wpp) 0 0 / 90px 90px repeat;
+}
+.theme-pattern-strength { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 2px 4px; font-size: 13.5px; color: var(--text); }
+.theme-pattern-strength .settings-segmented-item { font-size: 12.5px; padding: 0 12px; width: auto; }
+
+/* Иконки настроек как в iOS / Telegram: системные цвета, мягкий градиент, белый символ */
+.settings-option-icon { border-radius: 9px; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.18); }
+.settings-option-icon svg { width: 18px; height: 18px; stroke-width: 1.9; }
+.settings-option-icon.ico-blue { background: linear-gradient(160deg, #3d9bff, #0a6cff); }
+.settings-option-icon.ico-indigo { background: linear-gradient(160deg, #7a78ff, #4f4be0); }
+.settings-option-icon.ico-purple { background: linear-gradient(160deg, #d27cff, #a446e6); }
+.settings-option-icon.ico-pink { background: linear-gradient(160deg, #ff6f93, #f2335d); }
+.settings-option-icon.ico-red { background: linear-gradient(160deg, #ff6a5f, #ec3a30); }
+.settings-option-icon.ico-orange { background: linear-gradient(160deg, #ffb340, #ff8c00); }
+.settings-option-icon.ico-yellow { background: linear-gradient(160deg, #ffd84d, #f7b500); }
+.settings-option-icon.ico-green { background: linear-gradient(160deg, #4cdc77, #24b24f); }
+.settings-option-icon.ico-teal { background: linear-gradient(160deg, #4fd2e0, #1ea7bd); }
+.settings-option-icon.ico-cyan { background: linear-gradient(160deg, #6fdcff, #2bb4ec); }
+.settings-option-icon.ico-brown { background: linear-gradient(160deg, #c89f74, #9c7349); }
+.settings-option-icon.ico-gray { background: linear-gradient(160deg, #a5a5ad, #7c7c85); }
+.settings-option-icon.ico-graphite { background: linear-gradient(160deg, #7d7d86, #53535b); }
+.settings-option-icon.ico-slate { background: linear-gradient(160deg, #7a8ba8, #4f5f7c); }
+.chat-pin-icon, .chat-mute-icon { display: inline-grid; place-items: center; width: 14px; height: 14px; margin-left: 4px; vertical-align: -2px; color: color-mix(in srgb, var(--muted) 85%, transparent); font-size: 0; }
+.chat-pin-icon svg, .chat-mute-icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.chat-pin-icon svg path:first-child { fill: currentColor; }
+
+/* Настройки как в iOS: заголовок крупнее, подсказка отдельной строкой под ним */
+.settings-option-copy { display: flex; flex-direction: column; gap: 2px; }
+.settings-option-title { display: block; font-size: 14px; font-weight: 600; line-height: 1.3; }
+.settings-option-hint { display: block; margin-top: 0; font-size: 12px; line-height: 1.35; }
+.settings-option { gap: 12px; }
+/* У кубика и стикеров время показываем всегда — без него «таблетка» с одной галочкой выглядит обрывком */
+.message.sticker .message-time .message-time-text { display: inline !important; }
+
+/* «Скелет» списка чатов при первом входе на устройстве — мягкий перелив, как в Telegram */
+.chat-skeleton-list { display: flex; flex-direction: column; gap: 2px; padding: 6px 12px; }
+.chat-skeleton { display: flex; align-items: center; gap: 12px; padding: 8px 4px; }
+.sk-avatar, .sk-line {
+    background: linear-gradient(90deg, var(--surface2) 0%, color-mix(in srgb, var(--surface2) 55%, var(--surface)) 50%, var(--surface2) 100%) 0 0 / 200% 100%;
+    animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+.sk-avatar { flex: none; width: 43px; height: 43px; border-radius: 50%; }
+.sk-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sk-line { display: block; height: 11px; border-radius: 6px; }
+.sk-line.short { height: 9px; opacity: .75; }
+@keyframes sk-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+body.reduce-motion .sk-avatar, body.reduce-motion .sk-line { animation: none; }
+
+/* Режим выделения сообщений: чекбокс встаёт на место аватара — аватар прячем */
+#messages.selection-mode .msg-avatar { display: none !important; }
+/* Пока звонят вам — свернуть и настройки устройств ещё не к чему */
+.call-dialog[data-phase="ringing-in"] .call-top-btn { visibility: hidden; }
+
+/* Ничего не крутим впустую: фон звонка — только пока окно звонка открыто,
+   «дрейф» обоев — только пока окно программы на виду (см. desktop-app.js). */
+.call-backdrop:not(.open) .call-blob,
+.call-backdrop:not(.open) .call-wave,
+.call-backdrop:not(.open) .call-control-icon,
+.call-backdrop:not(.open) .call-control-icon::before { animation-play-state: paused !important; }
+html.app-inactive .chat-area.has-wallpaper::before,
+html.app-inactive .sk-avatar, html.app-inactive .sk-line,
+html.app-inactive .recording-wave span,
+html.app-inactive .anim-emoji .anim-glyph { animation-play-state: paused !important; }

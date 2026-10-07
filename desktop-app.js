@@ -97,8 +97,7 @@ function desktopOnHotkey(action) {
         else if (inCall) {
             const button = desktopCallMuteButton();
             if (button) {
-                toggleCallControl(button);
-                if (typeof voiceSound === "function") voiceSound(button.getAttribute("aria-pressed") === "true" ? "mute" : "unmute");
+                toggleCallControl(button);   // сам играет короткий звук вкл/выкл
             }
         }
     } else if (action === "toggleDeafen") {
@@ -435,6 +434,38 @@ function desktopCaptureKey(event) {
     desktopAssign(action, [...mods, key].join("+"));
 }
 
+/* ---- видимость окна ----
+   Программа отключает «замедление в фоне» (иначе голос и звонки замирали бы в
+   трее), и из-за этого страница всегда считала себя видимой: новые сообщения в
+   открытом чате сразу помечались прочитанными, пока окно в трее, «в сети» не
+   гасло, анимации и смайлики крутились впустую. Как в Telegram Desktop: окно
+   считается скрытым, если оно не в фокусе дольше 3 секунд. */
+
+let desktopHidden = false;
+let desktopHideTimer = 0;
+
+function desktopSetHidden(value) {
+    if (desktopHidden === value) return;
+    desktopHidden = value;
+    document.documentElement.classList.toggle("app-inactive", value);
+    try { value ? window.lottie?.freeze?.() : window.lottie?.unfreeze?.(); } catch { /* без lottie */ }
+    document.dispatchEvent(new Event("visibilitychange"));
+}
+
+function desktopInstallVisibility() {
+    try {
+        Object.defineProperty(document, "hidden", { configurable: true, get: () => desktopHidden });
+        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (desktopHidden ? "hidden" : "visible") });
+    } catch { return; }
+    const scheduleHide = () => {
+        clearTimeout(desktopHideTimer);
+        desktopHideTimer = setTimeout(() => { if (!document.hasFocus()) desktopSetHidden(true); }, 3000);
+    };
+    window.addEventListener("blur", scheduleHide);
+    window.addEventListener("focus", () => { clearTimeout(desktopHideTimer); desktopSetHidden(false); });
+    if (!document.hasFocus()) scheduleHide();
+}
+
 /* ---- запуск ---- */
 
 function desktopInit() {
@@ -451,6 +482,7 @@ function desktopInit() {
     }
 
     document.documentElement.classList.add("is-desktop");
+    desktopInstallVisibility();
     if (row) {
         row.hidden = false;
         document.getElementById("desktop-settings-group").hidden = false;

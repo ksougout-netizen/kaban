@@ -40,7 +40,7 @@
 
 <link rel="preconnect" href="https://ketvgmietommjqutejuj.supabase.co" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261007-81">
+<link rel="stylesheet" href="style.css?v=20261007-84">
 </head>
 
 <body>
@@ -211,89 +211,10 @@
             <button type="button" class="chat-folder-tab chat-folder-add" onclick="openFolderEditor()" aria-label="Новая папка" title="Новая папка">＋</button>
         </div>
 
-        <!-- Демо-контакт удалён из проекта — интерфейс должен использовать
-             нейтральные, не личностные данные без привязки к конкретным именам. -->
-
-        <div class="section" id="demo-chat-section">
-
-            <div class="section-label">
-                Focus
-            </div>
-
-            <div
-                class="chat active"
-                role="button"
-                tabindex="0"
-                aria-pressed="true"
-                onclick="openChat(this)"
-                onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openChat(this); }"
-            >
-                <div class="chat-avatar online" data-contact-field="avatar">🧔</div>
-                <div class="chat-content">
-                    <div class="chat-line">
-                        <span class="chat-name" data-contact-field="name">Собеседник</span>
-                        <span class="chat-time">14:32</span>
-                    </div>
-                    <div class="chat-preview">Отправь фотографии муфты</div>
-                </div>
-            </div>
-
-            <div
-                class="chat"
-                role="button"
-                tabindex="0"
-                aria-pressed="false"
-                onclick="openChat(this)"
-                onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openChat(this); }"
-            >
-                <div class="chat-avatar online" data-contact-field="avatar">👨‍💼</div>
-                <div class="chat-content">
-                    <div class="chat-line">
-                        <span class="chat-name" data-contact-field="name">Влад</span>
-                        <span class="chat-time">11:02</span>
-                    </div>
-                    <div class="chat-preview">Да, завтра в 8 у тебя всё готово?</div>
-                </div>
-            </div>
-
-            <div
-                class="chat"
-                role="button"
-                tabindex="0"
-                aria-pressed="false"
-                onclick="openChat(this)"
-                onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openChat(this); }"
-            >
-                <div class="chat-avatar" data-contact-field="avatar">🌿</div>
-                <div class="chat-content">
-                    <div class="chat-line">
-                        <span class="chat-name" data-contact-field="name">Марина</span>
-                        <span class="chat-time">Вчера</span>
-                    </div>
-                    <div class="chat-preview">Я уже в пути, задерживаюсь на 10 минут</div>
-                </div>
-            </div>
-
-            <div
-                class="chat"
-                role="button"
-                tabindex="0"
-                aria-pressed="false"
-                onclick="openChat(this)"
-                onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openChat(this); }"
-            >
-                <div class="chat-avatar online" data-contact-field="avatar">🎯</div>
-                <div class="chat-content">
-                    <div class="chat-line">
-                        <span class="chat-name" data-contact-field="name">Сервисный чат</span>
-                        <span class="chat-time">09:45</span>
-                    </div>
-                    <div class="chat-preview">Готово: подтверждён договор и список задач</div>
-                </div>
-            </div>
-
-        </div>
-
+        <!-- Демо-чаты удалены: статичные «Влад», «Марина» и т.п. мелькали на секунду
+             при каждом запуске, пока не завершалась проверка входа. Пустой скрытый
+             блок оставлен, потому что на него ссылается код (restoreDemoState и др.). -->
+        <div class="section" id="demo-chat-section" hidden></div>
         <div class="sidebar-empty-chats" id="sidebar-empty-chats" hidden>
             <div class="sidebar-empty-chats-title">Пока нет чатов</div>
             <div class="sidebar-empty-chats-hint">Найдите собеседника по имени пользователя, чтобы начать</div>
@@ -510,8 +431,12 @@
                     title="Голосовые комнаты"
                     hidden
                 >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M4 10v4h3.5L12 18V6L7.5 10zM15.5 9a4 4 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/>
+                    <!-- Приоткрытая дверь: «заходи в комнату» — из щели льётся свет -->
+                    <svg class="door-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path class="door-light" d="M13.6 5.9 17.5 3.5V20.5h-3.9z"/>
+                        <path d="M3.5 20.5h17M6 20.5V3.5h11.5v17"/>
+                        <path class="door-leaf" d="M6 3.5l7.6 2.4v14.6H6"/>
+                        <circle class="door-knob" cx="11.7" cy="12.6" r="1"/>
                     </svg>
                     <span class="voice-badge" hidden>0</span>
                 </button>                <button
@@ -1064,7 +989,7 @@
         <div class="settings-group-label">Внешний вид</div>
         <div class="settings-section">
             <label class="settings-option">
-                <span class="settings-option-icon theme">🌙</span>
+                <span class="settings-option-icon ico-indigo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Тёмная тема</span>
                     <span class="settings-option-hint">Применить тёмную палитру интерфейса</span>
@@ -1075,7 +1000,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon compact">📐</span>
+                <span class="settings-option-icon ico-teal"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Компактные сообщения</span>
                     <span class="settings-option-hint">Уменьшить интервалы и внутренние отступы</span>
@@ -1086,7 +1011,7 @@
                 </span>
             </label>
             <div class="settings-option settings-option-static">
-                <span class="settings-option-icon text">🔤</span>
+                <span class="settings-option-icon ico-blue"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 18 8.5 6l5 12M5.2 14h6.6M14.5 18l3-7 3 7M15.4 16h4.2"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Размер текста</span>
                     <span class="settings-option-hint">Размер шрифта в переписке</span>
@@ -1098,7 +1023,7 @@
                 </div>
             </div>
             <label class="settings-option">
-                <span class="settings-option-icon motion">🎞️</span>
+                <span class="settings-option-icon ico-purple"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h3.5l2-5 3 10 2.5-6 1.5 1H21"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Уменьшить анимации</span>
                     <span class="settings-option-hint">Отключить переходы и эффекты движения</span>
@@ -1109,7 +1034,7 @@
                 </span>
             </label>
             <button type="button" class="settings-option settings-option-link" onclick="openThemeColorPicker()">
-                <span class="settings-option-icon theme-color-row-icon" id="theme-color-row-icon">🎨</span>
+                <span class="settings-option-icon ico-orange" id="theme-color-row-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.3 0 2-.8 2-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.8 1.8-1.8h2.1a3.6 3.6 0 0 0 3.6-3.7C20.5 6.6 16.7 3.5 12 3.5Z"/><circle cx="7.8" cy="11" r="1.1"/><circle cx="10.5" cy="7.4" r="1.1"/><circle cx="15" cy="7.6" r="1.1"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Цветовая тема</span>
                     <span class="settings-option-hint">Мягкий акцент для фона приложения</span>
@@ -1118,7 +1043,7 @@
                 <span class="settings-option-chevron">›</span>
             </button>
                         <button type="button" class="settings-option settings-option-link" onclick="openRemindersList()">
-                <span class="settings-option-icon">⏰</span>
+                <span class="settings-option-icon ico-red"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="7"/><path d="M12 9.5V13l2.5 1.5M5 4.5 3 6.5M19 4.5l2 2"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Напоминания</span>
                     <span class="settings-option-hint">О сообщениях — в нужное время</span>
@@ -1127,7 +1052,7 @@
                 <span class="settings-option-chevron">›</span>
             </button>
 <button type="button" class="settings-option settings-option-link" onclick="openTurnModal()">
-                <span class="settings-option-icon">📡</span>
+                <span class="settings-option-icon ico-green"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="11" r="1.6"/><path d="M12 12.6V20M8.6 7.6a5 5 0 0 1 6.8 0M5.6 4.6a9 9 0 0 1 12.8 0"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Сервер для звонков (TURN)</span>
                     <span class="settings-option-hint">Чтобы звонки соединялись в любых сетях</span>
@@ -1140,7 +1065,7 @@
         <div class="settings-group-label" id="desktop-settings-group" hidden>Компьютер</div>
         <div class="settings-section" id="desktop-settings-row" hidden>
             <button type="button" class="settings-option settings-option-link" onclick="openDesktopSettings()">
-                <span class="settings-option-icon">🖥️</span>
+                <span class="settings-option-icon ico-slate"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8 20h8M12 16.5V20"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title" id="desktop-row-title">KABAN для Windows</span>
                     <span class="settings-option-hint" id="desktop-row-hint">Программа с горячими клавишами для игр, трей и автозапуск</span>
@@ -1177,7 +1102,18 @@
         <div class="settings-group-label">Чат</div>
         <div class="settings-section">
             <label class="settings-option">
-                <span class="settings-option-icon enter">⏎</span>
+                <span class="settings-option-icon ico-blue"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="11" height="5" rx="2.5"/><rect x="3.5" y="14.5" width="15" height="5" rx="2.5"/></svg></span>
+                <span class="settings-option-copy">
+                    <span class="settings-option-title">Все сообщения слева</span>
+                    <span class="settings-option-hint">Свои и чужие — одной колонкой с аватарами, как в Telegram на компьютере</span>
+                </span>
+                <span class="settings-toggle">
+                    <input type="checkbox" name="messagesLeft" form="settings-form" class="settings-toggle-input">
+                    <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </span>
+            </label>
+            <label class="settings-option">
+                <span class="settings-option-icon ico-gray"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 5.5v5a3 3 0 0 1-3 3H6M9.5 9.5 5.5 13.5l4 4"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Отправка клавишей Enter</span>
                     <span class="settings-option-hint">Отправлять сообщение нажатием Enter</span>
@@ -1188,7 +1124,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon time">🕐</span>
+                <span class="settings-option-icon ico-orange"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Показывать время</span>
                     <span class="settings-option-hint">Скрыть или показать время у сообщений</span>
@@ -1199,7 +1135,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon time">🙈</span>
+                <span class="settings-option-icon ico-graphite"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 3.5l17 17M10.6 6.1A9 9 0 0 1 12 6c5 0 8.5 6 8.5 6a15 15 0 0 1-2.7 3.4M6.4 7.6C4.4 9.2 3.5 12 3.5 12s3.5 6 8.5 6c1.5 0 2.9-.4 4.1-1.1M9.9 10a3 3 0 0 0 4.1 4.1"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Скрыть текст в списке чатов</span>
                     <span class="settings-option-hint">Вместо превью последнего сообщения — просто «Новое сообщение»</span>
@@ -1210,7 +1146,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon sound">🔊</span>
+                <span class="settings-option-icon ico-green"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3.5L12 18V6L7.5 10ZM15.5 9a4 4 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Звук при отправке</span>
                     <span class="settings-option-hint">Короткий сигнал после отправки сообщения</span>
@@ -1221,7 +1157,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon sound">🔔</span>
+                <span class="settings-option-icon ico-red"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16v-5a6 6 0 0 1 12 0v5l1.5 2h-15ZM10 20.5a2 2 0 0 0 4 0"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Звук при получении</span>
                     <span class="settings-option-hint">Короткий сигнал на новое сообщение</span>
@@ -1232,7 +1168,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon emoji">😊</span>
+                <span class="settings-option-icon ico-yellow"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 14.2a4.5 4.5 0 0 0 7 0"/><path d="M9 9.8h.01M15 9.8h.01" stroke-width="2.6"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Крупные эмодзи</span>
                     <span class="settings-option-hint">Увеличивать сообщения из одних эмодзи</span>
@@ -1243,7 +1179,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon scroll">⬇️</span>
+                <span class="settings-option-icon ico-indigo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14M6 12.5l6 6 6-6"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Автопрокрутка</span>
                     <span class="settings-option-hint">Прокручивать чат к новому сообщению</span>
@@ -1254,7 +1190,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon draft">📝</span>
+                <span class="settings-option-icon ico-brown"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 19.5l4-1 10.2-10.2a2.1 2.1 0 0 0-3-3L5.5 15.5Z"/><path d="M14 7l3 3"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Сохранять черновик</span>
                     <span class="settings-option-hint">Восстанавливать набранный текст после перезагрузки</span>
@@ -1265,7 +1201,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon draft">✨</span>
+                <span class="settings-option-icon ico-pink"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3.5l1.8 5.1 5.2 1.9-5.2 1.9L11 17.5l-1.8-5.1L4 10.5l5.2-1.9Z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8Z"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Анимированные эмодзи</span>
                     <span class="settings-option-hint">Стикеры и смайлики в чате «оживают»</span>
@@ -1276,7 +1212,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon draft">🔗</span>
+                <span class="settings-option-icon ico-blue"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Предпросмотр ссылок</span>
                     <span class="settings-option-hint">Адрес ссылки отправляется сервису предпросмотра</span>
@@ -1287,7 +1223,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon draft">🎆</span>
+                <span class="settings-option-icon ico-purple"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Эффекты сообщений</span>
                     <span class="settings-option-hint">Конфетти, салют и другие — на экране при получении</span>
@@ -1298,7 +1234,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon draft">🪄</span>
+                <span class="settings-option-icon ico-teal"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20 14.5 9.5M13 4.5v2M18.5 6.5l-1.4 1.4M19.5 11h-2M12 8.5l3.5 3.5"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Авто-эффекты по словам</span>
                     <span class="settings-option-hint">«Поздравляю», 🎈, ❤️❤️❤️ запускают эффект сами</span>
@@ -1309,7 +1245,7 @@
                 </span>
             </label>
             <label class="settings-option">
-                <span class="settings-option-icon draft">🌌</span>
+                <span class="settings-option-icon ico-cyan"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 17.5 8.5 12l3.5 3.5 3-3 5.5 5"/><circle cx="16" cy="7.5" r="2"/><rect x="3" y="4" width="18" height="16" rx="3"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Живые обои</span>
                     <span class="settings-option-hint">Обои плавно движутся и следят за курсором</span>
@@ -1328,7 +1264,7 @@
         <div class="settings-group-label" id="settings-account-label" hidden>Аккаунт</div>
         <div class="settings-section" id="settings-account-section" hidden>
             <button class="settings-option settings-option-link" id="settings-profile-link" type="button" onclick="openProfileFromSettings()">
-                <span class="settings-option-icon">👤</span>
+                <span class="settings-option-icon ico-blue"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c0-3.5 3.1-6 7-6s7 2.5 7 6"/></svg></span>
                 <span class="settings-option-copy">
                     <span class="settings-option-title">Мой профиль</span>
                     <span class="settings-option-hint">Имя пользователя, фото и статус</span>
@@ -1344,6 +1280,9 @@
     </section>
 </div>
 
+<!-- ОКНО ЗВОНКА (как в Telegram): мягкий «живой» градиент, большой аватар с волнами,
+     ключ шифрования из 4 эмодзи, видео собеседника на весь экран и своё — в углу
+     (перетаскивается, клик — поменять местами), сворачивание в мини-окно. См. script-core.js. -->
 <div
     class="call-backdrop"
     id="call-backdrop"
@@ -1356,77 +1295,106 @@
         aria-modal="true"
         aria-labelledby="call-name"
         onclick="event.stopPropagation()"
+        onpointermove="callPokeControls()"
+        onpointerdown="callPokeControls()"
     >
-        <div class="call-topline">
-            <span id="call-kind">Аудиозвонок</span>
-            <button class="call-close" type="button" aria-label="Закрыть вызов" onclick="endCall()">×</button>
+        <div class="call-bg" aria-hidden="true">
+            <div class="call-bg-photo" id="call-bg-photo" hidden></div>
+            <span class="call-blob b1"></span><span class="call-blob b2"></span><span class="call-blob b3"></span>
         </div>
 
-        <!-- Настоящее видео (WebRTC) — скрыто для аудиозвонков и пока нет
-             входящего/исходящего видеопотока, см. script.js → showXxxCallUI.
-             call-local-video — своё превью (замьючено, чтобы не слышать эхо
-             самого себя), call-remote-video — то, что реально пришло от
-             собеседника через RTCPeerConnection. -->
         <div class="call-video-area" id="call-video-area" hidden>
             <video class="call-remote-video" id="call-remote-video" autoplay playsinline></video>
-            <video class="call-local-video" id="call-local-video" autoplay playsinline muted></video>
+            <video class="call-local-video mirror" id="call-local-video" autoplay playsinline muted data-corner="tr"></video>
         </div>
 
-        <!-- НЕ data-contact-field: имя звонящего/собеседника по звонку может
-             отличаться от того, чей чат сейчас открыт (входящий звонок может
-             быть вообще не из открытого чата) — задаётся явно в script.js. -->
+        <div class="call-topline">
+            <button class="call-top-btn" type="button" onclick="minimizeCall()" aria-label="Свернуть" title="Свернуть (Esc)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <button class="call-key" id="call-key" type="button" onclick="toggleCallKeyHint()" hidden title="Ключ шифрования">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2.5"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></svg>
+                <span id="call-key-emoji"></span>
+            </button>
+            <span class="call-kind" id="call-kind">Аудиозвонок</span>
+            <button class="call-top-btn" type="button" onclick="toggleCallDevices()" aria-label="Устройства" title="Микрофон, динамик, камера">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+            </button>
+        </div>
+        <div class="call-key-hint" id="call-key-hint" hidden>
+            Звонок зашифрован от устройства до устройства. Если у собеседника те же четыре эмодзи — между вами точно никого нет.
+        </div>
+        <div class="call-devices" id="call-devices" hidden></div>
+
         <div class="call-person">
-            <div class="call-avatar" id="call-avatar" aria-hidden="true">👤</div>
+            <div class="call-avatar-wrap">
+                <span class="call-wave w1"></span><span class="call-wave w2"></span><span class="call-wave w3"></span>
+                <div class="call-avatar" id="call-avatar" aria-hidden="true"></div>
+            </div>
             <div class="call-name" id="call-name">Собеседник</div>
-            <div class="call-state" id="call-state" aria-live="polite">Вызов…</div>
+            <div class="call-status-row">
+                <span class="call-signal" id="call-signal" data-level="4" hidden><i></i><i></i><i></i><i></i></span>
+                <span class="call-state" id="call-state" aria-live="polite">Вызов…</span>
+            </div>
+            <div class="call-remote-muted" id="call-remote-muted" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4l16 16M9 9v2a3 3 0 0 0 5 2.2M15 10V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.2 5.6M19 11a7 7 0 0 1-.6 2.8M12 18v3"/></svg>
+                <span>Микрофон собеседника выключен</span>
+            </div>
         </div>
 
-        <!-- Входящий звонок: принять/отклонить — до ответа никаких других
-             控制ов (микрофон и т.п.) ещё нет смысла показывать. -->
-        <div class="call-controls" id="call-controls-incoming" hidden>
+        <!-- Входящий: отклонить / принять -->
+        <div class="call-controls call-controls-incoming" id="call-controls-incoming" hidden>
             <button class="call-control decline-call" type="button" onclick="declineIncomingCall()">
-                <span class="call-control-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14c4-4 12-4 16 0l-2 4-4-1-1-3h-2l-1 3-4 1-2-4Z"/></svg>
-                </span>
-                <span>Отклонить</span>
+                <span class="call-control-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 14.5c4.6-4.4 12.4-4.4 17 0l-2.2 2.6-3.6-1.2-.4-2.6a10 10 0 0 0-4.6 0l-.4 2.6-3.6 1.2Z"/></svg></span>
+                <span class="call-control-label">Отклонить</span>
             </button>
             <button class="call-control accept-call" type="button" onclick="acceptIncomingCall()">
-                <span class="call-control-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.8 9.8 3.3l2 4.8-2.2 1.7a14 14 0 0 0 4.6 4.6l1.7-2.2 4.8 2-.5 2.6a2 2 0 0 1-2.2 1.6A15.8 15.8 0 0 1 3.6 6a2 2 0 0 1 1.6-2.2Z"/></svg>
-                </span>
-                <span>Принять</span>
+                <span class="call-control-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.8 9.8 3.3l2 4.8-2.2 1.7a14 14 0 0 0 4.6 4.6l1.7-2.2 4.8 2-.5 2.6a2 2 0 0 1-2.2 1.6A15.8 15.8 0 0 1 3.6 6a2 2 0 0 1 1.6-2.2Z"/></svg></span>
+                <span class="call-control-label">Принять</span>
             </button>
         </div>
 
+        <!-- В разговоре: камера, экран, микрофон, завершить -->
         <div class="call-controls" id="call-controls-incall">
-            <button class="call-control" type="button" data-call-action="mute" aria-pressed="false" onclick="toggleCallControl(this)">
+            <button class="call-control" type="button" data-call-action="camera" aria-pressed="false" onclick="toggleCallControl(this)">
                 <span class="call-control-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8"/></svg>
+                    <svg class="ico-on" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10.5 5-3v9l-5-3z"/></svg>
                 </span>
-                <span>Микрофон</span>
+                <span class="call-control-label">Видео</span>
             </button>
-            <button class="call-control" type="button" data-call-action="speaker" aria-pressed="false" onclick="toggleCallControl(this)">
+            <button class="call-control" type="button" data-call-action="screen" aria-pressed="false" onclick="toggleCallControl(this)">
                 <span class="call-control-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Z"/><path d="M17 9a5 5 0 0 1 0 6m2-9a9 9 0 0 1 0 12"/></svg>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12.5" rx="2.5"/><path d="M8.5 20h7M12 16.5V20M9.5 10.5 12 8l2.5 2.5M12 8v5.5"/></svg>
                 </span>
-                <span>Динамик</span>
+                <span class="call-control-label">Экран</span>
             </button>
-            <button class="call-control" type="button" data-call-action="camera" aria-pressed="true" onclick="toggleCallControl(this)">
+            <button class="call-control call-control-mic" type="button" data-call-action="mute" aria-pressed="false" onclick="toggleCallControl(this)">
                 <span class="call-control-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2.5"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+                    <svg class="ico-mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+                    <svg class="ico-mic-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4l16 16M9 9v2a3 3 0 0 0 5 2.2M15 10V6a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.2 5.6M19 11a7 7 0 0 1-.6 2.8M12 18v3"/></svg>
                 </span>
-                <span>Камера</span>
+                <span class="call-control-label">Микрофон</span>
             </button>
-            <button class="call-control end-call" type="button" onclick="endCall()">
-                <span class="call-control-icon">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14c4-4 12-4 16 0l-2 4-4-1-1-3h-2l-1 3-4 1-2-4Z"/></svg>
-                </span>
-                <span>Завершить</span>
+            <button class="call-control end-call" type="button" onclick="endCall()" title="Завершить">
+                <span class="call-control-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 14.5c4.6-4.4 12.4-4.4 17 0l-2.2 2.6-3.6-1.2-.4-2.6a10 10 0 0 0-4.6 0l-.4 2.6-3.6 1.2Z"/></svg></span>
+                <span class="call-control-label">Завершить</span>
             </button>
         </div>
     </section>
 </div>
 
+<!-- Свёрнутый звонок: плавающая карточка поверх приложения, клик — развернуть -->
+<div class="call-mini" id="call-mini" hidden onclick="restoreCall()" role="button" tabindex="0" aria-label="Вернуться к звонку">
+    <video class="call-mini-video" id="call-mini-video" autoplay playsinline muted hidden></video>
+    <span class="call-mini-avatar" id="call-mini-avatar"></span>
+    <span class="call-mini-copy"><b id="call-mini-name">Собеседник</b><em id="call-mini-state">00:00</em></span>
+    <button type="button" class="call-mini-btn" id="call-mini-mute" onclick="event.stopPropagation(); toggleCallControl(document.querySelector('#call-controls-incall [data-call-action=mute]'))" aria-label="Микрофон" title="Микрофон">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+    </button>
+    <button type="button" class="call-mini-btn end" onclick="event.stopPropagation(); endCall()" aria-label="Завершить" title="Завершить">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 14.5c4.6-4.4 12.4-4.4 17 0l-2.2 2.6-3.6-1.2-.4-2.6a10 10 0 0 0-4.6 0l-.4 2.6-3.6 1.2Z"/></svg>
+    </button>
+</div>
 
 <!-- ТРАНСЛЯЦИЯ ЭКРАНА (P2P, стример → один зритель, без серверов видео):
      выбор качества, плашка "вы в эфире", приглашение зрителю и сам плеер.
@@ -1592,9 +1560,13 @@
         </div>
 
         <div class="contact-modal-section">
-            <div class="contact-modal-row">
+            <div class="contact-modal-row contact-extra-row" data-extra="phone" hidden>
                 <div class="contact-modal-row-label">Телефон</div>
-                <div class="contact-modal-row-value">Не указан</div>
+                <div class="contact-modal-row-value" data-contact-field="phone"></div>
+            </div>
+            <div class="contact-modal-row contact-extra-row" data-extra="birthday" hidden>
+                <div class="contact-modal-row-label">День рождения</div>
+                <div class="contact-modal-row-value" data-contact-field="birthday"></div>
             </div>
             <div class="contact-modal-row">
                 <div class="contact-modal-row-label">Имя пользователя</div>
@@ -1698,9 +1670,13 @@
             <div class="mood info-window-mood"><span class="status-dot"></span> в сети</div>
 
             <div class="info-window-contact">
-                <div class="info-contact-row">
+                <div class="info-contact-row contact-extra-row" data-extra="phone" hidden>
                     <div class="info-contact-label">Телефон</div>
-                    <div class="info-contact-value">Не указан</div>
+                    <div class="info-contact-value" data-contact-field="phone"></div>
+                </div>
+                <div class="info-contact-row contact-extra-row" data-extra="birthday" hidden>
+                    <div class="info-contact-label">День рождения</div>
+                    <div class="info-contact-value" data-contact-field="birthday"></div>
                 </div>
                 <div class="info-contact-row">
                     <div class="info-contact-label">Имя пользователя</div>
@@ -2317,6 +2293,19 @@
         </div>
         <div class="desktop-settings-body" id="desktop-settings-body"></div>
     </section>
+</div><!-- УСТРОЙСТВА (сеансы) — см. profile.js -->
+
+<div class="forward-backdrop" id="devices-backdrop" aria-hidden="true" onclick="if (event.target === this) closeDevicesModal()">
+    <section class="forward-modal group-info-modal devices-modal" role="dialog" aria-modal="true" aria-label="Устройства">
+        <div class="forward-modal-header">
+            <span>Устройства</span>
+            <button type="button" class="settings-close" onclick="closeDevicesModal()" aria-label="Закрыть">×</button>
+        </div>
+        <div class="group-members-head"><span>Это устройство</span></div>
+        <div class="group-card devices-current" id="devices-current"></div>
+        <button type="button" class="delete-choice-btn danger devices-terminate" id="devices-terminate-btn" onclick="terminateOtherSessions()">Завершить все другие сеансы</button>
+        <p class="group-perms-hint">Выйдет из KABAN на всех телефонах, компьютерах и в браузерах, кроме этого. Пригодится, если вы входили с чужого устройства.</p>
+    </section>
 </div><!-- ИГРЫ В ЧАТЕ -->
 
 <div class="forward-backdrop" id="games-backdrop" aria-hidden="true" onclick="if (event.target === this) closeGamesModal()">
@@ -2756,8 +2745,16 @@
             </span>
         </label>
 
-        <div class="group-members-head"><span>Обои чатов по умолчанию</span></div>
+        <div class="group-members-head"><span>Обои и узоры по умолчанию</span></div>
         <div class="wp-grid" id="theme-wallpaper-grid"></div>
+        <div class="theme-pattern-strength">
+            <span>Яркость узора</span>
+            <div class="settings-segmented" id="pattern-strength-control" role="radiogroup" aria-label="Яркость узора">
+                <button type="button" class="settings-segmented-item" data-strength="1" onclick="setPatternStrength(1)">Тише</button>
+                <button type="button" class="settings-segmented-item" data-strength="2" onclick="setPatternStrength(2)">Обычно</button>
+                <button type="button" class="settings-segmented-item" data-strength="3" onclick="setPatternStrength(3)">Ярче</button>
+            </div>
+        </div>
     </section>
 </div>
 
@@ -2862,33 +2859,83 @@
                     <div class="auth-field">
                         <label for="profile-username-input">Юзернейм</label>
                         <input type="text" id="profile-username-input" maxlength="32" placeholder="username" oninput="sanitizeUsernameInput(this)">
-                        <div class="auth-field-hint">Латиница, цифры и «_», 3–32 символа</div>
+                        <div class="auth-field-hint">Латиница, цифры и «_», 3–32 символа. По нему вас найдут без номера телефона</div>
                     </div>
                     <div class="auth-field">
                         <label for="profile-bio-input">О себе</label>
                         <textarea id="profile-bio-input" maxlength="140" rows="3" placeholder="Пара слов о себе"></textarea>
                     </div>
+                    <div class="auth-field profile-extra" hidden>
+                        <label for="profile-phone-input">Телефон</label>
+                        <div class="profile-inline">
+                            <input type="tel" id="profile-phone-input" inputmode="tel" autocomplete="tel" placeholder="+7 900 000-00-00" oninput="formatProfilePhoneInput(this)">
+                            <select id="profile-phone-visibility" class="profile-vis" aria-label="Кто видит номер">
+                                <option value="everyone">👁 Все</option>
+                                <option value="contacts">👥 Контакты</option>
+                                <option value="nobody">🔒 Никто</option>
+                            </select>
+                        </div>
+                        <div class="auth-field-hint">Номер видят только те, кому вы разрешили</div>
+                    </div>
+                    <div class="auth-field profile-extra" hidden>
+                        <label for="profile-birthday-input">День рождения</label>
+                        <div class="profile-inline">
+                            <input type="date" id="profile-birthday-input" min="1900-01-02">
+                            <select id="profile-birthday-visibility" class="profile-vis" aria-label="Кто видит день рождения">
+                                <option value="everyone">👁 Все</option>
+                                <option value="contacts">👥 Контакты</option>
+                                <option value="nobody">🔒 Никто</option>
+                            </select>
+                        </div>
+                        <div class="auth-field-hint">В этот день друзья увидят 🎂 рядом с вашим именем</div>
+                    </div>
+                </div>
+
+                <div class="group-members-head profile-extra" hidden><span>Цвет профиля</span></div>
+                <div class="group-card profile-color-card profile-extra" hidden>
+                    <div class="profile-color-row" id="profile-color-row" role="radiogroup" aria-label="Цвет профиля"></div>
+                    <div class="auth-field-hint">Цвет шапки вашего профиля — его увидят все, кто откроет вашу карточку</div>
                 </div>
 
                 <button type="button" class="settings-save profile-save" id="profile-save-btn" onclick="saveProfileChanges()">
                     Сохранить профиль
                 </button>
 
-                <div class="group-members-head"><span>Приложение</span></div>
+                <div class="group-members-head"><span>Разделы</span></div>
+                <div class="group-card">
+                    <button type="button" class="group-section-btn" onclick="profileOpenSaved()">
+                        <span class="group-ico tone-blue"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h10a1.5 1.5 0 0 1 1.5 1.5v15.5L12 16.5l-6.5 4V5A1.5 1.5 0 0 1 7 3.5Z"/></svg></span>
+                        <span class="group-section-title">Избранное</span>
+                    </button>
+                    <button type="button" class="group-section-btn" onclick="profileOpenStories()">
+                        <span class="group-ico tone-pink"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke-dasharray="3 2.2"/><path d="M12 8.5v7M8.5 12h7"/></svg></span>
+                        <span class="group-section-title">Мои истории</span>
+                    </button>
+                    <button type="button" class="group-section-btn" onclick="profileOpenCalls()">
+                        <span class="group-ico tone-green"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 3.5h3l1.5 4-2 1.5a11 11 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2 2A16.5 16.5 0 0 1 4.5 5.5a2 2 0 0 1 2-2Z"/></svg></span>
+                        <span class="group-section-title">Недавние звонки</span>
+                    </button>
+                    <button type="button" class="group-section-btn" onclick="openDevicesModal()">
+                        <span class="group-ico tone-orange"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="13" height="10" rx="1.6"/><path d="M6.5 18.5h6M9.5 14.5v4"/><rect x="16.5" y="9" width="5" height="10.5" rx="1.3"/></svg></span>
+                        <span class="group-section-title">Устройства</span>
+                    </button>
+                </div>
+
                 <div class="group-card">
                     <button type="button" class="group-section-btn" onclick="openSettings()">
-                        <span class="group-ico tone-blue"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/></svg></span>
+                        <span class="group-ico tone-gray"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/></svg></span>
                         <span class="group-section-title">Настройки</span>
                     </button>
                     <button type="button" class="group-section-btn" onclick="openThemeColorPicker()">
-                        <span class="group-ico tone-orange"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z"/></svg></span>
+                        <span class="group-ico tone-purple"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.3 0 2-.8 2-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.8 1.8-1.8h2.1a3.6 3.6 0 0 0 3.6-3.7C20.5 6.6 16.7 3.5 12 3.5Z"/><circle cx="7.8" cy="11" r="1.1"/><circle cx="10.5" cy="7.4" r="1.1"/><circle cx="15" cy="7.6" r="1.1"/></svg></span>
                         <span class="group-section-title">Оформление и цвета</span>
                     </button>
-                    <button type="button" class="group-section-btn danger" onclick="closeProfileScreen(); handleSignOut()">
+                    <button type="button" class="group-section-btn danger" onclick="if (leaveProfileScreen()) handleSignOut()">
                         <span class="group-ico tone-red"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4.5H6.5A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5H10M15 8l4 4-4 4M19 12H9"/></svg></span>
                         <span class="group-section-title">Выйти из аккаунта</span>
                     </button>
                 </div>
+
 
             </div>
         </div>
@@ -3114,29 +3161,30 @@
 
 <!-- Библиотеки лежат рядом с сайтом (vendor/): не зависим от CDN, которые бывают недоступны; версия supabase-js закреплена (2.117.2). -->
 <script src="vendor/supabase.js?v=2.117.2"></script>
-<script src="supabaseClient.js?v=20261007-81"></script>
-<script src="crypto.js?v=20261007-81"></script>
+<script src="supabaseClient.js?v=20261007-84"></script>
+<script src="crypto.js?v=20261007-84"></script>
 <!-- script.js разбит на 4 файла для удобства навигации (раньше был один
      файл ~350КБ/8300+ строк) — порядок подключения важен, см. комментарий
      в начале каждого файла. Это НЕ ES-модули: обычные классические
      скрипты, выполняются последовательно как один большой файл, функции
      между ними в общей глобальной области видимости, как и раньше. -->
-<script src="emoji-data.js?v=20261007-81"></script>
-<script src="script-core.js?v=20261007-81"></script>
-<script src="script-ui.js?v=20261007-81"></script>
-<script src="script-chats.js?v=20261007-81"></script>
-<script src="script-messages.js?v=20261007-81"></script>
-<script src="effects.js?v=20261007-81"></script>
-<script src="games.js?v=20261007-81"></script>
-<script src="voice-ai.js?v=20261007-81"></script>
-<script src="stories.js?v=20261007-81"></script>
-<script src="productivity.js?v=20261007-81"></script>
-<script src="reactions.js?v=20261007-81"></script>
-<script src="listen.js?v=20261007-81"></script>
-<script src="voice.js?v=20261007-81"></script>
-<script src="voice-video.js?v=20261007-81"></script>
-<script src="resilience.js?v=20261007-81"></script>
-<script src="desktop-app.js?v=20261007-81"></script>
+<script src="emoji-data.js?v=20261007-84"></script>
+<script src="script-core.js?v=20261007-84"></script>
+<script src="script-ui.js?v=20261007-84"></script>
+<script src="script-chats.js?v=20261007-84"></script>
+<script src="script-messages.js?v=20261007-84"></script>
+<script src="effects.js?v=20261007-84"></script>
+<script src="games.js?v=20261007-84"></script>
+<script src="voice-ai.js?v=20261007-84"></script>
+<script src="stories.js?v=20261007-84"></script>
+<script src="productivity.js?v=20261007-84"></script>
+<script src="reactions.js?v=20261007-84"></script>
+<script src="listen.js?v=20261007-84"></script>
+<script src="voice.js?v=20261007-84"></script>
+<script src="voice-video.js?v=20261007-84"></script>
+<script src="resilience.js?v=20261007-84"></script>
+<script src="profile.js?v=20261007-84"></script>
+<script src="desktop-app.js?v=20261007-84"></script>
 
 </body>
 </html>

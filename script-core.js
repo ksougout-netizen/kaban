@@ -41,6 +41,37 @@ function cssUrlValue(rawUrl) {
     return `url("${url.replace(/["'\\()\s]/g, (ch) => encodeURIComponent(ch))}")`;
 }
 
+// Аватар без фото — как в Telegram: градиентный круг с инициалами, у каждого
+// человека/группы СВОЙ постоянный цвет (по id). Раньше был бежевый квадрат с 👤.
+const AVATAR_GRADIENTS = [
+    ["#ff885e", "#ff516a"], ["#ffcd6a", "#ffa85c"], ["#82b1ff", "#665fff"], ["#a0de7e", "#54cb68"],
+    ["#53edd6", "#28c9b7"], ["#72d5fd", "#2a9ef1"], ["#e0a2f3", "#d669ed"], ["#f9a8c9", "#ef5d8e"]
+];
+
+function avatarInitials(name) {
+    const words = String(name || "").replace(/[^\p{L}\p{N}\s]/gu, " ").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return "?";
+    const first = [...words[0]][0] || "";
+    const second = words.length > 1 ? [...words[1]][0] || "" : "";
+    return (first + second).toUpperCase();
+}
+
+// kind: "user" | "group" | "saved" | "bot". Возвращает { style, inner, cls } для вставки в HTML.
+function avatarParts({ id, name, url, kind = "user" }) {
+    if (url) return { cls: " has-photo", inner: "", style: ` style="background-image:${escapeHTML(cssUrlValue(url))};background-size:cover;background-position:center"` };
+    let hash = 0;
+    // По имени (а не id) — чтобы цвет совпадал в списке, шапке чата и карточке, где id не всегда под рукой.
+    for (const ch of String(name || id || "")) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+    const [a, b] = kind === "saved" ? ["#6ec6ff", "#3a8dff"] : kind === "bot" ? ["#a78bfa", "#6c4fd6"] : AVATAR_GRADIENTS[hash % AVATAR_GRADIENTS.length];
+    const style = ` style="background:linear-gradient(160deg,${a},${b});color:#fff"`;
+    const icons = {
+        saved: '<svg class="avatar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h10a1.5 1.5 0 0 1 1.5 1.5v15.5L12 16.5l-6.5 4V5A1.5 1.5 0 0 1 7 3.5Z"/></svg>',
+        bot: '<svg class="avatar-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="8" width="15" height="11" rx="4"/><path d="M12 4.5V8M9 13h.01M15 13h.01M9.5 16h5"/></svg>'
+    };
+    const inner = icons[kind] || `<span class="avatar-initials">${escapeHTML(avatarInitials(name))}</span>`;
+    return { cls: " has-initials", inner, style };
+}
+
 let currentChatId = null;
 let cachedChatRows = [];
 let chatRealtimeUnsubscribe = null;
@@ -109,6 +140,10 @@ const appSettings = {
     sendSound: false,
     receiveSound: false,
     compactMessages: false,
+    // Как в Telegram Desktop: свои и чужие сообщения одной колонкой слева, с аватарами.
+    messagesLeft: false,
+    // Яркость узора на фоне чата: 1 — тише, 2 — обычно, 3 — ярче.
+    patternStrength: 2,
     showMessageTime: true,
     autoScroll: true,
     saveDraft: true,
@@ -381,6 +416,9 @@ function applySettings() {
     document.body.classList.toggle("dark", appSettings.darkMode);
     document.body.classList.toggle("reduce-motion", appSettings.reduceMotion);
     document.body.classList.toggle("compact-messages", appSettings.compactMessages);
+    document.body.classList.toggle("messages-left", !!appSettings.messagesLeft);
+    document.body.dataset.patternStrength = String(appSettings.patternStrength || 2);
+    document.querySelectorAll("#pattern-strength-control .settings-segmented-item").forEach((b) => b.classList.toggle("active", Number(b.dataset.strength) === (appSettings.patternStrength || 2)));
     document.body.classList.toggle("hide-message-time", !appSettings.showMessageTime);
     document.body.classList.toggle("text-scale-sm", appSettings.textSize === "sm");
     document.body.classList.toggle("text-scale-lg", appSettings.textSize === "lg");
@@ -494,6 +532,12 @@ async function pickThemeFromPhoto(input) {
         toast("Не удалось подобрать цвет по этому фото — попробуйте более яркое");
     }
 }
+function setPatternStrength(level) {
+    appSettings.patternStrength = level;
+    saveSettings();
+    applySettings();
+}
+
 function setGlobalWallpaper(id) {
     appSettings.chatWallpaper = id;
     saveSettings();
@@ -529,6 +573,66 @@ const WALLPAPERS = [
     { id: "rose", label: "Роза", hidden: true, css: "color-mix(in srgb, #e07a9e 11%, var(--bg))" }
 ];
 
+/* ---- узоры (как в Telegram): рисованные «каракули» поверх мягкого градиента.
+   Узор — отдельный слой-маска (.chat-area::after), окрашенный цветом текста
+   темы, поэтому одинаково аккуратен и в светлой, и в тёмной теме. */
+const DOODLE = {
+    heart: "<path d='M0 -3C-6 -10-14 -4-10 3L0 11L10 3C14 -4 6 -10 0 -3Z'/>",
+    star: "<path d='M0 -9L2.6 -3L9 -2.8L4 1.4L5.6 8L0 4.4L-5.6 8L-4 1.4L-9 -2.8L-2.6 -3Z'/>",
+    sparkle: "<path d='M0 -8Q1 -1 8 0Q1 1 0 8Q-1 1-8 0Q-1 -1 0 -8Z'/>",
+    paw: "<g fill='black' stroke='none'><ellipse cx='0' cy='4' rx='6.5' ry='5.5'/><circle cx='-7.5' cy='-3.5' r='2.8'/><circle cx='-2.8' cy='-8.5' r='2.8'/><circle cx='2.8' cy='-8.5' r='2.8'/><circle cx='7.5' cy='-3.5' r='2.8'/></g>",
+    fish: "<path d='M-11 0C-5 -7 5 -7 9 0C5 7-5 7-11 0ZM9 0L15 -6V6Z'/><circle cx='-5' cy='-1' r='1' fill='black'/>",
+    yarn: "<circle r='8'/><path d='M-6 -5Q0 2 7 -3M-8 2Q0 7 6 5M-2 -8Q3 0-1 8'/><path d='M7 5Q12 9 15 6'/>",
+    planet: "<circle r='7'/><path d='M-15 4Q0 -6 15 -4'/>",
+    moon: "<path d='M3 -9A9.5 9.5 0 1 0 3 9A7 7 0 1 1 3 -9Z'/>",
+    rocket: "<path d='M0 -12C5 -7 5 2 3 6H-3C-5 2-5 -7 0 -12Z'/><circle cy='-3' r='2'/><path d='M-3 2L-7 7V9L-3 6M3 2L7 7V9L3 6M-1.5 9V12M1.5 9V12'/>",
+    gamepad: "<path d='M-12 -6H12A6 6 0 0 1 18 0V2A5 5 0 0 1 9 5L7 2H-7L-9 5A5 5 0 0 1-18 2V0A6 6 0 0 1-12 -6Z'/><path d='M-10 -2V4M-13 1H-7'/><circle cx='9' cy='-1' r='1.4' fill='black'/><circle cx='13' cy='2' r='1.4' fill='black'/>",
+    dice: "<rect x='-9' y='-9' width='18' height='18' rx='4'/><g fill='black' stroke='none'><circle cx='-4' cy='-4' r='1.7'/><circle r='1.7'/><circle cx='4' cy='4' r='1.7'/></g>",
+    coin: "<circle r='8.5'/><path d='M0 -4.5L1.5 -1.5L4.5 -1L2.3 1.2L2.8 4.5L0 3L-2.8 4.5L-2.3 1.2L-4.5 -1L-1.5 -1.5Z'/>",
+    note: "<circle cx='-3' cy='7' r='3.4' fill='black'/><path d='M0.4 7V-9Q8 -6 6 2'/>",
+    notes: "<circle cx='-7' cy='8' r='3.2' fill='black'/><circle cx='6' cy='5' r='3.2' fill='black'/><path d='M-4 8V-8L9 -11V5M-4 -4L9 -7'/>",
+    headphones: "<path d='M-10 4V0A10 10 0 0 1 10 0V4'/><rect x='-12' y='2' width='5' height='9' rx='2'/><rect x='7' y='2' width='5' height='9' rx='2'/>",
+    daisy: "<g><ellipse cy='-7' rx='3' ry='5'/><ellipse cy='-7' rx='3' ry='5' transform='rotate(60)'/><ellipse cy='-7' rx='3' ry='5' transform='rotate(120)'/><ellipse cy='-7' rx='3' ry='5' transform='rotate(180)'/><ellipse cy='-7' rx='3' ry='5' transform='rotate(240)'/><ellipse cy='-7' rx='3' ry='5' transform='rotate(300)'/></g><circle r='2.6' fill='black'/>",
+    leaf: "<path d='M0 11C-8 3-6 -8 0 -12C6 -8 8 3 0 11ZM0 11V-6'/>",
+    tulip: "<path d='M-6 -8L-3 -4L0 -9L3 -4L6 -8V-1A6 6 0 0 1-6 -1Z'/><path d='M0 5V13M0 9Q5 6 7 9'/>",
+    donut: "<circle r='9'/><circle r='3.4'/><path d='M-5 -6L-4 -4.5M4 -6.5L5.5 -5.5M6 3L7.5 4M-6.5 4L-5 5.5'/>",
+    icecream: "<path d='M-6 0L0 13L6 0'/><path d='M-7 0A7 7 0 1 1 7 0Z'/>",
+    cherry: "<circle cx='-5' cy='7' r='4'/><circle cx='5' cy='8' r='4'/><path d='M-5 3Q-2 -7 4 -10M5 4Q3 -4 4 -10L9 -11'/>",
+    pizza: "<path d='M-9 -7Q0 -11 9 -7L0 11Z'/><circle cx='-2' cy='-3' r='1.6' fill='black'/><circle cx='3' cy='1' r='1.6' fill='black'/>",
+    triangle: "<path d='M0 -9L8 6H-8Z'/>",
+    ring: "<circle r='7'/>",
+    squiggle: "<path d='M-14 0Q-10.5 -6-7 0T0 0T7 0T14 0'/>",
+    cross: "<path d='M-6 -6L6 6M6 -6L-6 6'/>"
+};
+
+const DOODLE_SPOTS = [
+    [30, 30, -15, 1], [100, 22, 10, .8], [176, 38, 20, 1.1], [222, 108, -10, .9], [58, 96, 25, .9], [140, 92, -20, 1.15],
+    [24, 166, 10, 1], [96, 158, -5, .8], [168, 170, 15, 1], [216, 214, -25, .85], [58, 220, 5, 1.1], [134, 226, -15, .9]
+];
+
+function doodlePattern(names) {
+    const body = DOODLE_SPOTS.map(([x, y, r, s], i) => `<g transform='translate(${x} ${y}) rotate(${r}) scale(${s})'>${DOODLE[names[i % names.length]]}</g>`).join("");
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'>${body}</svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+
+const PATTERN_WALLPAPERS = [
+    { id: "pat-cats", label: "Котики", base: ["#ffb38a", "#ff8fab"], doodles: ["paw", "fish", "heart", "yarn", "paw", "sparkle"] },
+    { id: "pat-space", label: "Космос", base: ["#8b8cff", "#4b3fa8"], doodles: ["star", "planet", "moon", "rocket", "sparkle", "star"] },
+    { id: "pat-games", label: "Игры", base: ["#5ee6c3", "#3b9dff"], doodles: ["gamepad", "dice", "coin", "heart", "star", "cross"] },
+    { id: "pat-music", label: "Музыка", base: ["#c3a6ff", "#7cc4ff"], doodles: ["note", "notes", "headphones", "sparkle", "note", "star"] },
+    { id: "pat-love", label: "Сердечки", base: ["#ff9ac1", "#ff6b81"], doodles: ["heart", "sparkle", "heart", "star", "heart", "ring"] },
+    { id: "pat-flowers", label: "Цветы", base: ["#b6e388", "#ffd56b"], doodles: ["daisy", "leaf", "tulip", "sparkle", "daisy", "leaf"] },
+    { id: "pat-food", label: "Вкусняшки", base: ["#ffcf7a", "#ff8a8a"], doodles: ["donut", "icecream", "cherry", "pizza", "sparkle", "donut"] },
+    { id: "pat-geo", label: "Геометрия", base: ["var(--accent)", "var(--accent)"], doodles: ["triangle", "ring", "squiggle", "cross", "triangle", "ring"] }
+].map((p) => ({
+    id: p.id,
+    label: p.label,
+    pattern: doodlePattern(p.doodles),
+    css: `linear-gradient(155deg, color-mix(in srgb, ${p.base[0]} 30%, var(--bg)), color-mix(in srgb, ${p.base[1]} ${p.base[1].startsWith("var") ? 10 : 30}%, var(--bg)))`
+}));
+WALLPAPERS.splice(1, 0, ...PATTERN_WALLPAPERS);
+
 function findWallpaper(id) {
     return WALLPAPERS.find((w) => w.id === id) || WALLPAPERS[0];
 }
@@ -537,7 +641,7 @@ function wallpaperTileHTML(wallpaper, selected, onclick, label) {
     const style = wallpaper && wallpaper.css ? `background:${wallpaper.css}` : "";
     return `
         <button type="button" class="wp-tile${selected ? " selected" : ""}" onclick="${onclick}">
-            <span class="wp-tile-preview${wallpaper && wallpaper.css ? "" : " plain"}" style="${style}"></span>
+            <span class="wp-tile-preview${wallpaper && wallpaper.css ? "" : " plain"}" style="${style}">${wallpaper?.pattern ? `<span class="wp-tile-pattern" style="--wpp:${wallpaper.pattern.replace(/"/g, "&quot;")}"></span>` : ""}</span>
             <span class="wp-tile-label">${label}</span>
         </button>`;
 }
@@ -1147,6 +1251,36 @@ function handleIncomingCallOffer(payload) {
     pendingIncomingCall = payload;
     showIncomingCallUI(payload);
 
+    // Пока звонок только звонит — слушаем канал звонка: звонящий мог сбросить
+    // вызов или не дождаться ответа. Раньше отмена сюда не доходила, и окно
+    // «Звонит вам…» (теперь ещё и с мелодией) висело у собеседника бесконечно.
+    payload._watch = KabanAPI.joinCallChannel(payload.callId, {
+        onEnd: () => { if (pendingIncomingCall === payload) dismissIncomingCall(payload); }
+    });
+    payload._ringTimer = setTimeout(() => {
+        if (pendingIncomingCall === payload) dismissIncomingCall(payload);
+    }, CALL_RING_TIMEOUT_MS + 5000);
+
+}
+
+// Отписаться от «наблюдения» за входящим (перед ответом/отклонением — у них свой канал).
+function closeIncomingWatch(offer) {
+    clearTimeout(offer?._ringTimer);
+    const watch = offer?._watch;
+    if (offer) offer._watch = null;
+    try { return Promise.resolve(watch?.leave()).catch(() => {}); } catch { return Promise.resolve(); }
+}
+
+// Звонящий сбросил или не дождался ответа — тихо убрать входящий, записать «пропущенный».
+function dismissIncomingCall(offer) {
+    closeIncomingWatch(offer);
+    if (pendingIncomingCall !== offer) return;
+    pendingIncomingCall = null;
+    stopCallTone();
+    updateCallHistoryEntry(offer.callId, { result: "missed", seen: false });
+    if (typeof updateCallHistoryBadge === "function") updateCallHistoryBadge();
+    hideCallUI();
+    toast(`Пропущенный звонок${offer.callerName ? " от " + offer.callerName : ""}`);
 }
 
 // kind: "audio" | "video" — вызывается с кнопок в шапке/карточке чата,
@@ -1215,6 +1349,9 @@ async function startCall(kind) {
         await ensureTurnServers(); // ретранслятор для мобильных сетей
         pc = new RTCPeerConnection(RTC_CONFIG);
         localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+        // В аудиозвонке заранее открываем «пустой» видеоканал: тогда камеру или показ
+        // экрана можно включить посреди разговора (как в Telegram) без переподключения.
+        if (!isVideo) pc.addTransceiver("video", { direction: "sendrecv" });
 
         activeCall = {
             callId, pc, localStream, isVideo,
@@ -1222,7 +1359,9 @@ async function startCall(kind) {
             remoteUserId,
             remoteName,
             remoteAvatarUrl,
-            state: "calling"
+            state: "calling",
+            local: { muted: false, video: isVideo, screen: false },
+            remote: { muted: false, video: isVideo, screen: false }
         };
 
         setupCallPeerConnection(pc, callId);
@@ -1260,6 +1399,7 @@ async function startCall(kind) {
             },
             onRenegotiate: (payload) => handleCallRenegotiate(callId, payload),
             onRestartRequest: () => { if (activeCall?.callId === callId) restartCallIce(callId); },
+            onState: (payload) => handleCallRemoteState(callId, payload),
             onEnd: (payload) => {
                 if (!activeCall || activeCall.callId !== callId) return;
                 toast(payload?.reason === "busy" ? "Собеседник сейчас на другом звонке" : "Звонок завершён");
@@ -1319,6 +1459,7 @@ async function startCall(kind) {
     });
 
     showOutgoingCallUI();
+    startCallTone("ringback");
 
     activeCall.timeoutTimer = setTimeout(() => {
         if (activeCall?.callId === callId && activeCall.state === "calling") {
@@ -1335,6 +1476,8 @@ async function acceptIncomingCall() {
     if (!pendingIncomingCall) return;
     const offer = pendingIncomingCall;
     pendingIncomingCall = null;
+    stopCallTone();
+    const watchClosed = closeIncomingWatch(offer);
 
     let localStream;
     try {
@@ -1342,6 +1485,7 @@ async function acceptIncomingCall() {
     } catch (error) {
         toast("Не удалось получить доступ к " + (offer.isVideo ? "камере/микрофону" : "микрофону"));
         updateCallHistoryEntry(offer.callId, { result: "missed", seen: false });
+        await watchClosed;
         // pendingIncomingCall уже обнулён выше — если уведомление собеседника
         // упадёт и hideCallUI() не выполнится, экран входящего звонка навсегда
         // остался бы висеть с мёртвыми кнопками (повторно принять/отклонить
@@ -1360,6 +1504,7 @@ async function acceptIncomingCall() {
     }
 
     await ensureTurnServers(); // ретранслятор для мобильных сетей
+    await watchClosed;         // канал «наблюдения» за этим звонком закрыт — открываем рабочий
     const pc = new RTCPeerConnection(RTC_CONFIG);
     localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
@@ -1370,7 +1515,9 @@ async function acceptIncomingCall() {
         remoteName: offer.callerName,
         remoteAvatarUrl: offer.callerAvatarUrl,
         state: "connecting",
-        connectedAt: null
+        connectedAt: null,
+        local: { muted: false, video: !!offer.isVideo, screen: false },
+        remote: { muted: false, video: !!offer.isVideo, screen: false }
     };
     updateCallHistoryEntry(offer.callId, { result: "connecting", seen: true });
 
@@ -1386,6 +1533,7 @@ async function acceptIncomingCall() {
             pc.addIceCandidate(candidate).catch(() => {});
         },
         onRenegotiate: (payload) => handleCallRenegotiate(offer.callId, payload),
+        onState: (payload) => handleCallRemoteState(offer.callId, payload),
         onEnd: () => {
             if (!activeCall || activeCall.callId !== offer.callId) return;
             toast("Звонок завершён");
@@ -1401,6 +1549,11 @@ async function acceptIncomingCall() {
         for (const candidate of pendingRemoteCandidates.splice(0)) {
             await pc.addIceCandidate(candidate).catch(() => {});
         }
+        // Видеоканал звонящего (в аудиозвонке он пустой) — делаем двусторонним,
+        // чтобы и отвечающий мог включить камеру или показать экран посреди разговора.
+        pc.getTransceivers().forEach((t) => {
+            if (t.receiver?.track?.kind === "video" && t.direction === "recvonly") t.direction = "sendrecv";
+        });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         // Свои кандидаты — внутри ответа (как и у звонящего): не зависят от
@@ -1415,14 +1568,30 @@ async function acceptIncomingCall() {
 
     showInCallUI();
 
+    // Звонящий мог сбросить вызов как раз в момент ответа — тогда соединение
+    // не установится никогда, а «Соединение…» висело бы вечно.
+    const acceptedCall = activeCall;
+    acceptedCall.timeoutTimer = setTimeout(() => {
+        if (activeCall === acceptedCall && !acceptedCall.connectedAt) {
+            toast("Не удалось соединиться");
+            Promise.resolve(acceptedCall.channel?.sendEnd({ reason: "failed" })).catch(() => {});
+            teardownActiveCall("missed");
+        }
+    }, 25000);
+
 }
 
 function declineIncomingCall() {
     if (!pendingIncomingCall) return;
     const offer = pendingIncomingCall;
     pendingIncomingCall = null;
+    stopCallTone();
     updateCallHistoryEntry(offer.callId, { result: "missed", seen: false });
-    const channelHandle = KabanAPI.joinCallChannel(offer.callId, {});
+    // Отказ отправляем через уже открытый канал «наблюдения», если он есть, — не открывая второй такой же.
+    const watch = offer._watch;
+    clearTimeout(offer._ringTimer);
+    offer._watch = null;
+    const channelHandle = watch || KabanAPI.joinCallChannel(offer.callId, {});
     // .finally(leave) — без него при сбое ready/sendEnd канал сигнализации
     // оставался подписанным навсегда (утечка на каждый отклонённый звонок
     // при нестабильной сети), плюс необработанный rejection в консоли.
@@ -1455,13 +1624,23 @@ function setupCallPeerConnection(pc, callId) {
 
     pc.ontrack = (event) => {
         if (!activeCall || activeCall.callId !== callId) return;
+        // Все дорожки собеседника — в один поток: видеоканал аудиозвонка приходит
+        // без своего MediaStream (event.streams пуст), и раньше он затирал звук.
+        if (!activeCall.remoteStream) activeCall.remoteStream = new MediaStream();
+        const stream = activeCall.remoteStream;
+        if (!stream.getTracks().includes(event.track)) stream.addTrack(event.track);
+        event.track.addEventListener("unmute", () => renderCallMedia());
+        event.track.addEventListener("mute", () => renderCallMedia());
         const remoteVideoOrAudio = document.getElementById("call-remote-video");
-        if (remoteVideoOrAudio && remoteVideoOrAudio.srcObject !== event.streams[0]) {
-            remoteVideoOrAudio.srcObject = event.streams[0];
-            // Мобильные браузеры (особенно iPhone) не всегда сами запускают
-            // воспроизведение после смены источника — без этого был чёрный экран без звука.
-            remoteVideoOrAudio.play?.().catch(() => {});
+        if (remoteVideoOrAudio && remoteVideoOrAudio.srcObject !== stream) {
+            remoteVideoOrAudio.srcObject = stream;
+            if (activeCall.outputId && remoteVideoOrAudio.setSinkId) remoteVideoOrAudio.setSinkId(activeCall.outputId).catch(() => {});
         }
+        // Мобильные браузеры (особенно iPhone) не всегда сами запускают
+        // воспроизведение после смены источника — без этого был чёрный экран без звука.
+        remoteVideoOrAudio?.play?.().catch(() => {});
+        if (event.track.kind === "audio") startCallVoiceMeter(activeCall);
+        renderCallMedia();
     };
 
     pc.oniceconnectionstatechange = () => {
@@ -1485,8 +1664,15 @@ function setupCallPeerConnection(pc, callId) {
                 activeCall.connectedAt = Date.now();
                 updateCallHistoryEntry(callId, { result: "completed", seen: true });
                 document.getElementById("call-state").textContent = formatCallDuration(0);
+                stopCallTone();
+                playCallTone("connect");
                 startCallDurationTicker(activeCall.connectedAt);
-                if (activeCall.isVideo) startCallQualityMonitor(callId);
+                startCallQualityMonitor(callId);
+                sendCallState();
+                showCallEncryptionKey(activeCall);
+                const dialog = document.querySelector("#call-backdrop .call-dialog");
+                if (dialog) { dialog.classList.add("is-connected"); dialog.dataset.phase = "connected"; }
+                renderCallMedia();
             }
         } else if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
             // Раньше: «disconnected» 5 секунд — и звонок сбрасывался, «failed» —
@@ -1628,24 +1814,31 @@ async function applyCallVideoLevel(call, level) {
     } catch { /* браузер не поддерживает — остаётся его собственная подстройка */ }
 }
 
+// Качество связи (для всех звонков): задержка и потери → «полоски» сигнала.
+// Для видео — ещё и адаптация: плохо два раза подряд — снижаем разрешение и
+// битрейт на ступень; хорошо четыре раза — возвращаем ступень выше.
 function startCallQualityMonitor(callId) {
     const call = activeCall;
     if (!call || call.callId !== callId) return;
+    clearInterval(call.qualityTimer);
     call.videoLevel = 0;
-    let bad = 0, good = 0, prevLost = null, prevSent = null;
-    applyCallVideoLevel(call, 0);
+    call.signal = 4;
+    let bad = 0, good = 0, prevLost = null, prevSent = null, prevInLost = null, prevInRecv = null;
+    if (call.pc.getSenders().some((s) => s.track?.kind === "video")) applyCallVideoLevel(call, 0);
     call.qualityTimer = setInterval(async () => {
         if (activeCall !== call) { clearInterval(call.qualityTimer); return; }
-        if (call.reconnecting) return;
-        let rtt = 0, lost = null, sent = null;
+        if (call.reconnecting) { call.signal = 1; renderCallSignal(); return; }
+        let rtt = 0, lost = null, sent = null, inLost = null, inRecv = null;
         try {
             const stats = await call.pc.getStats();
             stats.forEach((report) => {
+                if (report.type === "candidate-pair" && report.nominated && typeof report.currentRoundTripTime === "number") rtt = Math.max(rtt, report.currentRoundTripTime);
                 if (report.type === "remote-inbound-rtp" && report.kind === "video") {
-                    rtt = report.roundTripTime || 0;
+                    rtt = Math.max(rtt, report.roundTripTime || 0);
                     lost = report.packetsLost || 0;
                 }
                 if (report.type === "outbound-rtp" && report.kind === "video") sent = report.packetsSent || 0;
+                if (report.type === "inbound-rtp" && report.kind === "audio") { inLost = report.packetsLost || 0; inRecv = report.packetsReceived || 0; }
             });
         } catch { return; }
         // Доля потерь за последние 3 секунды (по приросту счётчиков).
@@ -1653,8 +1846,18 @@ function startCallQualityMonitor(callId) {
         if (lost !== null && sent !== null && prevLost !== null && prevSent !== null && sent > prevSent) {
             lossRatio = Math.max(0, lost - prevLost) / (sent - prevSent);
         }
-        prevLost = lost;
-        prevSent = sent;
+        let audioLoss = 0;
+        if (inLost !== null && inRecv !== null && prevInLost !== null && prevInRecv !== null) {
+            const total = (inRecv - prevInRecv) + Math.max(0, inLost - prevInLost);
+            if (total > 0) audioLoss = Math.max(0, inLost - prevInLost) / total;
+        }
+        prevLost = lost; prevSent = sent; prevInLost = inLost; prevInRecv = inRecv;
+
+        const worst = Math.max(lossRatio, audioLoss);
+        call.signal = rtt < 0.15 && worst < 0.02 ? 4 : rtt < 0.3 && worst < 0.05 ? 3 : rtt < 0.6 && worst < 0.12 ? 2 : 1;
+        renderCallSignal();
+
+        if (!call.pc.getSenders().some((s) => s.track?.kind === "video")) return;
         const isBad = lossRatio > 0.08 || rtt > 0.6;
         const isGood = lossRatio < 0.02 && rtt < 0.3;
         if (isBad) { bad++; good = 0; } else if (isGood) { good++; bad = 0; } else { bad = 0; good = 0; }
@@ -1662,23 +1865,44 @@ function startCallQualityMonitor(callId) {
         else if (good >= 4 && call.videoLevel > 0) { good = 0; await applyCallVideoLevel(call, call.videoLevel - 1); }
     }, 3000);
 }
+
+function renderCallSignal() {
+    const el = document.getElementById("call-signal");
+    if (!el || !activeCall) return;
+    el.hidden = !activeCall.connectedAt;
+    el.dataset.level = String(activeCall.signal || 4);
+    el.title = ["", "Очень слабая связь", "Слабая связь", "Хорошая связь", "Отличная связь"][activeCall.signal || 4];
+}
+
 let callDurationTicker = null;
 
 function formatCallDuration(seconds) {
-    const m = Math.floor(seconds / 60);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
     const s = seconds % 60;
-    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return (h ? `${h}:` : "") + `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function callStatusText() {
+    const call = activeCall;
+    if (!call) return "";
+    if (call.reconnecting) return "Переподключаемся…";
+    if (call.state === "calling") return "Вызов…";
+    if (!call.connectedAt) return "Соединение…";
+    const weak = (call.signal || 4) <= 1 ? " · слабая связь" : "";
+    return formatCallDuration(Math.floor((Date.now() - call.connectedAt) / 1000)) + weak;
 }
 
 function startCallDurationTicker(startedAt = Date.now()) {
     clearInterval(callDurationTicker);
     callDurationTicker = setInterval(() => {
         if (!activeCall || activeCall.state !== "connected") { clearInterval(callDurationTicker); return; }
+        document.querySelector("#call-backdrop .call-dialog")?.classList.toggle("reconnecting", !!activeCall.reconnecting);
+        const text = callStatusText();
         const el = document.getElementById("call-state");
-        if (!el) return;
-        if (activeCall.reconnecting) { el.textContent = "Переподключаемся…"; return; }
-        const weak = (activeCall.videoLevel || 0) >= 2 ? " · слабая связь" : "";
-        el.textContent = formatCallDuration(Math.floor((Date.now() - startedAt) / 1000)) + weak;
+        if (el && el.textContent !== text) el.textContent = text;
+        const mini = document.getElementById("call-mini-state");
+        if (mini && mini.textContent !== text) mini.textContent = text;
     }, 1000);
 }
 
@@ -1691,7 +1915,9 @@ function endCall() {
 
 function teardownActiveCall(result, unseenMissedCall = false) {
     clearInterval(callDurationTicker);
+    stopCallTone();
     if (activeCall) {
+        if (activeCall.connectedAt || result === "declined") playCallTone("end");
         const durationSeconds = activeCall.connectedAt
             ? Math.floor((Date.now() - activeCall.connectedAt) / 1000)
             : 0;
@@ -1703,105 +1929,216 @@ function teardownActiveCall(result, unseenMissedCall = false) {
         clearTimeout(activeCall.timeoutTimer);
         clearTimeout(activeCall.recoveryTimer);
         clearInterval(activeCall.qualityTimer);
+        activeCall.voiceMeter?.stop();
         activeCall.localStream?.getTracks().forEach((track) => track.stop());
+        activeCall.screenTrack?.stop();
         try { activeCall.pc?.close(); } catch {}
         activeCall.channel?.leave();
         activeCall = null;
     }
-    const remoteEl = document.getElementById("call-remote-video");
-    const localEl = document.getElementById("call-local-video");
-    if (remoteEl) remoteEl.srcObject = null;
-    if (localEl) localEl.srcObject = null;
+    ["call-remote-video", "call-local-video", "call-mini-video"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.srcObject = null;
+    });
     hideCallUI();
 }
 
-function toggleCallControl(button) {
+/* ---- микрофон, камера, показ экрана ---------------------------------------------------------- */
 
-    if (!activeCall) return;
+function callVideoSender(call) {
+    const t = call.pc.getTransceivers().find((tr) => tr.receiver?.track?.kind === "video" && tr.direction !== "inactive");
+    return t ? t.sender : null;
+}
 
+function sendCallState() {
+    const call = activeCall;
+    if (!call?.channel?.sendState) return;
+    Promise.resolve(call.channel.sendState({ ...call.local })).catch(() => {});
+}
+
+function handleCallRemoteState(callId, payload) {
+    const call = activeCall;
+    if (!call || call.callId !== callId || !payload || typeof payload !== "object") return;
+    const firstState = !call.remoteStateKnown;
+    call.remoteStateKnown = true;
+    call.remote = { muted: !!payload.muted, video: !!payload.video, screen: !!payload.screen };
+    // Собеседник впервые прислал своё состояние — значит, его клиент умеет
+    // принимать наше: отвечаем своим (на случай, если наше ушло раньше, чем он подключился).
+    if (firstState) sendCallState();
+    renderCallMedia();
+}
+
+async function toggleCallControl(button) {
+
+    const call = activeCall;
+    if (!call) return;
     const action = button.dataset.callAction;
-    const newPressed = button.getAttribute("aria-pressed") !== "true";
-    button.setAttribute("aria-pressed", String(newPressed));
 
     if (action === "mute") {
-        // pressed = замьючен
-        activeCall.localStream.getAudioTracks().forEach((track) => { track.enabled = !newPressed; });
-    } else if (action === "camera") {
-        // pressed = камера включена
-        activeCall.localStream.getVideoTracks().forEach((track) => { track.enabled = newPressed; });
+        call.local.muted = !call.local.muted;
+        call.localStream.getAudioTracks().forEach((track) => { track.enabled = !call.local.muted; });
+        playCallTone(call.local.muted ? "mute" : "unmute");
+    } else if (action === "camera" || action === "screen") {
+        // Пока камера/экран включаются (запрос разрешения может висеть секунды),
+        // повторное нажатие не должно запускать второй такой же запрос.
+        if (call.mediaBusy) return;
+        call.mediaBusy = true;
+        try {
+            if (action === "camera") { if (call.local.video) await stopCallCamera(call); else await startCallCamera(call); }
+            else { if (call.local.screen) await stopCallScreen(call); else await startCallScreen(call); }
+        } finally {
+            call.mediaBusy = false;
+        }
     }
-    // "speaker" — переключение физического устройства вывода (setSinkId)
-    // поддерживается не всеми браузерами одинаково, оставляем визуальным
-    // переключателем без реального эффекта, как безопасный минимум.
+    if (activeCall !== call) return;
+    sendCallState();
+    renderCallControls();
+    renderCallMedia();
 
 }
+
+async function startCallCamera(call, deviceId) {
+    const sender = callVideoSender(call);
+    if (!sender) { toast("Собеседник пользуется старой версией — видео в этом звонке недоступно"); return; }
+    let track;
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
+        });
+        track = stream.getVideoTracks()[0];
+    } catch (error) {
+        toast(error?.name === "NotAllowedError" ? "Нет доступа к камере" : "Камера не найдена");
+        return;
+    }
+    if (activeCall !== call) { track.stop(); return; }
+    call.localStream.getVideoTracks().forEach((old) => { old.stop(); call.localStream.removeTrack(old); });
+    call.localStream.addTrack(track);
+    call.cameraId = deviceId || track.getSettings?.().deviceId || null;
+    if (!call.local.screen) await sender.replaceTrack(track).catch(() => {});
+    call.local.video = true;
+    if (!call.qualityTimer && call.connectedAt) startCallQualityMonitor(call.callId);
+}
+
+async function stopCallCamera(call) {
+    const sender = callVideoSender(call);
+    call.localStream.getVideoTracks().forEach((track) => { track.stop(); call.localStream.removeTrack(track); });
+    if (sender && !call.local.screen) await sender.replaceTrack(null).catch(() => {});
+    call.local.video = false;
+}
+
+async function startCallScreen(call) {
+    const sender = callVideoSender(call);
+    if (!sender) { toast("Собеседник пользуется старой версией — показ экрана в этом звонке недоступен"); return; }
+    if (!navigator.mediaDevices?.getDisplayMedia) { toast("Показ экрана не поддерживается на этом устройстве"); return; }
+    let track;
+    try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 30 } }, audio: false, selfBrowserSurface: "exclude" });
+        track = stream.getVideoTracks()[0];
+    } catch (error) {
+        if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") toast("Не удалось показать экран");
+        return;
+    }
+    if (activeCall !== call) { track.stop(); return; }
+    try { track.contentHint = "detail"; } catch {}
+    track.addEventListener("ended", () => {
+        if (activeCall === call && call.screenTrack === track) stopCallScreen(call).then(() => { sendCallState(); renderCallControls(); renderCallMedia(); });
+    });
+    call.screenTrack = track;
+    await sender.replaceTrack(track).catch(() => {});
+    call.local.screen = true;
+}
+
+async function stopCallScreen(call) {
+    const sender = callVideoSender(call);
+    call.screenTrack?.stop();
+    call.screenTrack = null;
+    call.local.screen = false;
+    // Вернуть камеру, если она была включена до показа экрана.
+    const camera = call.localStream.getVideoTracks()[0] || null;
+    if (sender) await sender.replaceTrack(camera).catch(() => {});
+}
+
+/* ---- окно звонка ------------------------------------------------------------------------------ */
 
 function closeCallFromBackdrop(event) {
-    if (event.target === event.currentTarget) endCall();
+    // Раньше клик мимо окна ЗАВЕРШАЛ звонок — легко сбросить разговор случайно.
+    // Теперь окно просто сворачивается (входящий — не трогаем).
+    if (event.target === event.currentTarget && activeCall) minimizeCall();
 }
-
-/* ---- UI-состояния звонка ---- */
 
 function setCallPersonInfo(name, avatarUrl) {
     document.getElementById("call-name").textContent = name || "Собеседник";
+    // Стиль ставим через style.*, а не setAttribute(... из avatarParts): там адрес фото
+    // уже экранирован под HTML (&quot;), и как CSS он не читался — фото не показывалось.
+    const paint = (el) => {
+        if (!el) return;
+        const parts = avatarParts({ name: name || "Собеседник", url: null });
+        el.removeAttribute("style");
+        if (avatarUrl) {
+            el.innerHTML = "";
+            el.style.backgroundImage = cssUrlValue(avatarUrl);
+            el.style.backgroundSize = "cover";
+            el.style.backgroundPosition = "center";
+        } else {
+            el.innerHTML = parts.inner;
+            el.style.background = (parts.style.match(/background:([^;"]+)/) || [])[1] || "";
+            el.style.color = "#fff";
+        }
+    };
     const avatarEl = document.getElementById("call-avatar");
-    if (avatarUrl) {
-        avatarEl.style.backgroundImage = `url(${avatarUrl})`;
-        avatarEl.style.backgroundSize = "cover";
-        avatarEl.style.backgroundPosition = "center";
-        avatarEl.textContent = "";
-    } else {
-        avatarEl.style.backgroundImage = "";
-        avatarEl.textContent = "👤";
+    paint(avatarEl);
+    avatarEl.classList.toggle("has-initials", !avatarUrl);
+    const bg = document.getElementById("call-bg-photo");
+    if (bg) {
+        bg.style.backgroundImage = avatarUrl ? cssUrlValue(avatarUrl) : "";
+        bg.hidden = !avatarUrl;
     }
+    paint(document.getElementById("call-mini-avatar"));
+    const miniName = document.getElementById("call-mini-name");
+    if (miniName) miniName.textContent = name || "Собеседник";
+}
+
+function openCallBackdrop(phase) {
+    const backdrop = document.getElementById("call-backdrop");
+    const dialog = backdrop.querySelector(".call-dialog");
+    dialog.dataset.phase = phase;   // ringing-out | ringing-in | connecting | connected
+    dialog.classList.toggle("is-connected", phase === "connected" || !!activeCall?.connectedAt);
+    backdrop.classList.add("open");
+    backdrop.setAttribute("aria-hidden", "false");
+    document.getElementById("call-mini").hidden = true;
+    document.body.classList.add("in-call-ui");
+    callPokeControls();
 }
 
 function showOutgoingCallUI() {
-
-    const backdrop = document.getElementById("call-backdrop");
-    const dialog = backdrop.querySelector(".call-dialog");
-
     document.getElementById("call-kind").textContent = activeCall.isVideo ? "Видеозвонок" : "Аудиозвонок";
     document.getElementById("call-state").textContent = "Вызов…";
     setCallPersonInfo(activeCall.remoteName, activeCall.remoteAvatarUrl);
-
-    dialog.classList.toggle("has-video", activeCall.isVideo);
-    const videoArea = document.getElementById("call-video-area");
-    videoArea.hidden = !activeCall.isVideo;
-    if (activeCall.isVideo) document.getElementById("call-local-video").srcObject = activeCall.localStream;
-
     document.getElementById("call-controls-incoming").hidden = true;
-    const incall = document.getElementById("call-controls-incall");
-    incall.hidden = false;
-    const cameraControl = incall.querySelector('[data-call-action="camera"]').closest(".call-control");
-    cameraControl.hidden = !activeCall.isVideo;
-    cameraControl.setAttribute("aria-pressed", "true");
-    incall.querySelector('[data-call-action="mute"]').setAttribute("aria-pressed", "false");
-
-    backdrop.classList.add("open");
-    backdrop.setAttribute("aria-hidden", "false");
-
+    document.getElementById("call-controls-incall").hidden = false;
+    document.getElementById("call-remote-muted").hidden = true;
+    document.getElementById("call-key").hidden = true;
+    renderCallControls();
+    renderCallMedia();
+    openCallBackdrop("ringing-out");
 }
 
 function showIncomingCallUI(offer) {
 
-    const backdrop = document.getElementById("call-backdrop");
-    const dialog = backdrop.querySelector(".call-dialog");
-
     document.getElementById("call-kind").textContent = offer.isVideo ? "Входящий видеозвонок" : "Входящий звонок";
-    document.getElementById("call-state").textContent = "Звонит…";
+    document.getElementById("call-state").textContent = offer.isVideo ? "Видеозвонок…" : "Звонит вам…";
     setCallPersonInfo(offer.callerName, offer.callerAvatarUrl);
 
-    dialog.classList.remove("has-video");
     document.getElementById("call-video-area").hidden = true;
-
     document.getElementById("call-controls-incall").hidden = true;
     document.getElementById("call-controls-incoming").hidden = false;
-
-    backdrop.classList.add("open");
-    backdrop.setAttribute("aria-hidden", "false");
-
-    if (appSettings.receiveSound) playReceiveSound();
+    document.getElementById("call-remote-muted").hidden = true;
+    document.getElementById("call-key").hidden = true;
+    document.getElementById("call-signal").hidden = true;
+    const dialog = document.querySelector("#call-backdrop .call-dialog");
+    dialog.classList.remove("has-remote-video", "has-local-video", "is-connected");
+    openCallBackdrop("ringing-in");
+    startCallTone("ringtone");
 
     // Окно не на виду (другая вкладка, свёрнуто, в трее) — системное уведомление о звонке.
     if (typeof Notification !== "undefined" && Notification.permission === "granted" && (document.hidden || !document.hasFocus())) {
@@ -1822,31 +2159,14 @@ function showIncomingCallUI(offer) {
 }
 
 function showInCallUI() {
-
-
-    const backdrop = document.getElementById("call-backdrop");
-    const dialog = backdrop.querySelector(".call-dialog");
-
     document.getElementById("call-kind").textContent = activeCall.isVideo ? "Видеозвонок" : "Аудиозвонок";
     document.getElementById("call-state").textContent = "Соединение…";
     setCallPersonInfo(activeCall.remoteName, activeCall.remoteAvatarUrl);
-
-    dialog.classList.toggle("has-video", activeCall.isVideo);
-    const videoArea = document.getElementById("call-video-area");
-    videoArea.hidden = !activeCall.isVideo;
-    if (activeCall.isVideo) document.getElementById("call-local-video").srcObject = activeCall.localStream;
-
     document.getElementById("call-controls-incoming").hidden = true;
-    const incall = document.getElementById("call-controls-incall");
-    incall.hidden = false;
-    const cameraControl = incall.querySelector('[data-call-action="camera"]').closest(".call-control");
-    cameraControl.hidden = !activeCall.isVideo;
-    cameraControl.setAttribute("aria-pressed", "true");
-    incall.querySelector('[data-call-action="mute"]').setAttribute("aria-pressed", "false");
-
-    backdrop.classList.add("open");
-    backdrop.setAttribute("aria-hidden", "false");
-
+    document.getElementById("call-controls-incall").hidden = false;
+    renderCallControls();
+    renderCallMedia();
+    openCallBackdrop("connecting");
 }
 
 function hideCallUI() {
@@ -1854,7 +2174,351 @@ function hideCallUI() {
     backdrop.classList.remove("open");
     backdrop.setAttribute("aria-hidden", "true");
     document.getElementById("call-video-area").hidden = true;
+    document.getElementById("call-mini").hidden = true;
+    document.getElementById("call-devices").hidden = true;
+    document.getElementById("call-key-hint").hidden = true;
+    const dialog = backdrop.querySelector(".call-dialog");
+    dialog.classList.remove("has-remote-video", "has-local-video", "is-connected", "controls-idle", "swapped");
+    document.body.classList.remove("in-call-ui");
+    clearTimeout(callIdleTimer);
 }
+
+// Кнопки: подписи и «нажатость» по реальному состоянию.
+function renderCallControls() {
+    const call = activeCall;
+    if (!call) return;
+    const set = (action, pressed, label, title) => {
+        const button = document.querySelector(`#call-controls-incall [data-call-action="${action}"]`);
+        if (!button) return;
+        button.setAttribute("aria-pressed", String(pressed));
+        const span = button.querySelector(".call-control-label");
+        if (span) span.textContent = label;
+        button.title = title;
+    };
+    set("mute", call.local.muted, call.local.muted ? "Вкл. звук" : "Микрофон", call.local.muted ? "Включить микрофон (M)" : "Выключить микрофон (M)");
+    set("camera", call.local.video, call.local.video ? "Камера" : "Видео", call.local.video ? "Выключить камеру (V)" : "Включить камеру (V)");
+    set("screen", call.local.screen, call.local.screen ? "Стоп" : "Экран", call.local.screen ? "Остановить показ экрана" : "Показать экран");
+    const screenBtn = document.querySelector('#call-controls-incall [data-call-action="screen"]');
+    if (screenBtn) screenBtn.hidden = !navigator.mediaDevices?.getDisplayMedia || /Android|iPhone|iPad/.test(navigator.userAgent);
+    const miniMute = document.getElementById("call-mini-mute");
+    if (miniMute) miniMute.classList.toggle("on", call.local.muted);
+}
+
+// Что показывать: видео собеседника на весь экран, своё — в окошке, или аватар.
+function renderCallMedia() {
+    const call = activeCall;
+    const dialog = document.querySelector("#call-backdrop .call-dialog");
+    if (!call || !dialog) return;
+    const remoteVideoTrack = call.remoteStream?.getVideoTracks().find((t) => t.readyState === "live");
+    const remoteVideo = !!remoteVideoTrack && (call.remote.video || call.remote.screen) && !remoteVideoTrack.muted;
+    const localVideo = call.local.video || call.local.screen;
+    const area = document.getElementById("call-video-area");
+    area.hidden = !remoteVideo && !localVideo;
+    dialog.classList.toggle("has-remote-video", remoteVideo);
+    dialog.classList.toggle("has-local-video", localVideo);
+    dialog.classList.toggle("remote-screen", remoteVideo && call.remote.screen);
+    if (!remoteVideo || !localVideo) dialog.classList.remove("swapped");
+
+    // Привязка к конкретной дорожке: после «выкл → вкл» камеры дорожка новая, и
+    // элемент со старым потоком мог остаться чёрным.
+    const localEl = document.getElementById("call-local-video");
+    const localTrack = call.local.screen && call.screenTrack ? call.screenTrack : call.localStream.getVideoTracks()[0];
+    const wantKey = localTrack ? localTrack.id : "";
+    if (localVideo && localTrack && localEl.dataset.src !== wantKey) {
+        localEl.srcObject = new MediaStream([localTrack]);
+        localEl.dataset.src = wantKey;
+        localEl.play?.().catch(() => {});
+    } else if (!localVideo && localEl.srcObject) {
+        localEl.srcObject = null;
+        localEl.dataset.src = "";
+    }
+    localEl.classList.toggle("mirror", !call.local.screen);
+
+    // Включили видео посреди аудиозвонка — и подпись сверху меняется.
+    const kind = document.getElementById("call-kind");
+    if (kind && call.connectedAt) kind.textContent = remoteVideo || localVideo ? (call.remote.screen || call.local.screen ? "Показ экрана" : "Видеозвонок") : "Аудиозвонок";
+
+    const muted = document.getElementById("call-remote-muted");
+    if (muted) {
+        muted.hidden = !call.remote.muted || !call.connectedAt;
+        const label = muted.querySelector("span");
+        if (label) label.textContent = `${(call.remoteName || "Собеседник").split(" ")[0]} выключил(а) микрофон`;
+    }
+    const miniVideo = document.getElementById("call-mini-video");
+    if (miniVideo) {
+        miniVideo.hidden = !remoteVideo;
+        if (remoteVideo && miniVideo.srcObject !== call.remoteStream) { miniVideo.srcObject = call.remoteStream; miniVideo.play?.().catch(() => {}); }
+    }
+    renderCallSignal();
+}
+
+/* ---- свернуть / развернуть ---- */
+
+function minimizeCall() {
+    if (!activeCall) return;
+    const backdrop = document.getElementById("call-backdrop");
+    backdrop.classList.remove("open");
+    backdrop.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("in-call-ui");
+    document.getElementById("call-devices").hidden = true;
+    const mini = document.getElementById("call-mini");
+    mini.hidden = false;
+    document.getElementById("call-mini-state").textContent = callStatusText();
+    renderCallControls();
+    renderCallMedia();
+}
+
+function restoreCall() {
+    if (!activeCall) return;
+    const dialog = document.querySelector("#call-backdrop .call-dialog");
+    openCallBackdrop(dialog.dataset.phase || "connected");
+    renderCallMedia();
+}
+
+/* ---- элементы управления исчезают в видеозвонке, если мышь не двигается ---- */
+
+let callIdleTimer = null;
+function callPokeControls() {
+    const dialog = document.querySelector("#call-backdrop .call-dialog");
+    if (!dialog) return;
+    dialog.classList.remove("controls-idle");
+    clearTimeout(callIdleTimer);
+    callIdleTimer = setTimeout(() => {
+        if (dialog.classList.contains("has-remote-video") && document.getElementById("call-devices").hidden) dialog.classList.add("controls-idle");
+    }, 3500);
+}
+
+/* ---- своё видео: перетаскивается в любой угол, клик — поменять местами с собеседником ---- */
+
+(function initCallPip() {
+    const pip = document.getElementById("call-local-video");
+    if (!pip) return;
+    let drag = null;
+    pip.addEventListener("pointerdown", (event) => {
+        const dialog = pip.closest(".call-dialog");
+        if (dialog.classList.contains("swapped")) return;   // крупно своё — тянуть нечего
+        const rect = pip.getBoundingClientRect();
+        drag = { x: event.clientX, y: event.clientY, dx: event.clientX - rect.left, dy: event.clientY - rect.top, moved: false, id: event.pointerId };
+        pip.setPointerCapture(event.pointerId);
+    });
+    pip.addEventListener("pointermove", (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 6) return;
+        drag.moved = true;
+        const box = pip.parentElement.getBoundingClientRect();
+        pip.classList.add("dragging");
+        pip.style.left = (event.clientX - drag.dx - box.left) + "px";
+        pip.style.top = (event.clientY - drag.dy - box.top) + "px";
+        pip.style.right = pip.style.bottom = "auto";
+    });
+    const end = (event) => {
+        if (!drag) return;
+        const wasDrag = drag.moved;
+        drag = null;
+        pip.classList.remove("dragging");
+        if (!wasDrag) {
+            const dialog = pip.closest(".call-dialog");
+            if (dialog.classList.contains("has-remote-video")) dialog.classList.toggle("swapped");
+            return;
+        }
+        // Прилипнуть к ближайшему углу.
+        const box = pip.parentElement.getBoundingClientRect();
+        const rect = pip.getBoundingClientRect();
+        const right = rect.left + rect.width / 2 > box.left + box.width / 2;
+        const bottom = rect.top + rect.height / 2 > box.top + box.height / 2;
+        pip.style.left = pip.style.top = pip.style.right = pip.style.bottom = "";
+        pip.dataset.corner = (bottom ? "b" : "t") + (right ? "r" : "l");
+    };
+    pip.addEventListener("pointerup", end);
+    pip.addEventListener("pointercancel", end);
+    // Клик по большому своему видео (после «поменять местами») — вернуть как было.
+    document.getElementById("call-remote-video")?.addEventListener("click", () => {
+        document.querySelector("#call-backdrop .call-dialog")?.classList.remove("swapped");
+    });
+})();
+
+/* ---- устройства: микрофон, динамик, камера ---- */
+
+async function toggleCallDevices() {
+    const panel = document.getElementById("call-devices");
+    if (!panel.hidden) { panel.hidden = true; return; }
+    const call = activeCall;
+    if (!call) return;
+    let devices = [];
+    try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { /* без списка */ }
+    const micId = call.localStream.getAudioTracks()[0]?.getSettings?.().deviceId || "";
+    const camId = call.cameraId || call.localStream.getVideoTracks()[0]?.getSettings?.().deviceId || "";
+    const remoteEl = document.getElementById("call-remote-video");
+    const canPickOutput = typeof remoteEl?.setSinkId === "function";
+    const select = (kind, current, label, onchange) => {
+        const list = devices.filter((d) => d.kind === kind);
+        if (!list.length) return "";
+        return `<label class="call-device-row"><span>${label}</span><select onchange="${onchange}(this.value)">${
+            list.map((d, i) => `<option value="${escapeHTML(d.deviceId)}"${d.deviceId === current ? " selected" : ""}>${escapeHTML(d.label || `${label} ${i + 1}`)}</option>`).join("")}</select></label>`;
+    };
+    panel.innerHTML =
+        select("audioinput", micId, "Микрофон", "switchCallMic") +
+        (canPickOutput ? select("audiooutput", call.outputId || "default", "Динамик", "switchCallOutput") : "") +
+        select("videoinput", camId, "Камера", "switchCallCamera") ||
+        `<div class="call-device-empty">Устройства не найдены</div>`;
+    panel.hidden = false;
+}
+
+async function switchCallMic(deviceId) {
+    const call = activeCall;
+    if (!call) return;
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+        const track = stream.getAudioTracks()[0];
+        track.enabled = !call.local.muted;
+        const sender = call.pc.getSenders().find((s) => s.track?.kind === "audio");
+        await sender?.replaceTrack(track);
+        call.localStream.getAudioTracks().forEach((old) => { old.stop(); call.localStream.removeTrack(old); });
+        call.localStream.addTrack(track);
+        toast("Микрофон переключён");
+    } catch { toast("Не удалось переключить микрофон"); }
+}
+
+async function switchCallOutput(deviceId) {
+    const call = activeCall;
+    if (!call) return;
+    call.outputId = deviceId;
+    try { await document.getElementById("call-remote-video").setSinkId(deviceId); toast("Звук переключён"); }
+    catch { toast("Не удалось переключить динамик"); }
+}
+
+async function switchCallCamera(deviceId) {
+    const call = activeCall;
+    if (!call) return;
+    if (!call.local.video) { call.cameraId = deviceId; return; }
+    await startCallCamera(call, deviceId);
+    renderCallMedia();
+}
+
+/* ---- «ключ» шифрования: 4 эмодзи из отпечатков DTLS обеих сторон ----
+   Совпадают у вас и у собеседника — между вами никто не вклинился (как в Telegram). */
+
+const CALL_KEY_EMOJI = ["🐶","🐱","🦊","🐻","🐼","🐨","🐯","🦁","🐮","🐷","🐸","🐵","🐔","🐧","🐦","🦉","🦄","🐝","🦋","🐢","🐙","🐬","🐳","🦈","🌵","🌲","🍀","🌻","🌹","🍄","🌙","⭐","🔥","🌈","☀️","❄️","🍎","🍋","🍉","🍇","🍓","🍒","🥝","🍕","🍔","🍩","🍪","🎂","⚽","🏀","🎸","🎧","🎲","🚀","✈️","🚗","⚓","🔑","💎","🎁","📷","💡","🔔","🎈"];
+
+async function showCallEncryptionKey(call) {
+    try {
+        const prints = [call.pc.localDescription?.sdp, call.pc.remoteDescription?.sdp]
+            .map((sdp) => (/a=fingerprint:\S+ (\S+)/.exec(sdp || "") || [])[1] || "")
+            .filter(Boolean).sort();
+        if (prints.length < 2 || !crypto.subtle) return;
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(prints.join("|"))));
+        if (activeCall !== call) return;
+        const emoji = [0, 1, 2, 3].map((i) => CALL_KEY_EMOJI[digest[i] % CALL_KEY_EMOJI.length]).join("");
+        document.getElementById("call-key-emoji").textContent = emoji;
+        document.getElementById("call-key").hidden = false;
+    } catch { /* без ключа */ }
+}
+
+function toggleCallKeyHint() {
+    const hint = document.getElementById("call-key-hint");
+    hint.hidden = !hint.hidden;
+}
+
+// Аватар собеседника «дышит» в такт его голосу — как в Telegram (только анализ, звук не дублируется).
+function startCallVoiceMeter(call) {
+    if (!call || call.voiceMeter) return;
+    const track = call.remoteStream?.getAudioTracks()[0];
+    const ctx = track && callAudioCtx();
+    if (!ctx) return;
+    try {
+        const source = ctx.createMediaStreamSource(new MediaStream([track]));
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        const buffer = new Float32Array(analyser.fftSize);
+        const wrap = document.querySelector("#call-backdrop .call-avatar-wrap");
+        let raf = 0, last = 0, level = 0;
+        const tick = (now) => {
+            raf = requestAnimationFrame(tick);
+            if (now - last < 66) return;
+            last = now;
+            analyser.getFloatTimeDomainData(buffer);
+            let sum = 0;
+            for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+            const target = call.remote.muted ? 0 : Math.min(1, Math.sqrt(sum / buffer.length) * 7);
+            level = level * 0.55 + target * 0.45;
+            wrap?.style.setProperty("--level", level.toFixed(3));
+        };
+        raf = requestAnimationFrame(tick);
+        call.voiceMeter = { stop: () => { cancelAnimationFrame(raf); try { source.disconnect(); } catch {} wrap?.style.setProperty("--level", "0"); } };
+    } catch { /* без анимации голоса */ }
+}
+
+/* ---- звуки звонка: гудки, мелодия входящего, соединение, отбой ---- */
+
+let callToneCtx = null;
+let callToneTimer = null;
+
+function callAudioCtx() {
+    if (!callToneCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        callToneCtx = new Ctx();
+    }
+    if (callToneCtx.state === "suspended") callToneCtx.resume().catch(() => {});
+    return callToneCtx;
+}
+
+function callBeep(freq, start, duration, volume = 0.12, type = "sine") {
+    const ctx = callAudioCtx();
+    if (!ctx) return;
+    const t0 = ctx.currentTime + start;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(volume, t0 + 0.02);
+    gain.gain.setValueAtTime(volume, t0 + Math.max(0.03, duration - 0.05));
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + duration + 0.02);
+}
+
+function startCallTone(kind) {
+    stopCallTone();
+    const play = kind === "ringback"
+        ? () => callBeep(425, 0, 0.9, 0.08)                         // длинный гудок, как в телефоне
+        : () => { [660, 880, 990, 880].forEach((f, i) => callBeep(f, i * 0.16, 0.15, 0.11, "triangle")); };
+    play();
+    callToneTimer = setInterval(play, kind === "ringback" ? 4000 : 2200);
+}
+
+function stopCallTone() {
+    clearInterval(callToneTimer);
+    callToneTimer = null;
+}
+
+function playCallTone(kind) {
+    if (kind === "connect") { callBeep(660, 0, 0.09, 0.09); callBeep(990, 0.11, 0.12, 0.09); }
+    else if (kind === "end") { [480, 480, 480].forEach((f, i) => callBeep(f, i * 0.32, 0.18, 0.08)); }
+    else if (kind === "mute") callBeep(330, 0, 0.1, 0.07);
+    else if (kind === "unmute") callBeep(520, 0, 0.1, 0.07);
+}
+
+/* ---- клавиши: M — микрофон, V — камера, Esc — свернуть ---- */
+
+document.addEventListener("keydown", (event) => {
+    if (!activeCall || !document.getElementById("call-backdrop").classList.contains("open")) return;
+    if (event.target.closest?.("input, textarea, select, [contenteditable='true']") || event.ctrlKey || event.metaKey || event.altKey) return;
+    const button = (action) => document.querySelector(`#call-controls-incall [data-call-action="${action}"]`);
+    if (event.code === "KeyM") { event.preventDefault(); toggleCallControl(button("mute")); }
+    else if (event.code === "KeyV" && activeCall.connectedAt) { event.preventDefault(); toggleCallControl(button("camera")); }
+    else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        // Сначала закрываем открытые панели (устройства, подсказку), потом — сворачиваем.
+        const devices = document.getElementById("call-devices"), hint = document.getElementById("call-key-hint");
+        if (!devices.hidden || !hint.hidden) { devices.hidden = true; hint.hidden = true; return; }
+        minimizeCall();
+    }
+}, true);
 
 
 /* ============================================================================

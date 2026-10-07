@@ -248,7 +248,7 @@ window.addEventListener("pagehide", () => {
     KabanAPI.updateMyPresenceOnExit();
 });
 function restoreDemoState() {
-    document.getElementById("demo-chat-section").hidden = false;
+    document.getElementById("demo-chat-section").hidden = true;
     document.getElementById("sidebar-empty-chats").hidden = true;
     document.getElementById("real-chat-list").hidden = true;
     document.getElementById("real-chat-list").innerHTML = "";
@@ -435,6 +435,10 @@ function applyChatWallpaper(chatId) {
         if (wallpaper.css) chatArea.style.setProperty("--wp", wallpaper.css);
         else chatArea.style.removeProperty("--wp");
         chatArea.classList.toggle("has-wallpaper", !!wallpaper.css);
+        // Узор — отдельный слой поверх градиента (см. PATTERN_WALLPAPERS).
+        if (wallpaper.pattern) chatArea.style.setProperty("--wpp", wallpaper.pattern);
+        else chatArea.style.removeProperty("--wpp");
+        chatArea.classList.toggle("has-pattern", !!wallpaper.pattern);
     }
 
     const hint = document.getElementById("chat-wallpaper-hint");
@@ -891,10 +895,10 @@ async function saveProfileChanges() {
     const bio = document.getElementById("profile-bio-input").value.trim();
     const statusEmoji = document.getElementById("profile-status-emoji-btn").dataset.emoji || null;
 
-    if (!displayName) { toast("Введите имя"); return; }
-    if (displayName.length > 64) { toast("Имя слишком длинное (максимум 64 символа)"); return; }
-    if (bio.length > 300) { toast("«О себе» слишком длинно (максимум 300 символов)"); return; }
-    if (!/^[a-z0-9_]{3,32}$/.test(username)) { toast("Юзернейм: 3–32 символа, латиница/цифры/«_»"); return; }
+    if (!displayName) { toast("Введите имя"); return false; }
+    if (displayName.length > 64) { toast("Имя слишком длинное (максимум 64 символа)"); return false; }
+    if (bio.length > 300) { toast("«О себе» слишком длинно (максимум 300 символов)"); return false; }
+    if (!/^[a-z0-9_]{3,32}$/.test(username)) { toast("Юзернейм: 3–32 символа, латиница/цифры/«_»"); return false; }
 
     const button = document.getElementById("profile-save-btn");
     button.disabled = true;
@@ -907,11 +911,13 @@ async function saveProfileChanges() {
         document.getElementById("profile-screen-username-display").textContent = `@${cachedMyProfile.username}`;
         captureProfileFormSnapshot(); // успешно сохранили — это и есть новая база для "несохранённых изменений"
         toast("Профиль обновлён");
+        return true;
     } catch (error) {
         const message = /duplicate key|already exists/i.test(error?.message || "")
             ? "Этот юзернейм уже занят"
             : "Не удалось сохранить: " + (error?.message || error);
         toast(message);
+        return false;
     } finally {
         button.disabled = false;
         button.textContent = "Сохранить профиль";
@@ -1036,11 +1042,24 @@ function saveChatListSnapshot() {
     } catch { /* место в браузере закончилось — просто без снимка */ }
 }
 
+// Первый вход на этом устройстве (снимка ещё нет): вместо пустоты — «скелет»
+// списка с мягким переливом, как в Telegram. Настоящие строки заменят его сами.
+function showChatListSkeleton() {
+    const list = document.getElementById("real-chat-list");
+    if (!list || cachedChatRows.length || list.querySelector(".real-chat")) return;
+    const widths = [[62, 84], [48, 70], [70, 56], [40, 78], [56, 64], [66, 50]];
+    list.innerHTML = `<div class="chat-skeleton-list" aria-hidden="true">${widths.map(([a, b]) => `
+        <div class="chat-skeleton"><span class="sk-avatar"></span><span class="sk-lines"><span class="sk-line" style="width:${a}%"></span><span class="sk-line short" style="width:${b}%"></span></span></div>`).join("")}</div>`;
+    list._headerKey = null;
+    list.hidden = false;
+    document.getElementById("sidebar-empty-chats").hidden = true;
+}
+
 function restoreChatListSnapshot() {
     if (cachedChatRows.length || !myRealUserId) return false;
     try {
         const rows = JSON.parse(localStorage.getItem(chatListSnapshotKey()) || "null");
-        if (!Array.isArray(rows) || !rows.length) return false;
+        if (!Array.isArray(rows) || !rows.length) { showChatListSkeleton(); return false; }
         cachedChatRows = rows;
         renderChatListFromCache();
         updateUnreadTitleBadge();
@@ -1060,6 +1079,13 @@ async function loadChatListOnce() {
         cachedChatRows = await KabanAPI.getChats();
     } catch (error) {
         console.warn("Не удалось загрузить список чатов", error);
+        // Заглушки-«скелет» не должны переливаться вечно, если сеть так и не ответила.
+        const list = document.getElementById("real-chat-list");
+        if (!cachedChatRows.length && list?.querySelector(".chat-skeleton-list")) {
+            list.innerHTML = "";
+            list.hidden = true;
+            document.getElementById("sidebar-empty-chats").hidden = false;
+        }
         return;
     }
 
@@ -1383,10 +1409,12 @@ function buildChatListItemHTML(row) {
     // по-человечески) — точку "в сети" у него просто не показываем.
     const isOnline = !isGroup && !isBot && isUserEffectivelyOnline(other);
 
-    const avatarStyle = isGroup && chat.avatar_url
-        ? ` style="background-image:${escapeHTML(cssUrlValue(chat.avatar_url))};background-size:cover;background-position:center"`
-        : "";
-    const avatarGlyph = isGroup ? (chat.avatar_url ? "" : "👥") : (isSavedMessages ? "🔖" : isBot ? "🤖" : "👤");
+    const av = avatarParts(isGroup
+        ? { id: chat.id, name, url: chat.avatar_url, kind: "group" }
+        : isSavedMessages ? { id: chat.id, name, kind: "saved" }
+        : { id: other?.id, name, url: other?.avatar_url, kind: isBot && !other?.avatar_url ? "bot" : "user" });
+    const avatarStyle = av.style;
+    const avatarGlyph = av.inner;
 
     const unreadCount = row.unreadCount || 0;
     const unreadBadge = unreadCount > 0
@@ -1395,8 +1423,8 @@ function buildChatListItemHTML(row) {
             ? `<span class="chat-unread-badge chat-unread-dot" onclick="event.stopPropagation(); markChatReadWithoutOpening('${chat.id}')" title="Пометить прочитанным"></span>`
             : "");
 
-    const pinIcon = row.is_pinned ? `<span class="chat-pin-icon" aria-label="Закреплён" title="Закреплён">📌</span>` : "";
-    const muteIcon = row.is_muted ? `<span class="chat-mute-icon" aria-label="Без звука" title="Без звука">🔕</span>` : "";
+    const pinIcon = row.is_pinned ? `<span class="chat-pin-icon" aria-label="Закреплён" title="Закреплён"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 3.5h5l-.8 5.2 3.3 3v1.8H7v-1.8l3.3-3Z"/><path d="M12 13.5v7"/></svg></span>` : "";
+    const muteIcon = row.is_muted ? `<span class="chat-mute-icon" aria-label="Без звука" title="Без звука"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3.5L12 18V6L7.5 10Z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg></span>` : "";
 
     return `
         <div
@@ -1408,7 +1436,7 @@ function buildChatListItemHTML(row) {
             onclick="handleChatRowTap('${chat.id}', this)"
             onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openRealChat('${chat.id}'); }"
         >
-            <div class="chat-avatar${isOnline ? " online" : ""}${isSavedMessages ? " chat-avatar-saved" : ""}${isBot ? " chat-avatar-bot" : ""}"${avatarStyle}>${avatarGlyph}</div>
+            <div class="chat-avatar${av.cls}${isOnline ? " online" : ""}${isSavedMessages ? " chat-avatar-saved" : ""}${isBot ? " chat-avatar-bot" : ""}"${avatarStyle}>${avatarGlyph}</div>
             <div class="chat-content">
                 <div class="chat-line">
                     <span class="chat-name">${isSecret ? "🔒 " : ""}${escapeHTML(name)}${statusEmoji}${pinIcon}${muteIcon}</span>
@@ -1703,7 +1731,41 @@ function openTabQuickMenu(tab) {
 }
 
 function closeTabQuickMenu() {
-    document.getElementById("tab-quick-menu-backdrop").hidden = true;
+    const backdrop = document.getElementById("tab-quick-menu-backdrop");
+    backdrop.hidden = true;
+    backdrop.classList.remove("as-popover");
+}
+
+// На компьютере то же меню, что по долгому тапу, открывается правой кнопкой мыши —
+// не шторкой снизу, а аккуратным всплывающим меню у курсора (как в Telegram Desktop).
+function positionQuickMenuAt(x, y) {
+    const backdrop = document.getElementById("tab-quick-menu-backdrop");
+    const menu = document.getElementById("tab-quick-menu");
+    if (backdrop.hidden) return;
+    backdrop.classList.add("as-popover");
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const w = menu.offsetWidth, h = menu.offsetHeight;
+    const left = Math.min(x, window.innerWidth - w - 8);
+    const top = y + h > window.innerHeight - 8 ? Math.max(8, y - h) : y;
+    menu.style.left = Math.max(8, left) + "px";
+    menu.style.top = top + "px";
+    menu.style.transformOrigin = `${x - left}px ${y >= top ? y - top : 0}px`;
+}
+
+function attachContextMenu(container, rowSelector, open) {
+    // На телефоне долгий тап сам рождает contextmenu — там меню уже открыл attachLongPress
+    // (шторкой снизу). Иначе открывалось бы второе, всплывающее, поверх первого.
+    let lastPointerType = "mouse";
+    container.addEventListener("pointerdown", (event) => { lastPointerType = event.pointerType || "mouse"; }, { passive: true });
+    container.addEventListener("contextmenu", (event) => {
+        const row = event.target.closest(rowSelector);
+        if (!row) return;
+        event.preventDefault();
+        if ((event.pointerType || lastPointerType) === "touch" || (event.pointerType || lastPointerType) === "pen") return;
+        open(row);
+        positionQuickMenuAt(event.clientX, event.clientY);
+    });
 }
 
 async function inviteFriend() {
@@ -1772,10 +1834,8 @@ function getContactsFromChats() {
 function buildContactRowHTML(user) {
     const statusEmoji = user.status_emoji
         ? `<span class="status-emoji-badge">${escapeHTML(user.status_emoji)}</span>` : "";
-    const avatarStyle = user.avatar_url
-        ? ` style="background-image:${escapeHTML(cssUrlValue(user.avatar_url))};background-size:cover;background-position:center"`
-        : "";
     const isBot = !!user.is_bot;
+    const av = avatarParts({ id: user.id, name: user.display_name || user.username, url: user.avatar_url, kind: isBot && !user.avatar_url ? "bot" : "user" });
     const online = !isBot && isUserEffectivelyOnline(user);
     // "был(а) N мин. назад" вместо голого @username — та же формула, что уже
     // показывается в шапке открытого чата (formatLastSeen), для
@@ -1794,7 +1854,7 @@ function buildContactRowHTML(user) {
             onclick="handleContactRowTap('${user.id}', this)"
             onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); startRealChatWith('${user.id}'); }"
         >
-            <div class="chat-avatar${online ? " online" : ""}${isBot ? " chat-avatar-bot" : ""}"${avatarStyle}>${user.avatar_url ? "" : (isBot ? "🤖" : "👤")}</div>
+            <div class="chat-avatar${av.cls}${online ? " online" : ""}${isBot ? " chat-avatar-bot" : ""}"${av.style}>${av.inner}</div>
             <div class="chat-content">
                 <div class="chat-line">
                     <span class="chat-name">${escapeHTML(user.display_name || user.username || "Пользователь")}${statusEmoji}</span>
@@ -2126,6 +2186,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (contactsSearchResults) attachLongPress(contactsSearchResults, ".chat", (row) => openContactQuickMenu(row.dataset.userId));
     const realChatList = document.getElementById("real-chat-list");
     if (realChatList) attachLongPress(realChatList, ".real-chat", (row) => openChatQuickMenu(row.dataset.chatId));
+    if (realChatList) attachContextMenu(realChatList, ".real-chat", (row) => openChatQuickMenu(row.dataset.chatId));
+    if (contactsList) attachContextMenu(contactsList, ".chat", (row) => openContactQuickMenu(row.dataset.userId));
+    if (contactsSearchResults) attachContextMenu(contactsSearchResults, ".chat", (row) => openContactQuickMenu(row.dataset.userId));
     if (realChatList) attachChatSwipeGestures(realChatList);
 });
 
@@ -2674,6 +2737,7 @@ function refreshGroupSenderLabels() {
         const name = currentChatMembersById.get(message.sender_id)?.display_name || "Участник";
         if (label.textContent !== name) label.textContent = name;
     });
+    refreshMessageAvatars();
 }
 
 async function openRealChat(chatId) {
@@ -3383,8 +3447,61 @@ function buildReplyQuoteHTML(replyToId, replyExcerpt) {
         : original
             ? (original.deleted_at ? "Сообщение удалено" : (original.text || "Вложение"))
             : "Сообщение";
+    // Имя автора цитируемого сообщения сверху — как в Telegram.
+    const author = original ? messageAuthorName(original.sender_id) : "";
     // data-reply-to — клик по цитате переносит к исходному сообщению (как в Telegram).
-    return `<span class="message-reply-quote" data-reply-to="${escapeHTML(replyToId)}" role="button" tabindex="0" title="Перейти к сообщению">${escapeHTML(text)}</span>`;
+    return `<span class="message-reply-quote" data-reply-to="${escapeHTML(replyToId)}" role="button" tabindex="0" title="Перейти к сообщению">${author ? `<b class="reply-author">${escapeHTML(author)}</b>` : ""}<span class="reply-text">${escapeHTML(text)}</span></span>`;
+}
+
+function messageAuthorName(senderId) {
+    if (!senderId) return "";
+    if (senderId === myRealUserId) return cachedMyProfile?.display_name || "Вы";
+    const member = currentChatMembersById.get(senderId);
+    if (member?.display_name) return member.display_name;
+    const other = cachedChatRows.find((r) => r.chat_id === currentChatId)?.otherUser;
+    return other && other.id === senderId ? (loadContactAlias(other.id) || other.display_name || "") : "";
+}
+
+// Аватар у сообщения — виден в режиме «Все сообщения слева» (как в Telegram
+// Desktop) у последнего сообщения в серии. Данные участников группы приходят
+// позже самих сообщений — тогда refreshMessageAvatars дорисует фото и имена.
+function messageAvatarParts(senderId) {
+    let url = null;
+    if (senderId === myRealUserId) url = cachedMyProfile?.avatar_url || null;
+    else {
+        url = currentChatMembersById.get(senderId)?.avatar_url || null;
+        const other = cachedChatRows.find((r) => r.chat_id === currentChatId)?.otherUser;
+        if (!url && other && other.id === senderId) url = other.avatar_url || null;
+    }
+    return avatarParts({ id: senderId, name: messageAuthorName(senderId) || "?", url });
+}
+
+function messageAvatarHTML(senderId) {
+    const av = messageAvatarParts(senderId);
+    const key = escapeHTML(av.style + av.inner);
+    return `<span class="msg-avatar${av.cls}"${av.style} data-av="${key}" aria-hidden="true">${av.inner}</span>`;
+}
+
+function refreshMessageAvatars() {
+    document.querySelectorAll("#messages .message-row[data-sender-id] > .msg-avatar").forEach((el) => {
+        const av = messageAvatarParts(el.parentElement.dataset.senderId);
+        // Сравниваем по ключу, а не по outerHTML: браузер сериализует style по-своему,
+        // и раньше перерисовывался КАЖДЫЙ аватар ленты при каждой подгрузке участников.
+        if (el.dataset.av !== av.style + av.inner) el.outerHTML = messageAvatarHTML(el.parentElement.dataset.senderId);
+    });
+    // Имена авторов в цитатах ответов — тоже могли прийти позже сообщений.
+    document.querySelectorAll("#messages .message-reply-quote[data-reply-to]").forEach((quote) => {
+        const original = realMessagesById.get(quote.dataset.replyTo);
+        const name = original ? messageAuthorName(original.sender_id) : "";
+        if (!name) return;
+        let author = quote.querySelector(".reply-author");
+        if (!author) {
+            author = document.createElement("b");
+            author.className = "reply-author";
+            quote.prepend(author);
+        }
+        if (author.textContent !== name) author.textContent = name;
+    });
 }
 
 document.getElementById("messages")?.addEventListener("click", (event) => {
@@ -3426,6 +3543,10 @@ function appendRealMessageRow(message, isMine, { prepend = false } = {}) {
     } catch (error) {
         console.warn("Не удалось отрисовать сообщение", message?.id, error);
         row.innerHTML = `<div class="message"><span class="message-text">⚠️ Сообщение не удалось показать</span></div><div class="message-reactions"></div>`;
+    }
+    if (message.sender_id) {
+        row.dataset.senderId = message.sender_id;
+        row.insertAdjacentHTML("afterbegin", messageAvatarHTML(message.sender_id));
     }
 
     if (message.deleted_at) row.classList.add("deleted");

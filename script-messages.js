@@ -1173,7 +1173,10 @@ function buildMessageRowInnerHTML(message, isMine) {
     // заставляет браузер следить за мутациями потомков КАЖДОГО пузыря в ленте
     // (любая реакция/правка/статус пересчитывает его для всех видимых
     // сообщений) — обычный класс решает ту же задачу без этой цены.
-    const bubbleClass = bodyText.includes('class="video-circle"') ? "message has-video-circle" : "message";
+    // has-block — в пузыре не текст, а «карточка» (игра, опрос, файл, голосовое):
+    // время и галочки тогда встают отдельной строкой СПРАВА, а не прилипают слева под карточкой.
+    const isBlockBody = !message.deleted_at && (message.attachment_meta?.poll || message.attachment_meta?.game || message.type !== "text");
+    const bubbleClass = bodyText.includes('class="video-circle"') ? "message has-video-circle" : isBlockBody ? "message has-block" : "message";
 
     return `
         <div class="${bubbleClass}">
@@ -1250,6 +1253,7 @@ function updateRealMessageRow(messageId, { force = false } = {}) {
         console.warn("Не удалось перерисовать сообщение", messageId, error);
         return;
     }
+    if (message.sender_id && typeof messageAvatarHTML === "function") row.insertAdjacentHTML("afterbegin", messageAvatarHTML(message.sender_id));
     row.classList.toggle("deleted", !!message.deleted_at);
     // Чипы реакций пересоздаются ниже — класс отступа под них снимаем, иначе после
     // снятия последней реакции под пузырём оставалась пустая дыра.
