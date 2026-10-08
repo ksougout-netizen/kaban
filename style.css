@@ -8500,7 +8500,7 @@ body.mobile-tab-calls #sidebar-calls-view {
 .group-member-add-row[hidden] { display: none; }
 .group-danger-card { margin-bottom: 0; }
 .group-card .group-section-btn > span.group-ico { flex: none; }
-.group-members-card .new-chat-result-avatar { width: 40px; height: 40px; border-radius: 50%; background-color: var(--border); font-size: 18px; }
+.group-members-card .new-chat-result-avatar { width: 40px; height: 40px; flex: 0 0 40px; aspect-ratio: 1; border-radius: 50%; background-color: var(--border); font-size: 18px; }
 .group-members-card .group-info-member-name { font-size: 14px; font-weight: 500; }
 /* ========================================================================
    КАРТОЧКА СОБЕСЕДНИКА — тот же язык, что и у профиля группы
