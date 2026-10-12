@@ -1329,6 +1329,7 @@ const MESSAGE_TYPE_PREVIEW_LABELS = {
 function messagePreviewText(message) {
     if (message.type === "text") return message.text || "";
     if (message.type === "call" && typeof callLogInfo === "function") return callLogInfo(message).title;
+    if ((message.type === "image" || message.type === "video") && message.text) return `${MESSAGE_TYPE_PREVIEW_LABELS[message.type]}, ${message.text}`;
     return MESSAGE_TYPE_PREVIEW_LABELS[message.type] || "📎 Вложение";
 }
 
@@ -4200,7 +4201,7 @@ function isSecretChatId(chatId) {
     return !!cachedChatRows.find((r) => r.chat_id === chatId)?.chats?.is_secret;
 }
 
-async function sendRealAttachment(file, type) {
+async function sendRealAttachment(file, type, options = {}) {
 
     // Снимок на момент вызова — та же причина, что и в sendRealMessage:
     // загрузка файла может занять заметное время, пользователь может
@@ -4233,10 +4234,14 @@ async function sendRealAttachment(file, type) {
 
     toast("Загружаем файл…");
 
+    // Подпись к фото/видео (из редактора): уходит в text сообщения, показывается под вложением.
+    const caption = (type === "image" || type === "video") ? String(options?.caption || "").trim().slice(0, 1024) : "";
+
     let message;
     try {
         message = await sendAttachmentReliably(targetChatId, file, (url) => ({
             type,
+            ...(caption ? { text: caption } : {}),
             attachmentUrl: url,
             attachmentMeta: { name: file.name, size: file.size, mime: file.type },
             replyToId

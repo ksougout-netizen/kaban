@@ -5317,6 +5317,16 @@ img.message-image {
     cursor: pointer;
 }
 
+/* Подпись под фото/видео (из редактора). Ширина пузыря держится по картинке. */
+.message-caption {
+    display: block;
+    max-width: min(280px, 65vw);
+    margin-top: 6px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.4;
+}
+
 .message-file-name {
     margin-top: 4px;
     font-size: 11px;
@@ -12451,3 +12461,40 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
     .pe-tool { flex: 0 0 auto; min-width: 62px; }
     .pe-panel { border-left: 0; border-top: 1px solid var(--pe-line); }
 }
+/* эмодзи в редакторе */
+.pe-emojis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+
+.pe-emojis button {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    font-size: 21px;
+    line-height: 1;
+    transition: background .12s ease, transform .12s cubic-bezier(.34,1.56,.64,1);
+}
+
+.pe-emojis button:hover { background: var(--pe-surface2); transform: scale(1.14); }
+.pe-emojis button:active { transform: scale(.92); }
+
+/* подпись к фото */
+.pe-caption {
+    flex: 1;
+    min-width: 0;
+    height: 42px;
+    padding: 0 18px;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: var(--pe-surface2);
+    color: var(--pe-text);
+    font: inherit;
+    font-size: 14px;
+    transition: border-color .15s ease, background .15s ease;
+}
+
+.pe-caption::placeholder { color: var(--pe-muted); }
+.pe-caption:focus { outline: none; border-color: var(--pe-accent); background: #2c303a; }
+.pe-info { flex: 0 0 auto; min-width: 84px; }

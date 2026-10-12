@@ -43,6 +43,7 @@
         arrow: '<path d="M5 19 19 5M10 5h9v9"/>',
         blur: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M4 9h16M4 14h16M9 4v16M14 4v16" opacity=".55"/>',
         text: '<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/>',
+        emoji: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 14c.9 1.4 2.1 2.1 3.5 2.1s2.6-.7 3.5-2.1M9.2 9.8h.01M14.8 9.8h.01"/>',
         crop: '<path d="M7 3v14h14M3 7h14v14"/>',
         undo: '<path d="M9 7 4.5 11.5 9 16"/><path d="M5 11.5h8.5a5 5 0 0 1 0 10H11"/>',
         redo: '<path d="m15 7 4.5 4.5L15 16"/><path d="M19 11.5h-8.5a5 5 0 0 0 0 10H13"/>',
@@ -58,8 +59,14 @@
         { id: "arrow", label: "Стрелка", key: "A" },
         { id: "blur", label: "Размытие", key: "B" },
         { id: "text", label: "Текст", key: "T" },
+        { id: "emoji", label: "Эмодзи", key: "E" },
         { id: "crop", label: "Кадрирование", short: "Кадр", key: "C" }
     ];
+
+    const EMOJIS = ["😀", "😂", "🥹", "😍", "😎", "🥳", "😭", "😡", "🤔", "😱", "🙈", "👀",
+        "👍", "👎", "👏", "🙏", "💪", "🤝", "🔥", "❤️", "💔", "⭐", "✨", "🎉",
+        "🎈", "🎂", "🎁", "🌈", "☀️", "🌙", "⚡", "💯", "✅", "❌", "❗", "❓",
+        "➡️", "⬅️", "⬆️", "⬇️", "🔴", "🟢", "🟡", "🔵", "📍", "🚗", "🏠", "☕"];
 
     const SIZE_RANGE = {
         pen: [1, 30], marker: [6, 60], arrow: [2, 24], blur: [12, 90], text: [12, 120]
@@ -191,6 +198,13 @@
                             </div>
                         </section>
 
+                        <section class="pe-sec" id="pe-sec-emoji" hidden>
+                            <h3>Эмодзи</h3>
+                            <div class="pe-emojis" id="pe-emojis">
+                                ${EMOJIS.map((e) => `<button type="button" data-emoji="${e}" aria-label="Эмодзи ${e}">${e}</button>`).join("")}
+                            </div>
+                        </section>
+
                         <section class="pe-sec" id="pe-sec-crop" hidden>
                             <h3>Пропорции</h3>
                             <div class="pe-ratios" id="pe-ratios">
@@ -223,6 +237,7 @@
 
                 <footer class="pe-footer">
                     <span class="pe-info" id="pe-info"></span>
+                    <input type="text" class="pe-caption" id="pe-caption" maxlength="1024" placeholder="Добавить подпись…" autocomplete="off" aria-label="Подпись к фото">
                     <button type="button" class="pe-send" data-pe="send">${svg("send")}<span>Отправить</span></button>
                 </footer>
             </section>`;
@@ -245,7 +260,8 @@
             size: root.querySelector("#pe-size"),
             sizeOut: root.querySelector("#pe-size-out"),
             sizeLabel: root.querySelector("#pe-size-label"),
-            customColor: root.querySelector("#pe-color-custom")
+            customColor: root.querySelector("#pe-color-custom"),
+            caption: root.querySelector("#pe-caption")
         };
         photoCtx = els.photo.getContext("2d");
         overlayCtx = els.overlay.getContext("2d");
@@ -264,9 +280,10 @@
 
         els.root.addEventListener("click", (event) => {
 
-            const button = event.target.closest("[data-pe], [data-tool], [data-color], [data-ratio], [data-style]");
+            const button = event.target.closest("[data-pe], [data-tool], [data-color], [data-ratio], [data-style], [data-emoji]");
             if (!button) return;
 
+            if (button.dataset.emoji) { addEmoji(button.dataset.emoji); return; }
             if (button.dataset.tool) { setTool(button.dataset.tool); return; }
             if (button.dataset.color) { applyColor(button.dataset.color); return; }
             if (button.dataset.ratio) { setRatio(button.dataset.ratio); return; }
@@ -289,6 +306,12 @@
 
         els.customColor.addEventListener("input", () => applyColor(els.customColor.value, true));
 
+        // Подпись: Enter — отправить (как в поле сообщения), Escape не закрывает окно целиком.
+        els.caption.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(false); }
+            else if (event.key === "Escape") { event.stopPropagation(); els.caption.blur(); }
+        });
+
         // Ползунки коррекции: фильтр применяется мгновенно, в историю — когда отпустили.
         els.root.querySelectorAll("[data-adj]").forEach((input) => {
             input.addEventListener("input", () => {
@@ -308,8 +331,8 @@
 
         els.size.addEventListener("input", () => {
             const value = Number(els.size.value);
-            state.size[sizeToolKey()] = value;
             const layer = selectedLayer();
+            if (!layer?.emoji) state.size[sizeToolKey()] = value;
             if (layer?.type === "text") { layer.size = value * unit(); render(); }
             syncSizeUI();
         });
@@ -325,7 +348,7 @@
         overlay.addEventListener("pointercancel", onPointerUp);
         overlay.addEventListener("dblclick", (event) => {
             const layer = hitText(toImage(event));
-            if (layer) startTextEdit(layer, false);
+            if (layer && !layer.emoji) startTextEdit(layer, false);
         });
         overlay.addEventListener("wheel", (event) => {
             const layer = selectedLayer();
@@ -362,7 +385,7 @@
 
         if (!state.open) return;
 
-        const typing = event.target === els.textInput;
+        const typing = event.target === els.textInput || event.target === els.caption;   // в полях ввода горячие клавиши и Ctrl+Z — обычные
         const key = event.key;
         const mod = event.ctrlKey || event.metaKey;
 
@@ -415,6 +438,7 @@
 
         accentCache = "";
         drawnPhotoKey = "";
+        els.caption.value = "";
         els.root.hidden = false;
         els.root.classList.remove("is-visible");
         requestAnimationFrame(() => els.root.classList.add("is-visible"));
@@ -598,6 +622,7 @@
     }
 
     function textFont(layer) {
+        if (layer.emoji) return `${layer.size}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
         return `600 ${layer.size}px Inter, "Segoe UI", system-ui, -apple-system, sans-serif`;
     }
 
@@ -629,7 +654,10 @@
         ctx.textBaseline = "middle";
 
         let fill = layer.color;
-        if (layer.style === "bubble") {
+        if (layer.emoji) {
+            ctx.shadowColor = "rgba(0,0,0,.28)";
+            ctx.shadowBlur = layer.size * 0.06;
+        } else if (layer.style === "bubble") {
             ctx.fillStyle = layer.color;
             roundRect(ctx, box.x, box.y, box.w, box.h, layer.size * 0.5);
             ctx.fill();
@@ -982,6 +1010,25 @@
 
     /* ---- текст ------------------------------------------------------------- */
 
+    // Эмодзи — тот же слой, что и текст (двигается, масштабируется уголком и колесом), только без цвета и стиля.
+    function addEmoji(char) {
+
+        if (!state.base) return;
+        const layer = {
+            id: state.nextId++, type: "text", emoji: true, text: char,
+            x: state.base.width / 2 + (state.layers.length % 5) * 18 * unit(),
+            y: state.base.height / 2 + (state.layers.length % 5) * 18 * unit(),
+            size: 90 * unit(), color: "#ffffff", style: "plain", angle: 0
+        };
+        state.layers.push(layer);
+        setTool("move");
+        select(layer.id);
+        record();
+        syncPanel();
+        render();
+
+    }
+
     function createText(p) {
 
         const layer = {
@@ -1074,7 +1121,7 @@
         if (state.selectedId === id) return;
         state.selectedId = id;
         const layer = selectedLayer();
-        if (layer?.type === "text") {
+        if (layer?.type === "text" && !layer.emoji) {
             state.color = layer.color;
             state.textStyle = layer.style;
             state.size.text = Math.round(layer.size / unit());
@@ -1109,6 +1156,7 @@
         arrow: "Зажмите, потяните и отпустите. Shift — ровно под 45°.",
         blur: "Проведите кистью по лицам, паролям, номерам — область скроется пикселизацией.",
         text: "Нажмите на фото и введите текст. Его можно двигать и масштабировать.",
+        emoji: "Нажмите на эмодзи — оно появится на фото. Потом перетащите его и измените размер белым уголком или колесом мыши.",
         crop: "Потяните рамку за края и углы. Пропорции можно зафиксировать."
     };
 
@@ -1116,23 +1164,28 @@
 
         const tool = state.tool;
         const selected = selectedLayer();
+        const emojiSelected = !!selected?.emoji;
         const textMode = tool === "text" || (tool === "move" && selected?.type === "text");
-        const colorMode = textMode || tool === "pen" || tool === "marker" || tool === "arrow";
+        const colorMode = (textMode && !emojiSelected) || tool === "pen" || tool === "marker" || tool === "arrow";
         const sizeMode = textMode || tool === "pen" || tool === "marker" || tool === "arrow" || tool === "blur";
 
         els.root.querySelectorAll(".pe-tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === tool));
         els.hint.textContent = HINTS[tool] || "";
         els.root.querySelector("#pe-sec-color").hidden = !colorMode;
         els.root.querySelector("#pe-sec-size").hidden = !sizeMode;
-        els.root.querySelector("#pe-sec-textstyle").hidden = !textMode;
+        els.root.querySelector("#pe-sec-textstyle").hidden = !(textMode && !emojiSelected);
+        els.root.querySelector("#pe-sec-emoji").hidden = tool !== "emoji";
         els.root.querySelector("#pe-sec-crop").hidden = tool !== "crop";
 
         const key = sizeToolKey();
         const [lo, hi] = SIZE_RANGE[key] || SIZE_RANGE.pen;
         els.size.min = lo;
         els.size.max = hi;
-        els.size.value = state.size[key] ?? lo;
-        els.sizeLabel.textContent = key === "text" ? "Размер текста" : key === "blur" ? "Размер кисти" : "Толщина";
+        // Для выделенного текста/эмодзи ползунок показывает его настоящий размер.
+        els.size.value = (tool === "move" || tool === "text") && selected?.type === "text"
+            ? Math.round(selected.size / unit())
+            : (state.size[key] ?? lo);
+        els.sizeLabel.textContent = emojiSelected ? "Размер эмодзи" : key === "text" ? "Размер текста" : key === "blur" ? "Размер кисти" : "Толщина";
         syncSizeUI();
 
         els.root.querySelectorAll(".pe-swatch[data-color]").forEach((s) => s.classList.toggle("active", s.dataset.color.toLowerCase() === state.color.toLowerCase()));
@@ -1163,7 +1216,7 @@
     function applyColor(color, custom) {
         state.color = color;
         const layer = selectedLayer();
-        if (layer && (layer.type === "text")) { layer.color = color; record(); }
+        if (layer && layer.type === "text" && !layer.emoji) { layer.color = color; record(); }
         if (state.editing) positionTextInput();
         syncPanel();
         render();
@@ -1173,7 +1226,7 @@
     function applyTextStyle(style) {
         state.textStyle = style;
         const layer = selectedLayer();
-        if (layer?.type === "text") { layer.style = style; record(); }
+        if (layer?.type === "text" && !layer.emoji) { layer.style = style; record(); }
         if (state.editing) positionTextInput();
         syncPanel();
         render();
@@ -1461,9 +1514,11 @@
         const original = state.file;
 
         // Ничего не менялось (или выбрано «без изменений») — уходит исходный файл, без пересжатия.
+        const caption = els.caption.value.trim();
+
         if (asOriginal || state.hIdx <= 0) {
             closeEditor(true);
-            onSend?.(original);
+            onSend?.(original, { caption });
             return;
         }
 
@@ -1477,7 +1532,7 @@
             const baseName = (original?.name || "photo").replace(/\.[^.]+$/, "") || "photo";
             const file = new File([blob], `${baseName}-edited.jpg`, { type: "image/jpeg" });
             closeEditor(true);
-            onSend?.(file);
+            onSend?.(file, { caption });
         } catch (error) {
             console.warn("Редактор: экспорт не удался", error);
             note("Не удалось собрать изображение: " + (error?.message || error));
@@ -1502,11 +1557,11 @@
 
     function openForChat(file) {
         const targetChat = currentChatId;
-        openPhotoEditor(file, (final) => {
+        openPhotoEditor(file, (final, extra) => {
             // Пока редактировали, могли переключить чат — шлём туда, откуда открывали.
             if (currentChatId !== targetChat && typeof openRealChat === "function") {
-                openRealChat(targetChat).then(() => sendRealAttachment(final, "image")).catch(() => sendRealAttachment(final, "image"));
-            } else sendRealAttachment(final, "image");
+                openRealChat(targetChat).then(() => sendRealAttachment(final, "image", extra)).catch(() => sendRealAttachment(final, "image", extra));
+            } else sendRealAttachment(final, "image", extra);
         });
     }
 

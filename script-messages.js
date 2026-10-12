@@ -648,6 +648,12 @@ function callBackFromMessage(kind) {
     startCall(kind);
 }
 
+// Подпись к фото/видео (приходит из редактора перед отправкой) — текст под вложением.
+function buildCaptionHTML(message) {
+    if ((message.type !== "image" && message.type !== "video") || !message.text) return "";
+    return `<span class="message-caption">${renderFormattedText(message.text)}</span>`;
+}
+
 function buildAttachmentHTML(message) {
 
     const url = message.attachment_url;
@@ -1242,7 +1248,7 @@ function buildMessageRowInnerHTML(message, isMine) {
             ? buildGameHTML(message)
             : message.type === "text"
             ? `<span class="message-text">${renderFormattedText(message.text || "")}</span>`
-            : buildAttachmentHTML(message));
+            : buildAttachmentHTML(message) + buildCaptionHTML(message));
 
     // В группах над чужим сообщением подписываем автора (как в Telegram) —
     // в личных чатах и так ясно, кто писал, поэтому только для group.
@@ -2263,6 +2269,7 @@ function messagePreviewText(message) {
     if (message.attachment_meta?.poll) return "📊 " + message.attachment_meta.poll.question;
     if (message.type === "call") return callLogInfo(message).title;
     if (message.type === "text") return message.text || "Сообщение";
+    if ((message.type === "image" || message.type === "video") && message.text) return `${MESSAGE_TYPE_LABELS[message.type]}, ${message.text}`;
     const label = MESSAGE_TYPE_LABELS[message.type] || "Вложение";
     const name = message.attachment_meta?.name;
     return name ? `${label}: ${name}` : label;
