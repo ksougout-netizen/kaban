@@ -1102,6 +1102,7 @@ function closeSettings() {
     backdrop.classList.remove("open");
     backdrop.setAttribute("aria-hidden", "true");
     document.querySelector(".profile .icon-btn").focus();
+    if (typeof syncBottomNavActive === "function") syncBottomNavActive();
 
 }
 

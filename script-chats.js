@@ -1597,7 +1597,12 @@ function handleChatRowTap(chatId, element) {
 // персистентный таб (Чаты/Контакты остаются как были под шторкой).
 function switchMobileTab(tab) {
 
-    if (document.body.classList.contains("chat-selected")) {
+    // Настройки и профиль открываются ПОВЕРХ чата — выходить из него не нужно.
+    // Из чата на список чатов/контактов/звонков переходим только на телефоне, где
+    // чат занимает весь экран; на компьютере список слева, а чат остаётся открытым.
+    const isOverlayTab = tab === "settings" || tab === "profile";
+    const chatFillsScreen = window.innerWidth <= 650;
+    if (document.body.classList.contains("chat-selected") && !isOverlayTab && chatFillsScreen) {
         backToChats();
     }
 
@@ -1628,6 +1633,16 @@ function switchMobileTab(tab) {
         renderCallHistory();
     }
 
+}
+
+// После закрытия настроек подсвечиваем снова ту вкладку, на которой были, а не «Настройки».
+function syncBottomNavActive() {
+    const tab = document.body.classList.contains("mobile-tab-contacts") ? "contacts"
+        : document.body.classList.contains("mobile-tab-calls") ? "calls"
+        : "chats";
+    document.querySelectorAll(".bottom-nav-item").forEach((button) => {
+        button.classList.toggle("active", button.dataset.tab === tab);
+    });
 }
 
 function openProfileFromSettings() {

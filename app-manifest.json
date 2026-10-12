@@ -1,5 +1,5 @@
 {
- "version": "20261007-113",
+ "version": "20261007-114",
  "minShell": "1.0.0",
  "files": {
   "apple-touch-icon.png": {
@@ -39,7 +39,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "70b90e36c32bcfbad2952343b32b3bb7e40367927d52c3e98d9b46b9d8652531",
+   "sha256": "09a01a6bf65604175f032d0a4a9b30b653688fefc13e69a926839d4ed5d5c823",
    "size": 236416
   },
   "listen.js": {
@@ -71,12 +71,12 @@
    "size": 12631
   },
   "script-chats.js": {
-   "sha256": "9df824dc4b5e54b062a7d4c87702485dc994ba6a3ed361e57c093ee07b9895f4",
-   "size": 238135
+   "sha256": "e2d5d1cd2e0242e75752c8ec9acaf004dd0b48c03a89e832d7f6cbd5091946fc",
+   "size": 239257
   },
   "script-core.js": {
-   "sha256": "b564aff57f6f70237da3e2179c71ce26b41e122b7439035ccbb599632f7b95f9",
-   "size": 367699
+   "sha256": "88dbb7ded88ac9ee927173df48d02a8625bdaeb7c26a95d11315891cf3c88a63",
+   "size": 367773
   },
   "script-messages.js": {
    "sha256": "3dd759516bc6c816a1621214b60fdf574fa419b2b3777c20ffe0894efc918355",
