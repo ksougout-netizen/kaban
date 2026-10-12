@@ -12843,3 +12843,512 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
 .message-contact { width: min(260px, 70vw); gap: 12px; }
 .message-contact-title { font-size: 13.5px; font-weight: 700; }
 .message-contact-hint { font-size: 12px; }
+/* ============================================================================
+   ОСТАЛЬНЫЕ ВЛОЖЕНИЯ — как в Telegram: круглая кнопка у голосового и файла,
+   геопозиция — картой на весь пузырь.
+   ========================================================================= */
+.message-row.received .voice-message .voice-message-play,
+.message-row.received .message-file-icon {
+    background: var(--accent);
+    color: var(--accent-text, #fff);
+}
+.message-row.sent .voice-message .voice-message-play,
+.message-row.sent .message-file-icon {
+    background: #fff;
+    color: var(--accent);
+}
+.voice-message .voice-message-play { width: 38px; height: 38px; flex-basis: 38px; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+.voice-message .voice-message-play:hover { filter: brightness(1.06); }
+.voice-message .voice-message-play svg { width: 16px; height: 16px; }
+
+.message-file { width: min(272px, 68vw); gap: 12px; }
+.message-file-icon {
+    position: relative;
+    width: 46px; height: 46px; flex: 0 0 46px;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,.15);
+}
+.message-file-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.message-file-copy .message-file-name { font-size: 14px; font-weight: 600; }
+.message-file-size { font-size: 12px; margin-top: 3px; }
+
+/* геопозиция: карта (плитки OpenStreetMap) с булавкой по центру */
+.message.has-media .message-location {
+    position: relative;
+    display: block;
+    width: min(300px, 72vw);
+    height: 170px;
+    padding: 0;
+    overflow: hidden;
+    background: #e8e4dc;
+}
+.message-location-map { position: absolute; inset: 0; overflow: hidden; }
+.message-location-tiles {
+    position: absolute;
+    width: 512px; height: 512px;
+    left: 50%; top: 50%;
+    margin-left: calc(var(--ox) * -1);
+    margin-top: calc(var(--oy) * -1);
+}
+.message-location-tiles img { position: absolute; width: 256px; height: 256px; max-width: none; user-select: none; -webkit-user-drag: none; }
+.message-location-pin {
+    position: absolute; left: 50%; top: 50%;
+    width: 38px; height: 38px;
+    transform: translate(-50%, -92%);
+    color: #e5484d;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,.35));
+}
+.message-location-pin svg { width: 100%; height: 100%; fill: currentColor; stroke: #fff; stroke-width: 1.4; }
+.message-location-pin svg circle { fill: #fff; stroke: none; }
+.message-location-label {
+    position: absolute; left: 8px; bottom: 8px;
+    padding: 2px 8px; border-radius: 999px;
+    background: rgba(0,0,0,.46); color: #fff;
+    font-size: 10.5px; line-height: 1.4;
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+
+/* ============================================================================
+   ПРОСМОТР ФОТО (viewer.js)
+   ========================================================================= */
+.pv {
+    position: fixed; inset: 0; z-index: 101;
+    display: flex; flex-direction: column;
+    background: rgba(0,0,0,calc(.94 * var(--pv-fade, 1)));
+    opacity: 0; visibility: hidden;
+    transition: opacity .2s ease, visibility .2s ease;
+    touch-action: none;
+    color: #fff;
+}
+.pv.open { opacity: 1; visibility: visible; }
+
+.pv-top {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 3;
+    display: flex; align-items: center; gap: 12px;
+    padding: max(12px, env(safe-area-inset-top)) 14px 22px;
+    background: linear-gradient(rgba(0,0,0,.55), transparent);
+    opacity: var(--pv-fade, 1);
+}
+.pv-avatar {
+    display: grid; place-items: center;
+    width: 40px; height: 40px; flex: 0 0 40px;
+    border-radius: 50%; overflow: hidden;
+    font-size: 15px; font-weight: 700;
+}
+.pv-avatar .avatar-initials { font-size: 15px; font-weight: 700; }
+.pv-who { flex: 1; min-width: 0; }
+.pv-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-meta { margin-top: 1px; font-size: 12.5px; opacity: .72; }
+
+.pv-btn, .pv-nav {
+    display: grid; place-items: center;
+    border: 0; border-radius: 50%;
+    background: rgba(255,255,255,.12);
+    color: #fff; cursor: pointer;
+    transition: background .15s ease, transform .15s ease;
+}
+.pv-btn { width: 40px; height: 40px; flex: 0 0 40px; }
+.pv-btn:hover, .pv-nav:hover { background: rgba(255,255,255,.22); }
+.pv-btn:active { transform: scale(.92); }
+.pv-btn svg, .pv-nav svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+.pv-stage {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    overflow: hidden;
+    cursor: zoom-in;
+    user-select: none;
+}
+.pv-stage.zoomed { cursor: grab; }
+.pv-img {
+    max-width: 100vw; max-height: 100vh;
+    width: auto; height: auto;
+    object-fit: contain;
+    will-change: transform;
+    user-select: none; -webkit-user-drag: none;
+}
+.pv-img.pv-in-right { animation: pv-in-right .26s cubic-bezier(.2,.8,.2,1); }
+.pv-img.pv-in-left  { animation: pv-in-left  .26s cubic-bezier(.2,.8,.2,1); }
+@keyframes pv-in-right { from { opacity: 0; margin-left: 60px; } to { opacity: 1; margin-left: 0; } }
+@keyframes pv-in-left  { from { opacity: 0; margin-left: -60px; } to { opacity: 1; margin-left: 0; } }
+
+.pv-nav { position: absolute; top: 50%; z-index: 3; width: 46px; height: 46px; margin-top: -23px; }
+.pv-prev { left: 16px; }
+.pv-next { right: 16px; }
+.pv-nav[hidden] { display: none; }
+
+.pv-bottom {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    padding: 28px 16px max(16px, env(safe-area-inset-bottom));
+    background: linear-gradient(transparent, rgba(0,0,0,.6));
+    pointer-events: none;
+    opacity: var(--pv-fade, 1);
+}
+.pv-caption {
+    max-width: min(640px, 92vw); max-height: 22vh; overflow-y: auto;
+    font-size: 14.5px; line-height: 1.4; text-align: center;
+    overflow-wrap: anywhere; white-space: pre-wrap;
+    pointer-events: auto;
+}
+.pv-counter {
+    padding: 4px 12px; border-radius: 999px;
+    background: rgba(255,255,255,.14);
+    font-size: 12px; font-weight: 600;
+}
+@media (max-width: 650px) {
+    .pv-nav { display: none; }
+}
+.message .message-file, .message .message-file:hover { color: inherit; text-decoration: none; }
+.message .message-file .message-file-size { opacity: .72; }
+
+/* ============================================================================
+   ВИДЕО В ЧАТЕ — обложка (первый кадр) с круглой кнопкой «играть» и длительностью,
+   как в Telegram. Сам просмотр — в окне viewer.js.
+   ========================================================================= */
+.message-video {
+    position: relative;
+    display: block;
+    width: min(280px, 65vw);
+    min-height: 150px;
+    max-height: 340px;
+    overflow: hidden;
+    border-radius: 12px;
+    background: #111;
+    cursor: pointer;
+}
+.message-video-el {
+    display: block;
+    width: 100%;
+    max-height: 340px;
+    object-fit: cover;
+    pointer-events: none;
+}
+.message-video-play {
+    position: absolute; left: 50%; top: 50%;
+    display: grid; place-items: center;
+    width: 54px; height: 54px;
+    margin: -27px 0 0 -27px;
+    border-radius: 50%;
+    background: rgba(0,0,0,.52);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    color: #fff;
+    transition: transform .15s ease, background .15s ease;
+}
+.message-video:hover .message-video-play { background: rgba(0,0,0,.66); transform: scale(1.06); }
+.message-video:active .message-video-play { transform: scale(.94); }
+.message-video-play svg { width: 24px; height: 24px; margin-left: 3px; fill: currentColor; }
+.message-video-dur {
+    position: absolute; left: 8px; top: 8px;
+    padding: 2px 8px; border-radius: 999px;
+    background: rgba(0,0,0,.46); color: #fff;
+    font-size: 10.5px; font-weight: 600; line-height: 1.4;
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.message-video-dur:empty { display: none; }
+
+.message.has-media > .message-video { width: min(340px, 72vw); border-radius: 0; }
+/* кнопки плеера больше не мешают — время снова внизу справа, длительность слева сверху */
+.message.has-media.media-video.media-only > .message-time { top: auto; bottom: 8px; }
+
+/* окно просмотра: видео */
+.pv-video {
+    max-width: 100vw; max-height: 100vh;
+    background: #000;
+    outline: none;
+}
+.pv-video[hidden], .pv-img[hidden] { display: none; }
+.pv-stage.is-video { cursor: default; }
+/* ============================================================================
+   ВЫБОР СООБЩЕНИЙ — панель и подсветка (selection.js)
+   ========================================================================= */
+.selection-bar { gap: 10px; padding: 8px 14px; min-height: 52px; }
+.selection-bar-cancel, .selection-bar-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.selection-bar-cancel { width: 36px; height: 36px; border-radius: 50%; background: transparent; }
+.selection-bar-cancel:hover { background: var(--surface2); }
+.selection-bar-cancel svg, .selection-bar-actions svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+.selection-bar-count { font-size: 15px; }
+.selection-bar-actions { gap: 4px; }
+.selection-bar-actions button {
+    width: auto; height: 36px; padding: 0 12px;
+    border-radius: 999px; background: transparent;
+    font-size: 13.5px; font-weight: 600;
+}
+.selection-bar-actions button:hover:not(:disabled) { background: var(--surface2); }
+.selection-bar-actions button:disabled { opacity: .38; cursor: default; }
+@media (max-width: 650px) {
+    .selection-bar-actions button { width: 38px; padding: 0; }
+    .selection-bar-actions button span { display: none; }
+}
+
+#messages.selection-mode { user-select: none; -webkit-user-select: none; }
+#messages.selection-mode .message-row { border-radius: 12px; transition: background .15s ease; }
+#messages.selection-mode .message-row.selected { background: color-mix(in srgb, var(--accent) 13%, transparent); }
+#messages.selection-mode .message-row:hover:not(.selected) { background: color-mix(in srgb, var(--accent) 6%, transparent); }#messages.selection-mode .message-row { align-self: stretch; width: 100%; max-width: 100%; box-sizing: border-box; }
+#messages.selection-mode .message-row.sent { justify-content: flex-end; }
+
+/* ============================================================================
+   МЕЛОЧИ ДЛЯ УДОБСТВА (convenience.js)
+   ========================================================================= */
+.chat-search-date { position: relative; display: inline-flex; }
+.chat-search-date .chat-search-action svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.chat-search-date-input { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+
+.selection-bar-actions .sel-bookmark { display: inline-flex; }
+
+/* подсказка у выделенного текста */
+.sel-pop {
+    position: fixed; z-index: 90;
+    display: flex; gap: 2px; padding: 4px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    animation: sel-pop-in .12s ease-out both;
+}
+.sel-pop[hidden] { display: none; }
+.sel-pop button {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 11px; border: 0; border-radius: 9px;
+    background: transparent; color: inherit; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.sel-pop button:hover { background: var(--surface2); }
+.sel-pop svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes sel-pop-in { from { opacity: 0; transform: translateY(4px) scale(.97); } to { opacity: 1; transform: none; } }
+
+/* предпросмотр документов */
+.dp-backdrop {
+    position: fixed; inset: 0; z-index: 100;
+    display: grid; place-items: center; padding: 16px;
+    background: rgba(0,0,0,.45);
+    opacity: 0; visibility: hidden;
+    transition: opacity .18s ease, visibility .18s ease;
+}
+.dp-backdrop.open { opacity: 1; visibility: visible; }
+.dp-card {
+    width: min(420px, 100%); max-height: 80vh;
+    display: flex; flex-direction: column;
+    background: var(--surface); color: var(--text);
+    border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+    transform: translateY(8px) scale(.98); transition: transform .18s ease;
+}
+.dp-backdrop.open .dp-card { transform: none; }
+.dp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 18px 20px 8px; }
+.dp-title { font-size: 17px; font-weight: 700; }
+.dp-total { font-size: 12.5px; color: var(--muted); }
+.dp-list { overflow-y: auto; padding: 4px 12px; }
+.dp-item { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; }
+.dp-item:hover { background: var(--surface2); }
+.dp-icon {
+    display: grid; place-items: center; flex: 0 0 46px; width: 46px; height: 46px;
+    border-radius: 50%; background: var(--accent); color: var(--accent-text, #fff);
+}
+.dp-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.dp-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dp-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-size { font-size: 12.5px; color: var(--muted); }
+.dp-warn { color: #d9363e; font-weight: 600; }
+.dp-remove {
+    display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px;
+    border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer;
+}
+.dp-remove:hover { background: var(--border); color: var(--text); }
+.dp-remove svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.dp-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px 16px; }
+.dp-actions button {
+    height: 38px; padding: 0 18px; border: 0; border-radius: 999px;
+    font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.dp-cancel { background: transparent; color: var(--accent); }
+.dp-cancel:hover { background: var(--accent-wash); }
+.dp-send { background: var(--accent); color: var(--accent-text, #fff); }
+.dp-send:hover:not(:disabled) { filter: brightness(1.08); }
+.dp-send:disabled { opacity: .4; cursor: default; }
+/* ============================================================================
+   ПОДЕЛИТЬСЯ КОНТАКТОМ И ПРОФИЛЬ ПО КАРТОЧКЕ (contact-share.js)
+   ========================================================================= */
+.cs-backdrop {
+    position: fixed; inset: 0; z-index: 100;
+    display: grid; place-items: center; padding: 16px;
+    background: rgba(0,0,0,.45);
+    opacity: 0; visibility: hidden;
+    transition: opacity .18s ease, visibility .18s ease;
+}
+.cs-backdrop.open { opacity: 1; visibility: visible; }
+.cs-card {
+    position: relative;
+    width: min(400px, 100%); max-height: 82vh;
+    display: flex; flex-direction: column;
+    background: var(--surface); color: var(--text);
+    border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+    transform: translateY(8px) scale(.98); transition: transform .18s ease;
+    overflow: hidden;
+}
+.cs-backdrop.open .cs-card { transform: none; }
+
+.cs-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 4px; }
+.cs-title { font-size: 17px; font-weight: 700; }
+.cs-close {
+    display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px;
+    border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer;
+}
+.cs-close:hover { background: var(--surface2); color: var(--text); }
+.cs-close svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.cs-close-abs { position: absolute; top: 10px; right: 10px; z-index: 2; }
+
+.cs-preview { display: flex; align-items: center; gap: 12px; margin: 6px 16px 10px; padding: 10px 12px; border-radius: 14px; background: var(--accent-wash); }
+.cs-search {
+    margin: 0 16px 8px; height: 40px; padding: 0 14px;
+    border: 0; border-radius: 12px; background: var(--surface2); color: var(--text);
+    font: inherit; font-size: 14px; outline: none;
+}
+.cs-search:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.cs-list { overflow-y: auto; padding: 0 8px 10px; min-height: 120px; }
+.cs-row {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    padding: 8px; border: 0; border-radius: 12px; background: transparent; color: inherit;
+    text-align: left; font: inherit; cursor: pointer;
+}
+.cs-row:hover { background: var(--surface2); }
+.cs-row:active { background: var(--border); }
+.cs-avatar {
+    display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px;
+    border-radius: 50%; overflow: hidden; color: #fff; font-size: 16px; font-weight: 700;
+}
+.cs-avatar .avatar-initials { font-size: 16px; font-weight: 700; }
+.cs-avatar-saved { background: linear-gradient(160deg, #6ec6ff, #3a8dff); }
+.cs-avatar-saved svg { width: 22px; height: 22px; fill: none; stroke: #fff; stroke-width: 1.9; stroke-linejoin: round; }
+.cs-row-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cs-row-name { font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-row-sub { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-empty { padding: 28px 12px; text-align: center; color: var(--muted); font-size: 14px; }
+
+/* профиль */
+.cs-profile { align-items: stretch; padding-bottom: 8px; }
+.cs-profile-top { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 26px 20px 10px; }
+.cs-avatar-big { width: 92px; height: 92px; flex-basis: 92px; font-size: 32px; margin-bottom: 8px; }
+.cs-avatar-big .avatar-initials { font-size: 32px; }
+.cs-profile-name { font-size: 20px; font-weight: 700; text-align: center; overflow-wrap: anywhere; }
+.cs-profile-user { font-size: 14px; color: var(--accent); }
+.cs-info-block { margin: 6px 16px 4px; padding: 10px 14px; border-radius: 14px; background: var(--surface2); }
+.cs-info-label { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.cs-info-text { font-size: 14.5px; line-height: 1.4; overflow-wrap: anywhere; white-space: pre-wrap; }
+.cs-profile-actions { display: flex; flex-direction: column; gap: 6px; padding: 10px 16px 12px; }
+.cs-profile-actions button { height: 42px; border: 0; border-radius: 12px; font: inherit; font-size: 14.5px; font-weight: 600; cursor: pointer; }
+.cs-profile-actions button[hidden] { display: none; }
+.cs-primary { background: var(--accent); color: var(--accent-text, #fff); }
+.cs-primary:hover { filter: brightness(1.08); }
+.cs-secondary { background: var(--surface2); color: var(--text); }
+.cs-secondary:hover { background: var(--border); }
+.cs-secondary.is-danger { color: #d9363e; }
+/* Карточка собеседника: фон (градиент, размытое фото, затемнение) лежит на неподвижной
+   панели, а прокручивается только содержимое внутри — раньше при прокрутке фото-слой
+   уезжал вверх, внизу оставался голый яркий фиолетовый градиент, а размытый слой
+   давал горизонтальную полоску прокрутки. */
+.info-window-left {
+    display: block;
+    padding: 0 !important;
+    overflow: hidden;
+    background: linear-gradient(170deg, hsl(var(--gh) 54% 52%), hsl(calc(var(--gh) + 14) 48% 41%));
+}
+.info-window-scroll {
+    position: relative;
+    z-index: 1;
+    height: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 54px 20px 22px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,.32) transparent;
+}
+.info-window-scroll::-webkit-scrollbar { width: 6px; height: 0; }
+.info-window-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.32); border-radius: 999px; }
+.info-window-scroll::-webkit-scrollbar-track { background: transparent; }
+.info.info-window.has-photo .info-window-left::before { inset: -40px; filter: blur(34px) saturate(.9) brightness(.9); }
+.info.info-window.has-photo .info-window-left::after { background: linear-gradient(180deg, rgba(0,0,0,.26), rgba(0,0,0,.5)); }
+@media (max-width: 650px) { .info-window-scroll { padding: 40px 18px 18px; } }
+/* Редактор в режиме историй: одно фото, без «ещё фото» и «без изменений» */
+.pe-backdrop.pe-story [data-pe="send-original"],
+.pe-backdrop.pe-story [data-pe="add-photos"],
+.pe-backdrop.pe-story .pe-thumb-add { display: none !important; }
+.story-photo-preview { position: relative; }
+.story-photo-preview:not(.has-image) .story-edit-chip { display: none; }
+.story-edit-chip {
+    position: absolute; right: 10px; bottom: 10px; z-index: 2;
+    height: 32px; padding: 0 14px; border: 0; border-radius: 999px;
+    background: rgba(0,0,0,.55); color: #fff;
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.story-edit-chip:hover { background: rgba(0,0,0,.7); }
+/* ============================================================================
+   РЕДАКТОР АВАТАРКИ (avatar-cropper.js)
+   ========================================================================= */
+.ac-backdrop {
+    position: fixed; inset: 0; z-index: 200;
+    display: grid; place-items: center; padding: 16px;
+    background: rgba(0,0,0,.55);
+    opacity: 0; visibility: hidden;
+    transition: opacity .18s ease, visibility .18s ease;
+}
+.ac-backdrop.open { opacity: 1; visibility: visible; }
+.ac-card {
+    width: min(400px, 100%);
+    display: flex; flex-direction: column;
+    background: var(--surface); color: var(--text);
+    border-radius: 20px; box-shadow: 0 24px 70px rgba(0,0,0,.4);
+    overflow: hidden;
+    transform: translateY(8px) scale(.98); transition: transform .18s ease;
+}
+.ac-backdrop.open .ac-card { transform: none; }
+.ac-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+.ac-title { font-size: 17px; font-weight: 700; }
+.ac-x { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
+.ac-x:hover { background: var(--surface2); color: var(--text); }
+.ac-x svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+
+.ac-stage {
+    position: relative; width: 100%; aspect-ratio: 1;
+    overflow: hidden; background: #0d0f13;
+    cursor: grab; touch-action: none; user-select: none;
+}
+.ac-stage.grabbing { cursor: grabbing; }
+.ac-img {
+    position: absolute; left: 50%; top: 50%;
+    max-width: none; max-height: none;
+    transform-origin: center; will-change: transform;
+    user-select: none; -webkit-user-drag: none;
+}
+/* затемнение с круглым «окном» — то, что внутри кружка, и станет аватаркой */
+.ac-mask {
+    position: absolute; left: 50%; top: 50%;
+    width: var(--ac-d, 82%); aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    box-shadow: 0 0 0 999px rgba(10,12,16,.62);
+    outline: 2px solid rgba(255,255,255,.85); outline-offset: -2px;
+    pointer-events: none;
+}
+.ac-zoom { display: flex; align-items: center; gap: 12px; padding: 14px 20px 4px; color: var(--muted); }
+.ac-zoom-ico { width: 20px; height: 20px; flex: 0 0 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.ac-slider { flex: 1; accent-color: var(--accent); height: 24px; cursor: pointer; }
+.ac-tools { display: flex; justify-content: center; gap: 6px; padding: 4px 12px; }
+.ac-tool {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 34px; padding: 0 12px; border: 0; border-radius: 999px;
+    background: transparent; color: var(--text); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.ac-tool:hover { background: var(--surface2); }
+.ac-tool svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ac-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 16px 16px; }
+.ac-actions button { height: 40px; padding: 0 20px; border: 0; border-radius: 999px; font: inherit; font-size: 14.5px; font-weight: 600; cursor: pointer; }
+.ac-cancel { background: transparent; color: var(--accent); }
+.ac-cancel:hover { background: var(--accent-wash); }
+.ac-ok { background: var(--accent); color: var(--accent-text, #fff); }
+.ac-ok:hover:not(:disabled) { filter: brightness(1.08); }
+.ac-ok:disabled { opacity: .5; }

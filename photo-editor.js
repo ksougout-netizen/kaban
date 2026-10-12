@@ -76,6 +76,8 @@
         open: false,
         file: null,
         onSend: null,
+        max: 10,                          // сколько фото можно держать в окне (для историй — одно)
+        label: null,                      // подпись главной кнопки (по умолчанию «Отправить»)
         items: [],                        // все фото в окне (у каждого свои правки и история)
         active: 0,
         orig: null,                       // исходный холст (после ограничения размера)
@@ -250,10 +252,10 @@
 
     async function addPhotos(files) {
         const images = [...files].filter(isEditableImage);
-        const room = MAX_PHOTOS - state.items.length;
+        const room = state.max - state.items.length;
         if (!images.length) { note("Можно добавить только фото"); return; }
-        if (room <= 0) { note(`Не больше ${MAX_PHOTOS} фото в одном сообщении`); return; }
-        if (images.length > room) note(`Добавлено ${room} из ${images.length}: в одном сообщении не больше ${MAX_PHOTOS} фото`);
+        if (room <= 0) { note(`Не больше ${state.max} фото в одном сообщении`); return; }
+        if (images.length > room) note(`Добавлено ${room} из ${images.length}: в одном сообщении не больше ${state.max} фото`);
         images.slice(0, room).forEach((file) => {
             const item = newItem(file);
             state.items.push(item);
@@ -276,14 +278,14 @@
                 ${item.thumb ? `<img src="${item.thumb}" alt="">` : ""}
                 <span class="pe-thumb-n">${i + 1}</span>
                 <button type="button" class="pe-thumb-del" data-del="${i}" aria-label="Убрать фото ${i + 1}" title="Убрать из сообщения">×</button>
-            </div>`).join("") + (state.items.length < MAX_PHOTOS
+            </div>`).join("") + (state.items.length < state.max
             ? `<button type="button" class="pe-thumb pe-thumb-add" data-pe="add-photos" aria-label="Добавить ещё фото" title="Добавить ещё фото">+</button>` : "");
 
     }
 
     function updateSendLabel() {
         const span = els?.sendBtn?.querySelector("span");
-        if (span && !state.busy) span.textContent = state.items.length > 1 ? `Отправить (${state.items.length})` : "Отправить";
+        if (span && !state.busy) span.textContent = state.label || (state.items.length > 1 ? `Отправить (${state.items.length})` : "Отправить");
     }
 
     /* ---- построение окна ------------------------------------------------- */
@@ -591,12 +593,18 @@
 
     /* ---- открытие / закрытие -------------------------------------------- */
 
-    async function openPhotoEditor(input, onSend) {
+    // opts: { max, label, captionMax, caption, story } — для историй: одно фото, кнопка «Готово».
+    async function openPhotoEditor(input, onSend, opts = {}) {
 
         build();
         if (state.open) return;
 
-        const files = (Array.isArray(input) ? input : [input]).filter(Boolean).slice(0, MAX_PHOTOS);
+        state.max = opts.max || MAX_PHOTOS;
+        state.label = opts.label || null;
+        els.root.classList.toggle("pe-story", !!opts.story);
+        els.caption.maxLength = opts.captionMax || 1024;
+
+        const files = (Array.isArray(input) ? input : [input]).filter(Boolean).slice(0, state.max);
         if (!files.length) return;
 
         state.open = true;
@@ -613,7 +621,7 @@
 
         accentCache = "";
         drawnPhotoKey = "";
-        els.caption.value = "";
+        els.caption.value = String(opts.caption || "").slice(0, opts.captionMax || 1024);
         els.strip.hidden = true;
         els.root.hidden = false;
         els.root.classList.remove("is-visible");
@@ -1800,6 +1808,55 @@
         openForChat(named);
 
     });
+
+    /* ---- истории: тот же редактор перед публикацией ------------------------------ */
+
+    if (typeof pickStoryPhoto === "function") {
+        const originalPick = pickStoryPhoto;
+
+        const applyStoryPhoto = async (file) => {
+            storyCreateFile = await resizeImageForStory(file);
+            const preview = document.getElementById("story-photo-preview");
+            preview.style.backgroundImage = `url(${URL.createObjectURL(storyCreateFile)})`;
+            preview.classList.add("has-image");
+            ensureStoryEditChip(preview);
+        };
+
+        const editStoryFile = (file) => {
+            const caption = document.getElementById("story-caption-input");
+            openPhotoEditor([file], async (final, extra) => {
+                try {
+                    await applyStoryPhoto(final[0]);
+                    if (caption && extra?.caption) caption.value = extra.caption.slice(0, 120);
+                } catch (error) {
+                    if (typeof toast === "function") toast("Не удалось открыть фото: " + (error?.message || error));
+                }
+            }, { max: 1, label: "Готово", story: true, captionMax: 120, caption: caption?.value || "" });
+        };
+
+        // Кнопка «Изменить» поверх готового превью: вернуться в редактор с уже выбранным фото.
+        function ensureStoryEditChip(preview) {
+            if (preview.querySelector(".story-edit-chip")) return;
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "story-edit-chip";
+            chip.textContent = "Изменить";
+            chip.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!storyCreateFile || state.open) return;
+                editStoryFile(new File([storyCreateFile], "story.jpg", { type: storyCreateFile.type || "image/jpeg" }));
+            });
+            preview.appendChild(chip);
+        }
+
+        pickStoryPhoto = async function (input) {
+            const file = input?.files?.[0];
+            if (!file || !isEditableImage(file) || state.open) return originalPick.apply(this, arguments);
+            try { input.value = ""; } catch { /* ignore */ }
+            editStoryFile(file);
+        };
+    }
     window.openPhotoEditor = openPhotoEditor;
     window.KabanPhotoEditor = {
         open: openPhotoEditor,

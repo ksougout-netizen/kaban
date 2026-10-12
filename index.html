@@ -40,7 +40,7 @@
 
 <link rel="preconnect" href="https://ketvgmietommjqutejuj.supabase.co" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261007-124">
+<link rel="stylesheet" href="style.css?v=20261007-132">
 </head>
 
 <body>
@@ -529,14 +529,22 @@
         <!-- ВЫДЕЛЕНИЕ СООБЩЕНИЙ: панель действий вместо обычной подсказки,
              пока активен режим "Выбрать" (см. script.js → enterSelectionMode) -->
         <div class="selection-bar" id="selection-bar" hidden>
-            <button type="button" class="selection-bar-cancel" onclick="exitSelectionMode()" aria-label="Отменить выбор">✕</button>
+            <button type="button" class="selection-bar-cancel" onclick="exitSelectionMode()" aria-label="Отменить выбор" title="Отменить (Esc)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
             <span class="selection-bar-count" id="selection-bar-count">0 выбрано</span>
             <div class="selection-bar-actions">
-                <button type="button" onclick="forwardSelectedMessages()" aria-label="Переслать выбранные" title="Переслать">➜</button>
-                <button type="button" class="danger" onclick="deleteSelectedMessages()" aria-label="Удалить выбранные" title="Удалить">🗑</button>
+                <button type="button" onclick="copySelectedMessages()" aria-label="Копировать выбранные" title="Копировать (Ctrl+C)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6.5A2 2 0 0 0 13.5 4.5h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></svg><span>Копировать</span>
+                </button>
+                <button type="button" onclick="forwardSelectedMessages()" aria-label="Переслать выбранные" title="Переслать">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 5 6.5 6.5L14 18M20 11.5H9a5 5 0 0 0-5 5V19"/></svg><span>Переслать</span>
+                </button>
+                <button type="button" class="danger" onclick="deleteSelectedMessages()" aria-label="Удалить выбранные" title="Удалить (Delete)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7 7l.8 12h8.4L17 7M10.5 11v5M13.5 11v5"/></svg><span>Удалить</span>
+                </button>
             </div>
         </div>
-
         <div class="content">
 
             <section class="chat-area">
@@ -759,7 +767,7 @@
                     </div>
 
                     <input type="file" id="attach-media-input" accept="image/*,video/*" multiple hidden onchange="handleAttachFile(this,'media')">
-                    <input type="file" id="attach-document-input" hidden onchange="handleAttachFile(this,'document')">
+                    <input type="file" id="attach-document-input" multiple hidden onchange="handleAttachFile(this,'document')">
                     <input type="file" id="attach-music-input" accept="audio/*" hidden onchange="handleAttachFile(this,'music')">
                     <input type="file" id="attach-p2p-input" hidden onchange="handleP2PFileSelect(this)">
 
@@ -1778,6 +1786,7 @@
                 <span class="info-window-grip" aria-hidden="true"></span>
             </div>
 
+            <div class="info-window-scroll">
             <div class="info-avatar info-window-avatar" data-contact-field="avatar">🧔</div>
             <div class="info-name info-window-name" id="info-modal-name" data-contact-field="name">Собеседник</div>
             <div class="info-handle info-window-handle-text" data-contact-field="username">@contact</div>
@@ -1829,6 +1838,7 @@
                 </div>
             </div>
 
+        </div>
         </div>
 
         <div class="info-window-right">
@@ -3316,33 +3326,38 @@
 
 <!-- Библиотеки лежат рядом с сайтом (vendor/): не зависим от CDN, которые бывают недоступны; версия supabase-js закреплена (2.117.2). -->
 <script src="vendor/supabase.js?v=2.117.2"></script>
-<script src="supabaseClient.js?v=20261007-124"></script>
-<script src="crypto.js?v=20261007-124"></script>
+<script src="supabaseClient.js?v=20261007-132"></script>
+<script src="crypto.js?v=20261007-132"></script>
 <!-- script.js разбит на 4 файла для удобства навигации (раньше был один
      файл ~350КБ/8300+ строк) — порядок подключения важен, см. комментарий
      в начале каждого файла. Это НЕ ES-модули: обычные классические
      скрипты, выполняются последовательно как один большой файл, функции
      между ними в общей глобальной области видимости, как и раньше. -->
-<script src="emoji-data.js?v=20261007-124"></script>
-<script src="script-core.js?v=20261007-124"></script>
-<script src="script-ui.js?v=20261007-124"></script>
-<script src="script-chats.js?v=20261007-124"></script>
-<script src="script-messages.js?v=20261007-124"></script>
-<script src="effects.js?v=20261007-124"></script>
-<script src="games.js?v=20261007-124"></script>
-<script src="voice-ai.js?v=20261007-124"></script>
-<script src="stories.js?v=20261007-124"></script>
-<script src="productivity.js?v=20261007-124"></script>
-<script src="reactions.js?v=20261007-124"></script>
-<script src="listen.js?v=20261007-124"></script>
-<script src="voice.js?v=20261007-124"></script>
-<script src="voice-video.js?v=20261007-124"></script>
-<script src="resilience.js?v=20261007-124"></script>
-<script src="scheduled.js?v=20261007-124"></script>
-<script src="profile.js?v=20261007-124"></script>
-<script src="desktop-app.js?v=20261007-124"></script>
-<script src="photo-editor.js?v=20261007-124"></script>
-<script src="disappearing.js?v=20261007-124"></script>
+<script src="emoji-data.js?v=20261007-132"></script>
+<script src="script-core.js?v=20261007-132"></script>
+<script src="script-ui.js?v=20261007-132"></script>
+<script src="script-chats.js?v=20261007-132"></script>
+<script src="script-messages.js?v=20261007-132"></script>
+<script src="effects.js?v=20261007-132"></script>
+<script src="games.js?v=20261007-132"></script>
+<script src="voice-ai.js?v=20261007-132"></script>
+<script src="stories.js?v=20261007-132"></script>
+<script src="productivity.js?v=20261007-132"></script>
+<script src="reactions.js?v=20261007-132"></script>
+<script src="listen.js?v=20261007-132"></script>
+<script src="voice.js?v=20261007-132"></script>
+<script src="voice-video.js?v=20261007-132"></script>
+<script src="resilience.js?v=20261007-132"></script>
+<script src="scheduled.js?v=20261007-132"></script>
+<script src="profile.js?v=20261007-132"></script>
+<script src="desktop-app.js?v=20261007-132"></script>
+<script src="photo-editor.js?v=20261007-132"></script>
+<script src="disappearing.js?v=20261007-132"></script>
+<script src="viewer.js?v=20261007-132"></script>
+<script src="selection.js?v=20261007-132"></script>
+<script src="convenience.js?v=20261007-132"></script>
+<script src="contact-share.js?v=20261007-132"></script>
+<script src="avatar-cropper.js?v=20261007-132"></script>
 
 </body>
 </html>

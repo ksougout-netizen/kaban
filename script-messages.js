@@ -715,12 +715,10 @@ function buildAttachmentHTML(message) {
         const lon = Number(meta.lon);
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) return "📍 Геопозиция";
         return `
-            <button type="button" class="message-location" onclick="window.open('https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}', '_blank', 'noopener')">
-                <span class="message-location-icon">📍</span>
-                <div class="message-location-copy">
-                    <div class="message-location-title">Геопозиция</div>
-                    <div class="message-location-hint">${lat.toFixed(5)}, ${lon.toFixed(5)}</div>
-                </div>
+            <button type="button" class="message-location" onclick="window.open('https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}', '_blank', 'noopener')" aria-label="Открыть на карте">
+                ${buildMapTilesHTML(lat, lon)}
+                <span class="message-location-pin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21Z"/><circle cx="12" cy="10" r="2.4"/></svg></span>
+                <span class="message-location-label">${lat.toFixed(5)}, ${lon.toFixed(5)}</span>
             </button>
         `;
     }
@@ -730,7 +728,7 @@ function buildAttachmentHTML(message) {
         const userId = escapeHTML(meta.user_id || "");
         const avatar = avatarParts({ id: meta.user_id, name: meta.display_name || meta.username, url: meta.avatar_url });
         return `
-            <button type="button" class="message-contact" onclick="openContactFromMessage('${userId}')">
+            <button type="button" class="message-contact" onclick="openContactFromMessage('${userId}', this)">
                 <span class="message-contact-avatar${avatar.cls}"${avatar.style}>${avatar.inner}</span>
                 <div class="message-contact-copy">
                     <div class="message-contact-title">${name}</div>
@@ -747,7 +745,11 @@ function buildAttachmentHTML(message) {
     }
 
     if (message.type === "video") {
-        return `<video class="message-image" src="${escapeHTML(url)}" controls playsinline preload="metadata"></video>`;
+        return `<div class="message-video" role="button" tabindex="0" aria-label="Смотреть видео" onclick="openVideoViewer(this)">
+            <video class="message-video-el" src="${escapeHTML(url)}#t=0.1" preload="metadata" playsinline muted tabindex="-1" onloadedmetadata="setVideoDurationBadge(this)"></video>
+            <span class="message-video-play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.14v13.72c0 .9.98 1.45 1.76.99l10.85-6.86a1.15 1.15 0 0 0 0-1.98L9.76 4.15C8.98 3.69 8 4.24 8 5.14Z"/></svg></span>
+            <span class="message-video-dur">${meta.duration ? formatVideoDuration(meta.duration) : ""}</span>
+        </div>`;
     }
 
     // Видео-кружок — свой плеер 1:1 по принципу настоящего Telegram: тап по
@@ -846,16 +848,38 @@ function buildAttachmentHTML(message) {
 
     return `
         <a class="message-file" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">
-            <span class="message-file-icon">${fileKindIcon(meta.name || "")}</span>
+            <span class="message-file-icon" data-ext="${escapeHTML(fileExtLabel(meta.name))}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h6.5L18.5 8.5V19a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5Z"/><path d="M13.5 3.5v5h5"/></svg></span>
             <div class="message-file-copy">
                 <div class="message-file-name">${escapeHTML(meta.name || "Файл")}</div>
-                <div class="message-file-size">${meta.size ? formatFileSize(meta.size) : ""}</div>
+                <div class="message-file-size">${[meta.size ? formatFileSize(meta.size) : "", fileExtLabel(meta.name)].filter(Boolean).join(" · ")}</div>
             </div>
         </a>
     `;
 
 }
 
+// Подпись типа файла для карточки («PDF», «ZIP»…): расширение, не длиннее 4 знаков.
+function fileExtLabel(name) {
+    const ext = String(name || "").includes(".") ? String(name).split(".").pop() : "";
+    return /^[A-Za-z0-9]{1,5}$/.test(ext) ? ext.toUpperCase() : "";
+}
+
+// Карта для геопозиции: 2×2 плитки OpenStreetMap (масштаб 15), сдвинутые так, чтобы точка
+// оказалась ровно по центру карточки — без внешних библиотек и ключей.
+function buildMapTilesHTML(lat, lon) {
+    const z = 15;
+    const n = 2 ** z;
+    const fx = ((lon + 180) / 360) * n;
+    const rad = (lat * Math.PI) / 180;
+    const fy = ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n;
+    const x0 = Math.floor(fx - 0.5);
+    const y0 = Math.floor(fy - 0.5);
+    const offX = (fx - x0) * 256;   // положение точки внутри сетки 512×512
+    const offY = (fy - y0) * 256;
+    const tiles = [0, 1].flatMap((dy) => [0, 1].map((dx) =>
+        `<img src="https://tile.openstreetmap.org/${z}/${x0 + dx}/${y0 + dy}.png" alt="" loading="lazy" draggable="false" style="left:${dx * 256}px;top:${dy * 256}px">`)).join("");
+    return `<span class="message-location-map" aria-hidden="true"><span class="message-location-tiles" style="--ox:${offX.toFixed(1)}px;--oy:${offY.toFixed(1)}px">${tiles}</span></span>`;
+}
 // P2P-передача (см. script-core.js → sendP2PFile/acceptFileTransfer) — своя
 // карточка вместо обычной ссылки на файл: кнопки "Принять/Отклонить" (у
 // получателя, пока pending), живой прогресс (bytesDone/bytesTotal), текстовый
@@ -1317,9 +1341,10 @@ function buildMessageRowInnerHTML(message, isMine) {
     // ФОТО / ВИДЕО / АЛЬБОМ — как в Telegram: снимок занимает пузырь целиком (без рамки вокруг),
     // время и галочки — таблеткой поверх снимка; с подписью — снимок сверху, текст под ним.
     // media-only: нет подписи; media-bare: ещё и нет шапки (имя/ответ/пересылка) — пузыря как такового нет.
-    const isMedia = !message.deleted_at && (message.type === "image" || message.type === "video")
+    const isMapCard = message.type === "location" && Number.isFinite(Number(message.attachment_meta?.lat)) && Number.isFinite(Number(message.attachment_meta?.lon));
+    const isMedia = !message.deleted_at && (isMapCard || message.type === "image" || message.type === "video")
         && !message.attachment_meta?.poll && !message.attachment_meta?.game && !message.attachment_meta?.p2p
-        && !!(message.attachment_url || albumPhotos(message));
+        && (isMapCard || !!(message.attachment_url || albumPhotos(message)));
     const mediaClass = !isMedia ? ""
         : " has-media" + (message.text ? "" : " media-only") + (!message.text && !senderLabel && !replyMarkup && !forwardedMarkup ? " media-bare" : "")
             + (message.type === "video" ? " media-video" : "");
@@ -2110,7 +2135,7 @@ window.addEventListener("drop", (event) => {
 
     const kind = file.type.startsWith("image/") || file.type.startsWith("video/") ? "media" : "document";
     // Несколько фото сразу — одним альбомом (редактор сам разберёт); документ — по одному, как раньше.
-    handleAttachFile({ files: kind === "media" ? files : [file] }, kind);
+    handleAttachFile({ files: kind === "media" ? files : files.filter((f) => !f.type.startsWith("image/") && !f.type.startsWith("video/")) }, kind);
 
 });
 
