@@ -835,7 +835,7 @@ function contactPickerRowHTML(user, hint) {
     return `
         <button class="new-chat-result-row" type="button" data-user-id="${escapeHTML(user.id)}">
             <span class="new-chat-result-avatar${av.cls}${user.is_bot ? " chat-avatar-bot" : ""}"${av.style}>${av.inner}</span>
-            <span>${escapeHTML(user.display_name || user.username || "Пользователь")} <span style="opacity:.6">${hint ?? (user.username ? "@" + escapeHTML(user.username) : "")}</span></span>
+            <span>${escapeHTML(loadContactAlias(user.id) || user.display_name || user.username || "Пользователь")} <span style="opacity:.6">${hint ?? (user.username ? "@" + escapeHTML(user.username) : "")}</span></span>
         </button>`;
 }
 
@@ -1417,6 +1417,7 @@ function toggleContactPopover() {
 
     updateContactModalStats();
     syncContactModalBlockButton();
+    syncContactModalSaveButton();
 
     backdrop.classList.add("open");
     backdrop.setAttribute("aria-hidden", "false");
@@ -1474,6 +1475,31 @@ function toggleBlockFromModal() {
 
 }
 
+
+// «Добавить в контакты» / «Удалить из контактов» — только когда записная
+// книжка включена на сервере (contacts.sql) и открыт личный чат с человеком.
+function syncContactModalSaveButton() {
+
+    const button = document.getElementById("contact-modal-save");
+    if (!button) return;
+    const userId = currentOtherUserId;
+    const available = typeof savedContactsReady !== "undefined" && savedContactsReady && !!userId && currentChatType !== "group";
+    button.hidden = !available;
+    if (!available) return;
+
+    const saved = savedContacts.has(userId);
+    document.getElementById("contact-modal-save-label").textContent = saved ? "Удалить из контактов" : "Добавить в контакты";
+    button.classList.toggle("danger", saved);
+
+}
+
+async function toggleSavedContactFromModal() {
+    const userId = currentOtherUserId;
+    if (!userId) return;
+    const wasSaved = savedContacts.has(userId);
+    await setSavedContact(userId, !wasSaved);
+    syncContactModalSaveButton();
+}
 
 function syncContactModalBlockButton() {
 
@@ -1743,8 +1769,15 @@ function contactAliasStorageKey(userId) {
     return CONTACT_ALIAS_STORAGE_PREFIX + userId;
 }
 
+// Своё имя для контакта: если записная книжка включена на сервере (contacts.sql) —
+// оно хранится там и доступно на всех устройствах; локальная копия остаётся
+// запасной (до включения контактов и для имён, ещё не перенесённых на сервер).
 function loadContactAlias(userId) {
     if (!userId) return null;
+    if (typeof savedContactsReady !== "undefined" && savedContactsReady) {
+        const server = savedContacts.get(userId)?.savedAlias;
+        if (server) return server;
+    }
     try {
         return localStorage.getItem(contactAliasStorageKey(userId)) || null;
     } catch {
@@ -1899,7 +1932,18 @@ function saveContactProfile() {
     applyContactAliasIfSet(currentOtherUserId);
     renderChatListFromCache(); // строка в списке чатов тоже должна сразу показать алиас
 
-    toast("Локальное имя сохранено");
+    const userId = currentOtherUserId;
+    if (typeof savedContactsReady !== "undefined" && savedContactsReady) {
+        toast("Имя контакта сохранено");
+        // Тоже на сервер — чтобы имя было и на других устройствах. Локальная копия
+        // уже есть, поэтому сбой сети не теряет имя, просто оно пока только здесь.
+        KabanAPI.setContactAlias(userId, name)
+            .then(() => refreshSavedContacts(true))
+            .then(() => { renderChatListFromCache(); if (document.body.classList.contains("mobile-tab-contacts")) renderContactsList(); })
+            .catch((error) => { console.warn("Имя контакта не ушло на сервер", error); toast("Имя сохранено только на этом устройстве"); });
+    } else {
+        toast("Локальное имя сохранено");
+    }
     closeEditContactModal();
 
 }
@@ -1917,7 +1961,14 @@ async function resetContactProfile() {
         // некритично — хуже не станет, просто не удалилось
     }
 
-    toast("Локальное имя убрано");
+    const userId = currentOtherUserId;
+    if (typeof savedContactsReady !== "undefined" && savedContactsReady && savedContacts.has(userId)) {
+        // Сначала в локальной карте — иначе loadContactAlias ниже ещё отдаст серверное имя.
+        savedContacts.get(userId).savedAlias = null;
+        KabanAPI.clearContactAlias(userId).catch((error) => console.warn("Не удалось убрать имя на сервере", error));
+    }
+
+    toast("Имя контакта убрано");
     closeEditContactModal();
     await openRealChat(currentChatId);
     renderChatListFromCache();
@@ -3039,6 +3090,14 @@ function openGroupMemberModal(userId) {
         closeAllGroupModals();
         startRealChatWith(userId);
     });
+
+    if (typeof savedContactsReady !== "undefined" && savedContactsReady && !user.is_bot) {
+        const saved = savedContacts.has(userId);
+        addGroupMemberAction(actions, saved ? "Удалить из контактов" : "Добавить в контакты", async () => {
+            await setSavedContact(userId, !saved);
+            openGroupMemberModal(userId);   // перерисовать кнопку
+        });
+    }
 
     // Назначение / права администратора. Админ с правом add_admins правит только
     // тех, кого назначил сам (так же проверяет и сервер).

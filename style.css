@@ -5506,6 +5506,45 @@ img.message-image {
     min-width: 0;
 }
 
+/* Запись о звонке в переписке: название, стрелка направления (+ длительность) и кнопка «позвонить снова». */
+.message-call {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: min(260px, 70vw);
+    padding: 3px 2px;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.message-call-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.message-call-title { font-size: 13.5px; font-weight: 700; line-height: 1.25; }
+.message-call-sub { display: flex; align-items: center; gap: 4px; font-size: 12px; opacity: .85; }
+.message-call-sub svg { width: 15px; height: 15px; flex: none; fill: none; stroke: #2fbf6b; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.message-call.is-bad .message-call-sub svg { stroke: #ff5a5f; }
+.message-row.sent .message-call-sub svg { stroke: currentColor; }
+.message-row.sent .message-call.is-bad .message-call-sub svg { stroke: #ffb4b6; }
+
+.message-call-icon {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    flex: none;
+    border-radius: 50%;
+    background: color-mix(in srgb, currentColor 14%, transparent);
+    transition: background .15s ease, transform .15s cubic-bezier(.34,1.56,.64,1);
+}
+
+.message-call-icon svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.message-call:hover .message-call-icon { background: color-mix(in srgb, currentColor 24%, transparent); }
+.message-call:active .message-call-icon { transform: scale(.92); }
+.message-call:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 12px; }
+
 .message-location-title,
 .message-contact-title {
     font-size: 12px;
@@ -8038,26 +8077,96 @@ body.mobile-tab-calls #sidebar-calls-view {
     color: var(--text);
 }
 
+/* Групповой звонок — аккуратное среднее окно по центру; кнопка в шапке
+   разворачивает его на весь экран (.is-full) и возвращает обратно.
+   На телефоне окно всегда на весь экран. */
 .gcall {
     position: fixed;
-    inset: 0;
+    left: 50%;
+    top: 50%;
     z-index: 140;
     display: flex;
     flex-direction: column;
+    width: min(880px, calc(100vw - 48px));
+    height: min(600px, calc(100dvh - 48px));
+    overflow: hidden;
+    border-radius: 20px;
     background: #0d0f12;
     color: #fff;
+    box-shadow: 0 28px 90px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.09);
+    transform: translate(-50%, -50%);
+    animation: gcall-in .24s cubic-bezier(.2,.85,.25,1);
 }
 
 .gcall[hidden] { display: none; }
+
+.gcall.is-full {
+    left: 0;
+    top: 0;
+    width: auto;
+    height: auto;
+    inset: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transform: none;
+}
+
+@keyframes gcall-in {
+    from { opacity: 0; transform: translate(-50%, calc(-50% + 14px)) scale(.97); }
+}
+
+.gcall.is-full { animation: none; }
+body.reduce-motion .gcall { animation: none; }
+
+@media (max-width: 719px) {
+    .gcall, .gcall.is-full {
+        left: 0;
+        top: 0;
+        width: auto;
+        height: auto;
+        inset: 0;
+        border-radius: 0;
+        box-shadow: none;
+        transform: none;
+        animation: none;
+    }
+    .gcall-expand { display: none; }
+}
 
 .gcall-top {
     display: flex;
     flex: 0 0 auto;
     align-items: center;
     gap: 10px;
-    padding: 12px 16px;
+    padding: 12px 12px 12px 16px;
     font-size: 12.5px;
+    cursor: default;
 }
+
+.gcall-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gcall-count { flex: 1; }
+
+.gcall-expand {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    padding: 0;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: rgba(255,255,255,.8);
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+}
+
+.gcall-expand:hover { background: rgba(255,255,255,.14); color: #fff; }
+.gcall-expand:focus-visible { outline: 2px solid rgba(255,255,255,.9); outline-offset: 1px; }
+.gcall-expand svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.gcall-expand .gcall-expand-off { display: none; }
+.gcall.is-full .gcall-expand .gcall-expand-on { display: none; }
+.gcall.is-full .gcall-expand .gcall-expand-off { display: block; }
 
 .gcall-title {
     font-weight: 600;
@@ -9498,11 +9607,22 @@ body.bubble-no-tail .theme-preview-msg.out { border-bottom-right-radius: var(--b
     overflow-y: auto;
     color: #fff;
     background: linear-gradient(165deg, hsl(var(--gh) 62% 54%), hsl(calc(var(--gh) + 48) 66% 38%));
+}
+
+/* Окно двигается только за верхнюю полоску с «ручкой», а не за всю цветную панель. */
+.info-window-drag {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2;
+    height: 38px;
     cursor: grab;
     touch-action: none;
 }
 
-.info-window-left.dragging { cursor: grabbing; }
+.info-window-drag.dragging { cursor: grabbing; }
+.info-window-drag:hover .info-window-grip, .info-window-drag.dragging .info-window-grip { background: rgba(255,255,255,.7); }
 .info-window-left button, .info-window-left a { cursor: pointer; }
 
 .info.info-window.has-photo .info-window-left::before {
@@ -9557,6 +9677,8 @@ body.bubble-no-tail .theme-preview-msg.out { border-bottom-right-radius: var(--b
 .info.info-window .info-avatar.info-window-avatar {
     width: 124px;
     height: 124px;
+    flex: none;
+    aspect-ratio: 1;
     margin: 6px 0 0;
     border-radius: 50%;
     border: 3px solid rgba(255,255,255,.55);
@@ -9580,9 +9702,47 @@ body.bubble-no-tail .theme-preview-msg.out { border-bottom-right-radius: var(--b
 
 .info-window-contact {
     width: 100%;
-    margin-top: auto;
-    padding-top: 18px;
+    margin-top: 6px;
+    padding-top: 10px;
 }
+
+/* Быстрые действия под именем (звонок, видео, звук) — как в мессенджерах на ПК. */
+.info-window-quick {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.info-quick-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    width: 72px;
+    padding: 10px 4px 9px;
+    border: 0;
+    border-radius: 16px;
+    background: rgba(255,255,255,.18);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    color: #fff;
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    transition: background .15s ease, transform .15s cubic-bezier(.34,1.56,.64,1);
+}
+
+.info-quick-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.info-quick-btn:hover { background: rgba(255,255,255,.3); }
+.info-quick-btn:active { transform: scale(.94); }
+.info-quick-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.info-quick-btn[aria-pressed="false"] { background: rgba(0,0,0,.28); }
+
+.info-window-contact .info-contact-row[hidden] { display: none; }
+.info-window-contact .info-copy-row { cursor: pointer; transition: background .15s ease; }
+.info-window-contact .info-copy-row:hover { background: rgba(255,255,255,.26); }
+.info-window-contact .info-copy-row:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
 .info-window-contact .info-contact-row {
     margin-top: 8px;
@@ -9720,6 +9880,7 @@ body.bubble-no-tail .theme-preview-msg.out { border-bottom-right-radius: var(--b
         border-radius: 24px;
     }
     .info-window-left { padding: 40px 18px 18px; cursor: default; touch-action: auto; }
+    .info-window-drag { cursor: default; touch-action: auto; }
     .info-window-contact { margin-top: 12px; padding-top: 0; }
     .info.info-window .info-avatar.info-window-avatar { width: 96px; height: 96px; font-size: 42px; }
     .info-window .info-actions { grid-template-columns: 1fr; }

@@ -230,7 +230,11 @@ const THEME_PRESETS = [
     { id: "forest",    label: "Лес",       dark: true,  accent: "#22c55e", tint: 2, fill: "solid",    bubbleIn: "tint",    wallpaper: "forest" },
     { id: "amber",     label: "Янтарь",    dark: true,  accent: "#f59e0b", tint: 1, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" },
     { id: "raspberry", label: "Малина",    dark: true,  accent: "#e11d48", tint: 2, fill: "gradient", bubbleIn: "tint",    wallpaper: "default" },
-    { id: "graphite",  label: "Графит",    dark: true,  accent: "#64748b", tint: 1, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" }
+    { id: "graphite",  label: "Графит",    dark: true,  accent: "#64748b", tint: 1, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" },
+    { id: "emerald",   label: "Изумруд",   dark: true,  accent: "#10b981", tint: 3, fill: "gradient", bubbleIn: "tint",    wallpaper: "default" },
+    { id: "lime",      label: "Лайм",      dark: false, accent: "#84cc16", tint: 2, fill: "solid",    bubbleIn: "tint",    wallpaper: "default" },
+    { id: "teal",      label: "Бирюза",    dark: false, accent: "#14b8a6", tint: 2, fill: "gradient", bubbleIn: "neutral", wallpaper: "default" },
+    { id: "abyss",     label: "Глубина",   dark: true,  accent: "#0ea5e9", tint: 3, fill: "gradient", bubbleIn: "tint",    wallpaper: "default" }
 ];
 
 function themePresetMatches(preset) {
@@ -1783,6 +1787,7 @@ async function startCall(kind) {
     const remoteUserId = currentOtherUserId;
     const remoteName = currentChatTitle || "Собеседник";
     const remoteAvatarUrl = cachedChatRows.find((r) => r.chat_id === currentChatId)?.otherUser?.avatar_url || null;
+    const callChatId = currentChatId;   // запись о звонке пойдёт именно в этот чат
 
     const isVideo = kind === "video";
 
@@ -1814,6 +1819,7 @@ async function startCall(kind) {
         activeCall = {
             callId, pc, localStream, isVideo, mic: callMic,
             isCaller: true,
+            chatId: callChatId,
             remoteUserId,
             remoteName,
             remoteAvatarUrl,
@@ -2545,6 +2551,45 @@ function endCall() {
     teardownActiveCall(activeCall.state === "connected" ? "completed" : "cancelled");
 }
 
+// Итог звонка — записью в чат (как в Telegram). Пишет только звонивший: он единственный
+// точно знает исход (ответили / не ответили / отклонили / сам отменил), поэтому
+// запись одна, а не по одной с каждой стороны. Нужен тип 'call' (call_log.sql);
+// пока его нет, запись молча не создаётся. В секретных чатах не пишем.
+function logCallToChat(call, result, durationSeconds) {
+
+    if (!call?.isCaller || !call.chatId || call.logged) return;
+    call.logged = true;
+    if (cachedChatRows.find((r) => r.chat_id === call.chatId)?.chats?.is_secret) return;
+
+    const outcome = durationSeconds > 0 || result === "completed" ? "ended"
+        : result === "declined" ? "declined"
+        : result === "cancelled" ? "canceled"
+        : "missed";
+    const attachmentMeta = {
+        call: {
+            kind: call.isVideo ? "video" : "audio",
+            outcome,
+            ...(outcome === "ended" ? { duration: Math.max(1, durationSeconds) } : {})
+        }
+    };
+
+    KabanAPI.sendMessage(call.chatId, {
+        type: "call",
+        attachmentMeta,
+        ...(typeof KabanOutbox !== "undefined" ? { id: KabanOutbox.newId() } : {})
+    }).then((message) => {
+        if (!message) return;
+        realMessagesById.set(message.id, message);
+        if (currentChatId === call.chatId) {
+            appendRealMessageRow(message, true);
+            updateMessageGrouping();
+            if (appSettings.autoScroll) scrollMessagesToBottom();
+        }
+        patchCachedChatLastMessage(call.chatId, message);
+    }).catch((error) => console.warn("Запись о звонке не создана (выполнен ли call_log.sql?)", error));
+
+}
+
 function teardownActiveCall(result, unseenMissedCall = false) {
     clearInterval(callDurationTicker);
     stopCallTone();
@@ -2558,6 +2603,7 @@ function teardownActiveCall(result, unseenMissedCall = false) {
             seen: !unseenMissedCall,
             durationSeconds
         });
+        logCallToChat(activeCall, result, durationSeconds);
         clearTimeout(activeCall.timeoutTimer);
         clearTimeout(activeCall.recoveryTimer);
         clearInterval(activeCall.qualityTimer);
@@ -4671,9 +4717,46 @@ function groupCallInitial(name) {
     return (String(name || "?").trim()[0] || "?").toUpperCase();
 }
 
+// Окно группового звонка: по умолчанию среднее, кнопка разворачивает на весь экран.
+// Выбор запоминается; двойной клик по шапке и Escape (из полного экрана) — тоже.
+const GCALL_FULL_KEY = "kaban-gcall-full";
+
+function setGroupCallExpanded(full) {
+    const root = document.getElementById("gcall");
+    if (!root) return;
+    root.classList.toggle("is-full", !!full);
+    const button = document.getElementById("gcall-expand");
+    if (button) {
+        const label = full ? "Свернуть в окно" : "Развернуть на весь экран";
+        button.title = label;
+        button.setAttribute("aria-label", label);
+    }
+    try { localStorage.setItem(GCALL_FULL_KEY, full ? "1" : "0"); } catch { /* не критично */ }
+}
+
+function toggleGroupCallExpand() {
+    setGroupCallExpanded(!document.getElementById("gcall").classList.contains("is-full"));
+}
+
+document.querySelector("#gcall .gcall-top")?.addEventListener("dblclick", (event) => {
+    if (event.target.closest("button")) return;
+    toggleGroupCallExpand();
+});
+
+document.addEventListener("keydown", (event) => {
+    const root = document.getElementById("gcall");
+    if (event.key === "Escape" && root && !root.hidden && root.classList.contains("is-full")) {
+        event.stopImmediatePropagation();
+        setGroupCallExpanded(false);
+    }
+}, true);
+
 function showGroupCallUI(call) {
 
     const root = document.getElementById("gcall");
+    let wantFull = false;
+    try { wantFull = localStorage.getItem(GCALL_FULL_KEY) === "1"; } catch { /* по умолчанию — окно */ }
+    setGroupCallExpanded(wantFull);
     document.getElementById("gcall-title").textContent = call.title;
     document.getElementById("gcall-count").textContent = "";
     document.getElementById("gcall-grid").innerHTML = "";

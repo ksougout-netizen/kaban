@@ -1081,6 +1081,7 @@ async function loadChatListOnce() {
     if (typeof IS_SUPABASE_CONFIGURED === "undefined" || !IS_SUPABASE_CONFIGURED) return;
 
     restoreChatListSnapshot();
+    restoreSavedContactsSnapshot();
 
     try {
         cachedChatRows = await KabanAPI.getChats();
@@ -1113,6 +1114,7 @@ async function loadChatListOnce() {
 
     updateUnreadTitleBadge();
 
+    refreshSavedContacts();
     if (document.body.classList.contains("mobile-tab-contacts")) renderContactsList();
 
     renderChatListFromCache();
@@ -1326,6 +1328,7 @@ const MESSAGE_TYPE_PREVIEW_LABELS = {
 
 function messagePreviewText(message) {
     if (message.type === "text") return message.text || "";
+    if (message.type === "call" && typeof callLogInfo === "function") return callLogInfo(message).title;
     return MESSAGE_TYPE_PREVIEW_LABELS[message.type] || "📎 Вложение";
 }
 
@@ -1825,13 +1828,119 @@ function contactActivityTier(user) {
     return 2;
 }
 
+/* Записная книжка (contacts.sql). Пока таблица не создана, savedContactsReady=false
+   и контактами по-прежнему считаются собеседники из личных чатов. Когда создана —
+   контакты это ровно сохранённые люди: чат удалили — контакт остался, контакт
+   удалили — из списка пропал, даже если чат с ним ещё есть. */
+let savedContacts = new Map();
+let savedContactsReady = false;
+let savedContactsLoadedAt = 0;
+let savedContactsPromise = null;
+
+function isSavedContact(userId) {
+    return savedContactsReady ? savedContacts.has(userId) : cachedChatRows.some((row) => row.chats?.type !== "group" && row.otherUser?.id === userId);
+}
+
+async function refreshSavedContacts(force = false) {
+
+    if (typeof IS_SUPABASE_CONFIGURED === "undefined" || !IS_SUPABASE_CONFIGURED || !myRealUserId) return;
+    if (!force && Date.now() - savedContactsLoadedAt < 20000) return;
+    if (savedContactsPromise) return savedContactsPromise;
+
+    savedContactsPromise = (async () => {
+        try {
+            const { available, users } = await KabanAPI.getSavedContacts();
+            savedContactsReady = available;
+            savedContacts = new Map(users.map((u) => [u.id, u]));
+            savedContactsLoadedAt = Date.now();
+            try { localStorage.setItem("kaban-saved-contacts:" + myRealUserId, JSON.stringify(available ? users : null)); } catch { /* не критично */ }
+            if (document.body.classList.contains("mobile-tab-contacts")) renderContactsList();
+            if (available) migrateLocalContactAliases();
+        } catch (error) {
+            console.warn("Не удалось загрузить контакты", error);
+        } finally {
+            savedContactsPromise = null;
+        }
+    })();
+    return savedContactsPromise;
+
+}
+
+// Имена, которые вы давали контактам раньше (хранились только в браузере), один
+// раз переносятся на сервер — дальше они есть на всех ваших устройствах.
+let contactAliasMigrationDone = false;
+
+async function migrateLocalContactAliases() {
+
+    if (contactAliasMigrationDone || !savedContactsReady) return;
+    contactAliasMigrationDone = true;
+
+    let moved = 0;
+    for (const [userId, user] of savedContacts) {
+        if (user.savedAlias) continue;
+        let local = null;
+        try { local = localStorage.getItem(contactAliasStorageKey(userId)); } catch { /* нет доступа */ }
+        if (!local) continue;
+        try {
+            await KabanAPI.setContactAlias(userId, local);
+            user.savedAlias = local.trim().slice(0, 64);
+            moved++;
+        } catch (error) {
+            console.warn("Не удалось перенести имя контакта", error);
+            contactAliasMigrationDone = false;   // повторим при следующей загрузке
+            break;
+        }
+    }
+    if (moved) renderChatListFromCache();
+
+}
+
+// Показать контакты сразу после запуска, не дожидаясь сети (как и список чатов).
+function restoreSavedContactsSnapshot() {
+    if (savedContactsReady || !myRealUserId) return;
+    try {
+        const users = JSON.parse(localStorage.getItem("kaban-saved-contacts:" + myRealUserId) || "null");
+        if (Array.isArray(users)) { savedContacts = new Map(users.map((u) => [u.id, u])); savedContactsReady = true; }
+    } catch { /* повреждённый снимок — просто игнорируем */ }
+}
+
+async function setSavedContact(userId, saved) {
+
+    if (!savedContactsReady) {
+        toast("Контакты ещё не включены на сервере (нужно выполнить contacts.sql)");
+        return false;
+    }
+    try {
+        if (saved) await KabanAPI.addSavedContact(userId);
+        else await KabanAPI.removeSavedContact(userId);
+    } catch (error) {
+        toast("Не удалось " + (saved ? "добавить" : "удалить") + " контакт: " + (error?.message || error));
+        return false;
+    }
+    // Удалённый контакт уносит с собой и своё имя для него (иначе оно «воскресло» бы из браузера).
+    if (!saved) { try { localStorage.removeItem(contactAliasStorageKey(userId)); } catch { /* не критично */ } }
+    await refreshSavedContacts(true);
+    toast(saved ? "Добавлено в контакты" : "Удалено из контактов");
+    return true;
+
+}
+
 function getContactsFromChats() {
     const byId = new Map();
-    cachedChatRows.forEach((row) => {
-        if (row.chats?.type === "group") return;
-        const user = row.otherUser;
-        if (user && !byId.has(user.id)) byId.set(user.id, user);
-    });
+    if (savedContactsReady) {
+        // Свежие данные (онлайн, фото) берём из чатов, если с человеком есть чат.
+        const fresh = new Map();
+        cachedChatRows.forEach((row) => {
+            if (row.chats?.type !== "group" && row.otherUser) fresh.set(row.otherUser.id, row.otherUser);
+        });
+        savedContacts.forEach((user, id) => byId.set(id, fresh.get(id) || user));
+    } else {
+        cachedChatRows.forEach((row) => {
+            if (row.chats?.type === "group") return;
+            const user = row.otherUser;
+            if (user && !byId.has(user.id)) byId.set(user.id, user);
+        });
+    }
     return [...byId.values()].sort((a, b) => {
         const tierDiff = contactActivityTier(a) - contactActivityTier(b);
         if (tierDiff !== 0) return tierDiff;
@@ -1865,7 +1974,7 @@ function buildContactRowHTML(user) {
             <div class="chat-avatar${av.cls}${online ? " online" : ""}${isBot ? " chat-avatar-bot" : ""}"${av.style}>${av.inner}</div>
             <div class="chat-content">
                 <div class="chat-line">
-                    <span class="chat-name">${escapeHTML(user.display_name || user.username || "Пользователь")}${statusEmoji}</span>
+                    <span class="chat-name">${escapeHTML(loadContactAlias(user.id) || user.display_name || user.username || "Пользователь")}${statusEmoji}</span>
                 </div>
                 <div class="chat-line">
                     <div class="chat-preview">${escapeHTML(subtitle)}</div>
@@ -1959,6 +2068,13 @@ function openContactQuickMenu(userId) {
         <button type="button" class="tab-quick-menu-item" onclick="closeTabQuickMenu(); openContactProfileFromList('${userId}')">
             <span class="tqm-icon">👤</span><span>Профиль</span>
         </button>
+        ${savedContactsReady ? (savedContacts.has(userId) ? `
+        <button type="button" class="tab-quick-menu-item danger" onclick="closeTabQuickMenu(); setSavedContact('${userId}', false)">
+            <span class="tqm-icon">🗑️</span><span>Удалить из контактов</span>
+        </button>` : `
+        <button type="button" class="tab-quick-menu-item" onclick="closeTabQuickMenu(); setSavedContact('${userId}', true)">
+            <span class="tqm-icon">➕</span><span>Добавить в контакты</span>
+        </button>`) : ""}
     `;
     document.getElementById("tab-quick-menu-backdrop").hidden = false;
 
@@ -2057,6 +2173,7 @@ function messageToExportText(message) {
         case "audio": return `[аудио] ${meta.name || ""}` + (url ? " " + url : "");
         case "location": return `[геопозиция] ${meta.lat}, ${meta.lon}`;
         case "contact": return `[контакт] ${meta.display_name || ""}`;
+        case "call": return `[${callLogInfo(message).title}${callLogInfo(message).duration ? ", " + callLogInfo(message).duration : ""}]`;
         default: return meta.name ? `[файл] ${meta.name}` + (url ? " " + url : "") : "[вложение]";
     }
 
@@ -2144,7 +2261,7 @@ async function deleteChatFromList(chatId) {
     const name = isGroup ? (row.chats?.title || "группу") : (row.otherUser?.display_name || "чат");
     const message = isGroup
         ? `Покинуть группу «${name}»?`
-        : `Удалить чат с «${name}»? Переписка исчезнет из вашего списка (у собеседника останется).`;
+        : `Удалить чат с «${name}»? Переписка исчезнет из вашего списка (у собеседника останется).${savedContactsReady && savedContacts.has(row.otherUser?.id) ? " Сам контакт сохранится." : ""}`;
     if (!confirm(message)) return;
 
     try {
@@ -4299,6 +4416,7 @@ async function startRealChatWith(userId) {
 
     try {
         const chatId = await KabanAPI.getOrCreateDirectChat(userId);
+        refreshSavedContacts(true); // новый чат сам добавляет человека в контакты (триггер в базе)
         if (!cachedChatRows.some((row) => row.chat_id === chatId)) await loadChatList();
         await openRealChat(chatId);
     } catch (error) {

@@ -40,7 +40,7 @@
 
 <link rel="preconnect" href="https://ketvgmietommjqutejuj.supabase.co" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261007-107">
+<link rel="stylesheet" href="style.css?v=20261007-113">
 </head>
 
 <body>
@@ -1087,8 +1087,8 @@
                 <button type="button" class="settings-option settings-option-link" onclick="openThemeColorPicker()">
                     <span class="settings-option-icon ico-orange" id="theme-color-row-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.3 0 2-.8 2-1.8 0-1.2-1-1.6-1-2.7 0-1 .8-1.8 1.8-1.8h2.1a3.6 3.6 0 0 0 3.6-3.7C20.5 6.6 16.7 3.5 12 3.5Z"/><circle cx="7.8" cy="11" r="1.1"/><circle cx="10.5" cy="7.4" r="1.1"/><circle cx="15" cy="7.6" r="1.1"/></svg></span>
                     <span class="settings-option-copy">
-                        <span class="settings-option-title">Цветовая тема</span>
-                        <span class="settings-option-hint">Мягкий акцент для фона приложения</span>
+                        <span class="settings-option-title">Темы и цвета</span>
+                        <span class="settings-option-hint">16 готовых тем: зелёная, синяя, закат и другие</span>
                     </span>
                     <span class="settings-option-value" id="theme-color-row-label">Графит</span>
                     <span class="settings-option-chevron">›</span>
@@ -1581,6 +1581,10 @@
         <span class="screen-live-dot" aria-hidden="true"></span>
         <span class="gcall-title" id="gcall-title">Групповой звонок</span>
         <span class="gcall-count" id="gcall-count"></span>
+        <button type="button" class="gcall-expand" id="gcall-expand" onclick="toggleGroupCallExpand()" aria-label="Развернуть на весь экран" title="Развернуть на весь экран">
+            <svg class="gcall-expand-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+            <svg class="gcall-expand-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+        </button>
     </div>
     <div class="gcall-grid" id="gcall-grid"></div>
     <div class="gcall-controls">
@@ -1724,11 +1728,15 @@
                 <span class="contact-modal-list-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 19.5 5 15l9.5-9.5a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8L9 19z"/><path d="m13 7 4 4"/></svg></span>
                 Изменить контакт
             </button>
+            <button class="contact-modal-list-item" type="button" id="contact-modal-save" onclick="toggleSavedContactFromModal()" hidden>
+                <span class="contact-modal-list-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9.5" cy="8.5" r="3.4"/><path d="M3.5 19.5c0-3.3 2.7-5.6 6-5.6s6 2.3 6 5.6M18 8v6M15 11h6"/></svg></span>
+                <span id="contact-modal-save-label">Добавить в контакты</span>
+            </button>
             <button class="contact-modal-list-item danger" type="button" onclick="closeContactPopover(); deleteChatFromList(currentChatId)">
                 <span class="contact-modal-list-icon">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M9 6V4h6v2m-9 0 1 14h10l1-14"/></svg>
                 </span>
-                Удалить контакт
+                Удалить чат
             </button>
             <button
                 class="contact-modal-list-item danger"
@@ -1764,14 +1772,31 @@
 
         <button class="info-window-close" type="button" aria-label="Закрыть карточку" onclick="closeInfoModal()">×</button>
 
-        <div class="info-window-left info-window-handle" id="info-window-handle" title="Потяните, чтобы переместить окно">
+        <div class="info-window-left">
 
-            <span class="info-window-grip" aria-hidden="true"></span>
+            <div class="info-window-drag" id="info-window-handle" title="Потяните, чтобы переместить окно (двойной клик — в центр)">
+                <span class="info-window-grip" aria-hidden="true"></span>
+            </div>
 
             <div class="info-avatar info-window-avatar" data-contact-field="avatar">🧔</div>
             <div class="info-name info-window-name" id="info-modal-name" data-contact-field="name">Собеседник</div>
             <div class="info-handle info-window-handle-text" data-contact-field="username">@contact</div>
             <div class="mood info-window-mood"><span class="status-dot"></span> в сети</div>
+
+            <div class="info-window-quick" id="info-window-quick">
+                <button type="button" class="info-quick-btn" onclick="startCall('audio')" aria-label="Позвонить">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h3.5l1.7 4.2-2.1 1.4a11 11 0 0 0 5.8 5.8l1.4-2.1 4.2 1.7V19a1.5 1.5 0 0 1-1.6 1.5A14.5 14.5 0 0 1 3.5 6.1 1.5 1.5 0 0 1 5 4.5Z"/></svg>
+                    <span>Звонок</span>
+                </button>
+                <button type="button" class="info-quick-btn" onclick="startCall('video')" aria-label="Видеозвонок">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6.5" width="12.5" height="11" rx="2.5"/><path d="m15.5 10.5 5-3v9l-5-3z"/></svg>
+                    <span>Видео</span>
+                </button>
+                <button type="button" class="info-quick-btn" id="info-quick-notify" onclick="infoQuickToggleNotifications()" aria-label="Уведомления" aria-pressed="true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15zM10 20a2 2 0 0 0 4 0"/></svg>
+                    <span id="info-quick-notify-label">Звук вкл.</span>
+                </button>
+            </div>
 
             <div class="info-window-contact">
                 <div class="info-contact-row contact-extra-row" data-extra="phone" hidden>
@@ -1782,13 +1807,25 @@
                     <div class="info-contact-label">День рождения</div>
                     <div class="info-contact-value" data-contact-field="birthday"></div>
                 </div>
-                <div class="info-contact-row">
+                <div class="info-contact-row info-copy-row" id="info-username-row" role="button" tabindex="0" title="Нажмите, чтобы скопировать ник" onclick="copyInfoUsername()" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyInfoUsername(); }">
                     <div class="info-contact-label">Имя пользователя</div>
                     <div class="info-contact-value" data-contact-field="username">@contact</div>
                 </div>
-                <div class="info-contact-row">
+                <div class="info-contact-row" id="info-bio-row">
                     <div class="info-contact-label">О себе</div>
                     <div class="info-bio" data-contact-field="bio">Нет информации</div>
+                </div>
+                <div class="info-contact-row" id="info-alias-row" hidden>
+                    <div class="info-contact-label">Имя в профиле</div>
+                    <div class="info-contact-value" id="info-alias-value"></div>
+                </div>
+                <div class="info-contact-row" id="info-since-row" hidden>
+                    <div class="info-contact-label">В KABAN с</div>
+                    <div class="info-contact-value" id="info-since-value"></div>
+                </div>
+                <div class="info-contact-row info-copy-row" id="info-groups-row" role="button" tabindex="0" onclick="openSharedGroupsModal()" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSharedGroupsModal(); }" hidden>
+                    <div class="info-contact-label">Общие группы</div>
+                    <div class="info-contact-value" id="info-groups-value"></div>
                 </div>
             </div>
 
@@ -3269,31 +3306,31 @@
 
 <!-- Библиотеки лежат рядом с сайтом (vendor/): не зависим от CDN, которые бывают недоступны; версия supabase-js закреплена (2.117.2). -->
 <script src="vendor/supabase.js?v=2.117.2"></script>
-<script src="supabaseClient.js?v=20261007-107"></script>
-<script src="crypto.js?v=20261007-107"></script>
+<script src="supabaseClient.js?v=20261007-113"></script>
+<script src="crypto.js?v=20261007-113"></script>
 <!-- script.js разбит на 4 файла для удобства навигации (раньше был один
      файл ~350КБ/8300+ строк) — порядок подключения важен, см. комментарий
      в начале каждого файла. Это НЕ ES-модули: обычные классические
      скрипты, выполняются последовательно как один большой файл, функции
      между ними в общей глобальной области видимости, как и раньше. -->
-<script src="emoji-data.js?v=20261007-107"></script>
-<script src="script-core.js?v=20261007-107"></script>
-<script src="script-ui.js?v=20261007-107"></script>
-<script src="script-chats.js?v=20261007-107"></script>
-<script src="script-messages.js?v=20261007-107"></script>
-<script src="effects.js?v=20261007-107"></script>
-<script src="games.js?v=20261007-107"></script>
-<script src="voice-ai.js?v=20261007-107"></script>
-<script src="stories.js?v=20261007-107"></script>
-<script src="productivity.js?v=20261007-107"></script>
-<script src="reactions.js?v=20261007-107"></script>
-<script src="listen.js?v=20261007-107"></script>
-<script src="voice.js?v=20261007-107"></script>
-<script src="voice-video.js?v=20261007-107"></script>
-<script src="resilience.js?v=20261007-107"></script>
-<script src="scheduled.js?v=20261007-107"></script>
-<script src="profile.js?v=20261007-107"></script>
-<script src="desktop-app.js?v=20261007-107"></script>
+<script src="emoji-data.js?v=20261007-113"></script>
+<script src="script-core.js?v=20261007-113"></script>
+<script src="script-ui.js?v=20261007-113"></script>
+<script src="script-chats.js?v=20261007-113"></script>
+<script src="script-messages.js?v=20261007-113"></script>
+<script src="effects.js?v=20261007-113"></script>
+<script src="games.js?v=20261007-113"></script>
+<script src="voice-ai.js?v=20261007-113"></script>
+<script src="stories.js?v=20261007-113"></script>
+<script src="productivity.js?v=20261007-113"></script>
+<script src="reactions.js?v=20261007-113"></script>
+<script src="listen.js?v=20261007-113"></script>
+<script src="voice.js?v=20261007-113"></script>
+<script src="voice-video.js?v=20261007-113"></script>
+<script src="resilience.js?v=20261007-113"></script>
+<script src="scheduled.js?v=20261007-113"></script>
+<script src="profile.js?v=20261007-113"></script>
+<script src="desktop-app.js?v=20261007-113"></script>
 
 </body>
 </html>

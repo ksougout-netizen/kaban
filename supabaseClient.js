@@ -893,6 +893,69 @@ const KabanAPI = {
         return !!data?.is_blocked;
     },
 
+    // Когда человек зарегистрировался — для строки «В KABAN с…» в его карточке.
+    async getUserSince(userId) {
+        const db = getSupabaseClient();
+        const { data, error } = await db.from("users").select("created_at").eq("id", userId).maybeSingle();
+        if (error) throw error;
+        return data?.created_at || null;
+    },
+
+    // Записная книжка (таблица contacts из contacts.sql): люди, которых я сохранил.
+    // Не зависит от чатов — удалённый чат контакт не убирает. Пока таблицы нет
+    // (SQL не выполнен), available=false, и сайт работает по-старому.
+    async getSavedContacts() {
+        const db = getSupabaseClient();
+        const me = await KabanAuth.getCurrentUser();
+        if (!me) return { available: false, users: [] };
+        const { data, error } = await db
+            .from("contacts")
+            .select("contact_id, alias, created_at, users!contacts_contact_id_fkey ( id, username, display_name, avatar_url, is_online, status_emoji, last_seen, bio, is_bot )")
+            .eq("owner_id", me.id);
+        if (error) {
+            // Таблицы нет (миграция не выполнена) — не ошибка для пользователя.
+            if (error.code === "42P01" || error.code === "PGRST205" || /relation .* does not exist|schema cache/i.test(error.message || "")) {
+                return { available: false, users: [] };
+            }
+            throw error;
+        }
+        return { available: true, users: (data || []).filter((row) => row.users).map((row) => ({ ...row.users, savedAlias: row.alias || null, savedAt: row.created_at })) };
+    },
+
+    async addSavedContact(userId) {
+        const db = getSupabaseClient();
+        const me = await KabanAuth.getCurrentUser();
+        if (!me) throw new Error("Нужно войти в аккаунт");
+        const { error } = await db.from("contacts").upsert({ owner_id: me.id, contact_id: userId }, { onConflict: "owner_id,contact_id", ignoreDuplicates: true });
+        if (error) throw error;
+    },
+
+    // Своё имя для контакта. Сохранение имени добавляет человека в контакты
+    // (имя дают тем, кого хотят помнить), очистка — только обнуляет поле.
+    async setContactAlias(userId, alias) {
+        const db = getSupabaseClient();
+        const me = await KabanAuth.getCurrentUser();
+        if (!me) throw new Error("Нужно войти в аккаунт");
+        const { error } = await db.from("contacts").upsert({ owner_id: me.id, contact_id: userId, alias: String(alias).trim().slice(0, 64) }, { onConflict: "owner_id,contact_id" });
+        if (error) throw error;
+    },
+
+    async clearContactAlias(userId) {
+        const db = getSupabaseClient();
+        const me = await KabanAuth.getCurrentUser();
+        if (!me) throw new Error("Нужно войти в аккаунт");
+        const { error } = await db.from("contacts").update({ alias: null }).eq("owner_id", me.id).eq("contact_id", userId);
+        if (error) throw error;
+    },
+
+    async removeSavedContact(userId) {
+        const db = getSupabaseClient();
+        const me = await KabanAuth.getCurrentUser();
+        if (!me) throw new Error("Нужно войти в аккаунт");
+        const { error } = await db.from("contacts").delete().eq("owner_id", me.id).eq("contact_id", userId);
+        if (error) throw error;
+    },
+
     // Список всех собеседников, которых я заблокировал — отдельным экраном
     // в настройках, а не только через кнопку в карточке каждого контакта
     // по отдельности (где легко забыть, кого вообще когда-то заблокировал).

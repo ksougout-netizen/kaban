@@ -336,5 +336,121 @@ if (typeof applyContactProfile === "function") {
     applyContactProfile = function (profile) {
         originalApplyContactProfile(profile);
         fillContactExtras(typeof currentChatType !== "undefined" && currentChatType === "direct" ? currentOtherUserId : null);
+        syncInfoWindowBasics(profile);
+    };
+}
+
+/* ---- левая панель полной карточки собеседника ---------------------------------
+   Только настоящие данные: «о себе» показываем, лишь если заполнено; «В KABAN с…»
+   и число общих групп подгружаются при открытии карточки; если вы дали контакту
+   своё имя — под ним видно настоящее имя из профиля. */
+
+let infoRealName = "";
+
+function syncInfoAliasRow() {
+    const aliasRow = document.getElementById("info-alias-row");
+    if (!aliasRow) return;
+    const alias = typeof currentOtherUserId !== "undefined" && currentOtherUserId ? loadContactAlias(currentOtherUserId) : null;
+    const isPerson = !document.getElementById("info-window-quick")?.hidden;
+    const showReal = !!alias && isPerson && !!infoRealName;
+    aliasRow.hidden = !showReal;
+    if (showReal) document.getElementById("info-alias-value").textContent = infoRealName;
+}
+
+if (typeof applyContactAliasIfSet === "function") {
+    const originalApplyAlias = applyContactAliasIfSet;
+    applyContactAliasIfSet = function (userId) {
+        originalApplyAlias(userId);
+        syncInfoAliasRow();
+    };
+}
+
+function syncInfoWindowBasics(profile) {
+
+    const isPerson = !profile.isBot && !profile.isSaved && profile.avatar !== "👥";
+    const bioRow = document.getElementById("info-bio-row");
+    if (bioRow) bioRow.hidden = !profile.bio;
+
+    const quick = document.getElementById("info-window-quick");
+    if (quick) quick.hidden = !isPerson;
+    document.getElementById("info-username-row")?.toggleAttribute("hidden", !profile.username);
+
+    // Своё имя для контакта задано — настоящее имя в профиле показываем отдельной строкой.
+    infoRealName = String(profile.name || "").replace(/^🔒 /, "");
+    syncInfoAliasRow();
+
+    // Строки, которые заполняются при открытии, до загрузки скрыты.
+    document.getElementById("info-since-row")?.setAttribute("hidden", "");
+    document.getElementById("info-groups-row")?.setAttribute("hidden", "");
+
+}
+
+const infoSinceCache = new Map();
+let infoExtrasToken = 0;
+
+async function fillInfoWindowExtras() {
+
+    syncInfoNotifyChip();
+
+    const userId = typeof currentOtherUserId !== "undefined" ? currentOtherUserId : null;
+    const sinceRow = document.getElementById("info-since-row");
+    const groupsRow = document.getElementById("info-groups-row");
+    if (!userId || currentChatType !== "direct" || !sinceRow || !groupsRow) return;
+    if (document.getElementById("info-window-quick")?.hidden) return;   // бот / «Избранное»
+
+    const token = ++infoExtrasToken;
+
+    KabanAPI.getUserSince?.call(KabanAPI, userId).then((iso) => {
+        if (token !== infoExtrasToken || !iso) return;
+        infoSinceCache.set(userId, iso);
+        document.getElementById("info-since-value").textContent = new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+        sinceRow.hidden = false;
+    }).catch(() => { /* строка просто не появится */ });
+
+    KabanAPI.getSharedGroups(userId).then((groups) => {
+        if (token !== infoExtrasToken || !groups?.length) return;
+        document.getElementById("info-groups-value").textContent = `${groups.length} ${pluralRu(groups.length, "группа", "группы", "групп")}`;
+        groupsRow.hidden = false;
+    }).catch(() => { /* строка просто не появится */ });
+
+}
+
+function syncInfoNotifyChip() {
+    const source = document.querySelector('[data-profile-toggle="notifications"]');
+    const chip = document.getElementById("info-quick-notify");
+    if (!source || !chip) return;
+    const on = source.getAttribute("aria-pressed") !== "false";
+    chip.setAttribute("aria-pressed", String(on));
+    document.getElementById("info-quick-notify-label").textContent = on ? "Звук вкл." : "Без звука";
+}
+
+function infoQuickToggleNotifications() {
+    document.querySelector('[data-profile-toggle="notifications"]')?.click();
+    setTimeout(syncInfoNotifyChip, 120);
+}
+
+async function copyInfoUsername() {
+    const text = document.querySelector("#info-username-row [data-contact-field='username']")?.textContent.trim();
+    if (!text) return;
+    try {
+        await navigator.clipboard.writeText(text);
+        toast("Ник скопирован");
+    } catch {
+        toast(text);
+    }
+}
+
+// Кнопка «Звук» в быстрых действиях следует за настоящим переключателем справа.
+(function watchNotificationToggle() {
+    const source = document.querySelector('[data-profile-toggle="notifications"]');
+    if (source) new MutationObserver(syncInfoNotifyChip).observe(source, { attributes: true, attributeFilter: ["aria-pressed"] });
+})();
+
+if (typeof openInfoModal === "function") {
+    const originalOpenInfoModal = openInfoModal;
+    openInfoModal = function (...args) {
+        const result = originalOpenInfoModal.apply(this, args);
+        fillInfoWindowExtras();
+        return result;
     };
 }

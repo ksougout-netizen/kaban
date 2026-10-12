@@ -581,10 +581,75 @@ function contextMenuForward() {
 // Фото/видео/аудио/файл — те же CSS-классы, что и у демо-вложений
 // (.message-image/.message-audio/.message-file*), просто с настоящим
 // attachment_url вместо blob: URL выбранного файла.
+/* ЖУРНАЛ ЗВОНКОВ В ЧАТЕ (call_log.sql): запись о звонке пишет звонивший, а видят её
+   оба — каждый со своей стороны: у звонившего «Исходящий звонок / Нет ответа /
+   Отменённый», у того, кому звонили, — «Входящий / Пропущенный». */
+function callLogInfo(message) {
+
+    const call = message.attachment_meta?.call || {};
+    const mine = message.sender_id === myRealUserId;
+    const video = call.kind === "video";
+    const outcome = call.outcome || "missed";
+    const noun = video ? "видеозвонок" : "звонок";
+
+    let title;
+    let bad = false;                        // красная стрелка и подпись
+    if (outcome === "ended") {
+        title = (mine ? "Исходящий " : "Входящий ") + noun;
+    } else if (outcome === "declined") {
+        title = mine ? (video ? "Видеозвонок отклонён" : "Звонок отклонён") : (video ? "Отклонённый видеозвонок" : "Отклонённый звонок");
+        bad = mine;
+    } else if (outcome === "canceled") {
+        title = mine ? (video ? "Отменённый видеозвонок" : "Отменённый звонок") : (video ? "Пропущенный видеозвонок" : "Пропущенный звонок");
+        bad = true;
+    } else {
+        title = mine ? "Нет ответа" : (video ? "Пропущенный видеозвонок" : "Пропущенный звонок");
+        bad = true;
+    }
+
+    const seconds = Number(call.duration) || 0;
+    const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+    const duration = outcome === "ended" && seconds
+        ? (h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`)
+        : "";
+
+    return { title, bad, mine, video, duration };
+
+}
+
+function buildCallLogHTML(message) {
+
+    const info = callLogInfo(message);
+    // Стрелка: исходящий — вверх-вправо, входящий — вниз-влево.
+    const arrow = info.mine
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 7 7 17M15 17H7V9"/></svg>';
+    const icon = info.video
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6.5" width="12.5" height="11" rx="2.5"/><path d="m15.5 10.5 5-3v9l-5-3z"/></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h3.5l1.7 4.2-2.1 1.4a11 11 0 0 0 5.8 5.8l1.4-2.1 4.2 1.7V19a1.5 1.5 0 0 1-1.6 1.5A14.5 14.5 0 0 1 3.5 6.1 1.5 1.5 0 0 1 5 4.5Z"/></svg>';
+
+    return `
+        <button type="button" class="message-call${info.bad ? " is-bad" : ""}" onclick="callBackFromMessage('${info.video ? "video" : "audio"}')" title="Позвонить снова" aria-label="${escapeHTML(info.title)}. Позвонить снова">
+            <span class="message-call-copy">
+                <span class="message-call-title">${escapeHTML(info.title)}</span>
+                <span class="message-call-sub">${arrow}${info.duration ? `<span>${info.duration}</span>` : ""}</span>
+            </span>
+            <span class="message-call-icon">${icon}</span>
+        </button>`;
+
+}
+
+function callBackFromMessage(kind) {
+    if (currentChatType === "group" || !currentOtherUserId) return;
+    startCall(kind);
+}
+
 function buildAttachmentHTML(message) {
 
     const url = message.attachment_url;
     const meta = message.attachment_meta || {};
+
+    if (message.type === "call") return buildCallLogHTML(message);
 
     // P2P-передача большого файла — у нас НИКОГДА нет attachment_url (байты
     // идут напрямую между браузерами, Storage не участвует), поэтому этот
@@ -2192,6 +2257,7 @@ const MESSAGE_TYPE_LABELS = {
 
 function messagePreviewText(message) {
     if (message.attachment_meta?.poll) return "📊 " + message.attachment_meta.poll.question;
+    if (message.type === "call") return callLogInfo(message).title;
     if (message.type === "text") return message.text || "Сообщение";
     const label = MESSAGE_TYPE_LABELS[message.type] || "Вложение";
     const name = message.attachment_meta?.name;
