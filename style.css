@@ -3012,6 +3012,34 @@ body[data-tint] .sidebar {
     font-size: 13px;
 }
 
+/* Иконки без своих стилей рисовались чёрной заливкой (чёрные квадраты в окне «Медиа»). */
+.shared-row-icon svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.shared-row-icon.voice svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
+
+/* Настоящая миниатюра фото вместо иконки. */
+.shared-row-icon.has-thumb {
+    width: 48px;
+    height: 48px;
+    flex-basis: 48px;
+    overflow: hidden;
+    padding: 0;
+}
+
+.shared-row-icon.has-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
 .shared-row-copy {
     display: flex;
     flex-direction: column;
@@ -12498,3 +12526,320 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
 .pe-caption::placeholder { color: var(--pe-muted); }
 .pe-caption:focus { outline: none; border-color: var(--pe-accent); background: #2c303a; }
 .pe-info { flex: 0 0 auto; min-width: 84px; }
+/* Вас упомянули в группе: сообщение с цветной рамкой и значок «@» в списке чатов. */
+.message.mentions-me {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.message.mentions-me .msg-mention { font-weight: 800; }
+
+.chat-mention-badge {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 19px;
+    height: 19px;
+    margin-right: 4px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-text, #fff);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1;
+}
+/* ИСЧЕЗАЮЩИЕ СООБЩЕНИЯ (disappearing.js) */
+.group-ico.tone-teal { background: linear-gradient(160deg, #4fd2e0, #1ea7bd); }
+
+.ttl-header-btn { color: var(--accent); }
+
+.ttl-options { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 10px; }
+
+.ttl-option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 11px 12px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--surface2);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .15s ease;
+}
+
+.ttl-option:hover { background: var(--border); }
+.ttl-option.active { background: var(--accent-wash); box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+.ttl-option-icon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    flex: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: var(--accent-text, #fff);
+}
+
+.ttl-option-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.ttl-option-copy { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.ttl-option-title { font-size: 14px; font-weight: 600; }
+.ttl-option-hint { color: var(--muted); font-size: 12px; }
+.ttl-option-check { color: var(--accent); font-size: 16px; font-weight: 800; }
+
+/* значок таймера у исчезающего сообщения */
+.message-timer { display: inline-flex; vertical-align: -2px; margin-right: 3px; opacity: .75; }
+.message-timer svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+/* лента миниатюр (альбом из нескольких фото) */
+.pe-window { grid-template-rows: auto minmax(0, 1fr) auto auto; }
+.pe-strip[hidden] { display: none; }
+
+.pe-strip {
+    display: flex;
+    gap: 10px;
+    padding: 10px 16px;
+    overflow-x: auto;
+    border-top: 1px solid var(--pe-line);
+    background: rgba(255,255,255,.02);
+    scrollbar-width: thin;
+    scrollbar-color: #353a46 transparent;
+}
+
+.pe-thumb {
+    position: relative;
+    flex: 0 0 auto;
+    width: 64px;
+    height: 64px;
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 12px;
+    background: var(--pe-surface2);
+    cursor: pointer;
+    transition: transform .15s cubic-bezier(.34,1.56,.64,1), box-shadow .15s ease;
+}
+
+.pe-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 12px; }
+.pe-thumb:hover { transform: translateY(-2px); }
+.pe-thumb.active { box-shadow: 0 0 0 2.5px var(--pe-bg), 0 0 0 4.5px var(--pe-accent); }
+.pe-thumb.pending::after, .pe-thumb.failed::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 12px;
+    background: rgba(20,22,27,.55);
+}
+
+.pe-thumb.pending::before {
+    content: "";
+    position: absolute;
+    z-index: 2;
+    top: 50%;
+    left: 50%;
+    width: 18px;
+    height: 18px;
+    margin: -9px 0 0 -9px;
+    border: 2px solid rgba(255,255,255,.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: pe-spin .8s linear infinite;
+}
+
+@keyframes pe-spin { to { transform: rotate(360deg); } }
+
+.pe-thumb-n {
+    position: absolute;
+    left: 5px;
+    bottom: 5px;
+    min-width: 17px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: rgba(0,0,0,.6);
+    color: #fff;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.pe-thumb-del {
+    position: absolute;
+    z-index: 3;
+    top: -6px;
+    right: -6px;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: #3a3f4c;
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity .15s ease, background .15s ease;
+}
+
+.pe-thumb:hover .pe-thumb-del, .pe-thumb:focus-within .pe-thumb-del, .pe-thumb.active .pe-thumb-del { opacity: 1; }
+.pe-thumb-del:hover { background: #e5484d; }
+
+.pe-thumb-add {
+    display: grid;
+    place-items: center;
+    border: 1.5px dashed rgba(255,255,255,.28);
+    background: transparent;
+    color: var(--pe-muted);
+    font-size: 26px;
+    font-weight: 300;
+}
+
+.pe-thumb-add:hover { border-color: var(--pe-accent); color: var(--pe-accent); }
+
+@media (max-width: 860px) {
+    .pe-window { grid-template-rows: auto minmax(0, 1fr) auto auto; }
+    .pe-thumb { width: 54px; height: 54px; }
+}
+/* АЛЬБОМ: несколько фото одним сообщением — мозаика рядами (script-messages.js → buildAlbumHTML). */
+.message-album {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: min(300px, 68vw);
+}
+
+.album-row { display: flex; gap: 3px; }
+.album-row.r1 { height: 190px; }
+.album-row.r2 { height: 150px; }
+.album-row.r3 { height: 104px; }
+
+.message-image.album-img {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    height: 100%;
+    max-height: none;
+    border-radius: 5px;
+    object-fit: cover;
+}
+
+/* внешние углы мозаики скруглены как у обычного фото, внутренние — мельче */
+.message-album .album-row:first-child .album-img:first-child { border-top-left-radius: 12px; }
+.message-album .album-row:first-child .album-img:last-child { border-top-right-radius: 12px; }
+.message-album .album-row:last-child .album-img:first-child { border-bottom-left-radius: 12px; }
+.message-album .album-row:last-child .album-img:last-child { border-bottom-right-radius: 12px; }
+/* ============================================================================
+   ФОТО, ВИДЕО, АЛЬБОМЫ — как в Telegram (script-messages.js → mediaClass).
+   Снимок занимает пузырь целиком: никакой цветной рамки вокруг. Без подписи время
+   и галочки — тёмная таблетка поверх снимка; с подписью — снимок сверху, текст под ним.
+   ========================================================================= */
+.message.has-media {
+    padding: 0 !important;
+    overflow: hidden;
+}
+
+/* хвостик у снимка не рисуем (он бы обрезался и выглядел бы обломком) */
+.message.has-media::before { display: none !important; }
+
+.message.has-media > .message-image {
+    display: block;
+    width: min(340px, 72vw);
+    max-height: 440px;
+    border-radius: 0;
+    object-fit: cover;
+}
+
+.message.has-media .message-album {
+    width: min(340px, 72vw);
+    gap: 2px;
+}
+
+.message.has-media .message-album .album-img { border-radius: 0 !important; }
+
+/* шапка над снимком (имя в группе, «ответ на…», «переслано от…») — с обычными отступами */
+.message.has-media > .message-sender-name,
+.message.has-media > .message-forwarded {
+    display: block;
+    margin: 8px 13px 5px;
+}
+
+.message.has-media > .message-reply-quote {
+    display: block;
+    margin: 8px 10px 6px;
+}
+
+/* подпись под снимком */
+.message.has-media > .message-caption {
+    display: block;
+    max-width: none;
+    margin: 0;
+    padding: 8px 13px 0;
+}
+
+/* с подписью: время — строкой справа под текстом */
+.message.has-media:not(.media-only) > .message-time {
+    margin: 0 0 0 auto;
+    padding: 1px 12px 7px 0;
+}
+
+/* без подписи: время поверх снимка */
+.message.has-media.media-only > .message-time {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    width: max-content;
+    margin: 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(0,0,0,.46);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    color: #fff !important;
+    font-size: 10.5px;
+    line-height: 1.4;
+}
+
+.message.has-media.media-only > .message-time .message-status,
+.message.has-media.media-only > .message-time .message-time-text,
+.message.has-media.media-only > .message-time .message-edited-tag,
+.message.has-media.media-only > .message-time .message-timer {
+    color: #fff !important;
+    opacity: .95;
+}
+
+/* у видео снизу системные элементы управления — время уходит вверх */
+.message.has-media.media-video.media-only > .message-time { top: 8px; bottom: auto; }
+
+/* если нет ни подписи, ни шапки — пузыря нет совсем, виден только снимок */
+.message.has-media.media-bare {
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+/* КОНТАКТ — аватар кружком (фото или инициалы), как в Telegram */
+.message-contact-avatar {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    overflow: hidden;
+    border-radius: 50%;
+    background-size: cover;
+    background-position: center;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.message-contact-avatar .avatar-initials { font-size: 15px; font-weight: 700; }
+.message-contact { width: min(260px, 70vw); gap: 12px; }
+.message-contact-title { font-size: 13.5px; font-weight: 700; }
+.message-contact-hint { font-size: 12px; }

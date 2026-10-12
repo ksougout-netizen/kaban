@@ -76,6 +76,8 @@
         open: false,
         file: null,
         onSend: null,
+        items: [],                        // все фото в окне (у каждого свои правки и история)
+        active: 0,
         orig: null,                       // исходный холст (после ограничения размера)
         base: null,                       // текущая «подложка» (после поворотов / кадрирования)
         layers: [],
@@ -131,6 +133,157 @@
 
     function isEditableImage(file) {
         return !!file && /^image\/(png|jpe?g|webp|bmp|avif|heic|heif)$/i.test(file.type);
+    }
+
+    /* ---- несколько фото (альбом) ----------------------------------------------
+       Правки каждого фото (подложка, слои, коррекция, история) лежат в его «записи»
+       items[i]. Активное фото живёт прямо в state — так весь остальной код редактора
+       остаётся как был. Переключение: сохранить активное в запись, загрузить другую. */
+
+    const MAX_PHOTOS = 10;
+    const ITEM_FIELDS = ["file", "orig", "base", "layers", "adjust", "nextId", "history", "hIdx"];
+
+    function pickItem() {
+        const item = {};
+        ITEM_FIELDS.forEach((key) => { item[key] = state[key]; });
+        return item;
+    }
+
+    function putItem(item) {
+        ITEM_FIELDS.forEach((key) => { state[key] = item[key]; });
+    }
+
+    function newItem(file) {
+        return { file, pending: true, ready: null, orig: null, base: null, layers: [], adjust: { b: 100, c: 100, s: 100 }, nextId: 1, history: [], hIdx: 0, thumb: "" };
+    }
+
+    async function decodeImage(file, maxSide) {
+        const bitmap = await createImageBitmap(file);
+        const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+        const canvas = makeCanvas(bitmap.width * scale, bitmap.height * scale);
+        canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        bitmap.close?.();
+        return canvas;
+    }
+
+    // Расшифровать фото записи (один раз): подложка, пустой слой правок и «нулевой» шаг истории.
+    function decodeItem(item, maxSide) {
+        if (!item.ready) {
+            item.ready = decodeImage(item.file, maxSide).then((canvas) => {
+                item.orig = item.base = canvas;
+                item.history = [{ base: canvas, layers: "[]", adjust: { b: 100, c: 100, s: 100 }, nextId: 1 }];
+                item.hIdx = 0;
+                item.pending = false;
+                item.thumb = thumbFromCanvas(canvas);
+                renderStrip();
+            });
+        }
+        return item.ready;
+    }
+
+    function thumbFromCanvas(canvas, withEdits) {
+        const side = 112;
+        const scale = side / Math.max(canvas.width, canvas.height);
+        const out = makeCanvas(canvas.width * scale, canvas.height * scale);
+        const ctx = out.getContext("2d");
+        if (withEdits) ctx.filter = filterCss();
+        ctx.drawImage(withEdits ? els.photo : canvas, 0, 0, out.width, out.height);
+        ctx.filter = "none";
+        if (withEdits) { ctx.save(); ctx.scale(scale, scale); drawLayers(ctx, false); ctx.restore(); }
+        return out.toDataURL("image/jpeg", 0.7);
+    }
+
+    // Записать активное фото обратно в его запись (и обновить миниатюру с правками).
+    function captureActive() {
+        const item = state.items[state.active];
+        if (!item || !state.base) return;
+        Object.assign(item, pickItem());
+        try { item.thumb = thumbFromCanvas(state.base, true); } catch { /* миниатюра не критична */ }
+    }
+
+    function withItem(item, fn) {
+        const saved = pickItem();
+        putItem(item);
+        try { return fn(); } finally { putItem(saved); }
+    }
+
+    function loadActive(index) {
+        finishTextEdit(true);
+        state.active = index;
+        putItem(state.items[index]);
+        state.selectedId = null;
+        state.crop = null;
+        state.drag = null;
+        if (state.tool === "crop") state.tool = "move";
+        setBase(state.base);
+        syncAdjustUI();
+        applyFilter();
+        syncPanel();
+        render();
+        updateHistButtons();
+        renderStrip();
+    }
+
+    async function activateItem(index) {
+        if (index === state.active || !state.items[index]) return;
+        finishTextEdit();
+        captureActive();
+        const item = state.items[index];
+        if (item.pending) {
+            els.loading.hidden = false;
+            try { await decodeItem(item, state.maxSide); } catch { /* ниже */ }
+            els.loading.hidden = true;
+            if (item.pending) { note("Не удалось открыть это фото"); return; }
+        }
+        loadActive(index);
+    }
+
+    function removeItem(index) {
+        if (state.items.length <= 1 || !state.items[index]) return;
+        finishTextEdit(true);
+        captureActive();
+        state.items.splice(index, 1);
+        const next = Math.min(index === state.active ? index : (index < state.active ? state.active - 1 : state.active), state.items.length - 1);
+        state.active = -1;
+        loadActive(next);
+    }
+
+    async function addPhotos(files) {
+        const images = [...files].filter(isEditableImage);
+        const room = MAX_PHOTOS - state.items.length;
+        if (!images.length) { note("Можно добавить только фото"); return; }
+        if (room <= 0) { note(`Не больше ${MAX_PHOTOS} фото в одном сообщении`); return; }
+        if (images.length > room) note(`Добавлено ${room} из ${images.length}: в одном сообщении не больше ${MAX_PHOTOS} фото`);
+        images.slice(0, room).forEach((file) => {
+            const item = newItem(file);
+            state.items.push(item);
+            decodeItem(item, state.maxSide).catch(() => { item.failed = true; renderStrip(); });
+        });
+        renderStrip();
+    }
+
+    function renderStrip() {
+
+        if (!els) return;
+        const strip = els.strip;
+        const multiple = state.items.length > 1;
+        strip.hidden = !multiple;
+        updateSendLabel();
+        if (!multiple) return;
+
+        strip.innerHTML = state.items.map((item, i) => `
+            <div class="pe-thumb${i === state.active ? " active" : ""}${item.pending ? " pending" : ""}${item.failed ? " failed" : ""}" data-idx="${i}" role="button" tabindex="0" aria-label="Фото ${i + 1}">
+                ${item.thumb ? `<img src="${item.thumb}" alt="">` : ""}
+                <span class="pe-thumb-n">${i + 1}</span>
+                <button type="button" class="pe-thumb-del" data-del="${i}" aria-label="Убрать фото ${i + 1}" title="Убрать из сообщения">×</button>
+            </div>`).join("") + (state.items.length < MAX_PHOTOS
+            ? `<button type="button" class="pe-thumb pe-thumb-add" data-pe="add-photos" aria-label="Добавить ещё фото" title="Добавить ещё фото">+</button>` : "");
+
+    }
+
+    function updateSendLabel() {
+        const span = els?.sendBtn?.querySelector("span");
+        if (span && !state.busy) span.textContent = state.items.length > 1 ? `Отправить (${state.items.length})` : "Отправить";
     }
 
     /* ---- построение окна ------------------------------------------------- */
@@ -228,12 +381,20 @@
                         </section>
 
                         <section class="pe-sec">
+                            <h3>Фото в сообщении</h3>
+                            <button type="button" class="pe-btn pe-btn-wide" data-pe="add-photos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Добавить ещё фото</button>
+                            <input type="file" id="pe-add-input" accept="image/*" multiple hidden>
+                        </section>
+
+                        <section class="pe-sec">
                             <h3>Поворот</h3>
                             <button type="button" class="pe-btn pe-btn-wide" data-pe="rotate">${svg("rotate")}Повернуть на 90°</button>
                         </section>
 
                     </aside>
                 </div>
+
+                <div class="pe-strip" id="pe-strip" hidden></div>
 
                 <footer class="pe-footer">
                     <span class="pe-info" id="pe-info"></span>
@@ -261,7 +422,9 @@
             sizeOut: root.querySelector("#pe-size-out"),
             sizeLabel: root.querySelector("#pe-size-label"),
             customColor: root.querySelector("#pe-color-custom"),
-            caption: root.querySelector("#pe-caption")
+            caption: root.querySelector("#pe-caption"),
+            strip: root.querySelector("#pe-strip"),
+            addInput: root.querySelector("#pe-add-input")
         };
         photoCtx = els.photo.getContext("2d");
         overlayCtx = els.overlay.getContext("2d");
@@ -280,6 +443,11 @@
 
         els.root.addEventListener("click", (event) => {
 
+            const del = event.target.closest("[data-del]");
+            if (del) { event.stopPropagation(); removeItem(Number(del.dataset.del)); return; }
+            const thumb = event.target.closest(".pe-thumb[data-idx]");
+            if (thumb) { activateItem(Number(thumb.dataset.idx)); return; }
+
             const button = event.target.closest("[data-pe], [data-tool], [data-color], [data-ratio], [data-style], [data-emoji]");
             if (!button) return;
 
@@ -296,6 +464,7 @@
                 case "reset": resetAll(); break;
                 case "rotate": rotate90(); break;
                 case "auto": autoEnhance(); break;
+                case "add-photos": els.addInput.click(); break;
                 case "crop-apply": applyCrop(); break;
                 case "crop-cancel": setTool("move"); break;
                 case "send": send(false); break;
@@ -305,6 +474,12 @@
         });
 
         els.customColor.addEventListener("input", () => applyColor(els.customColor.value, true));
+
+        els.addInput.addEventListener("change", () => { addPhotos(els.addInput.files); els.addInput.value = ""; });
+        els.strip.addEventListener("keydown", (event) => {
+            const thumb = event.target.closest?.(".pe-thumb[data-idx]");
+            if (thumb && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); activateItem(Number(thumb.dataset.idx)); }
+        });
 
         // Подпись: Enter — отправить (как в поле сообщения), Escape не закрывает окно целиком.
         els.caption.addEventListener("keydown", (event) => {
@@ -416,20 +591,20 @@
 
     /* ---- открытие / закрытие -------------------------------------------- */
 
-    async function openPhotoEditor(file, onSend) {
+    async function openPhotoEditor(input, onSend) {
 
         build();
         if (state.open) return;
 
+        const files = (Array.isArray(input) ? input : [input]).filter(Boolean).slice(0, MAX_PHOTOS);
+        if (!files.length) return;
+
         state.open = true;
-        state.file = file;
         state.onSend = onSend;
-        state.layers = [];
-        state.adjust = { b: 100, c: 100, s: 100 };
+        state.maxSide = files.length > 1 ? 2000 : MAX_SIDE;
+        state.items = files.map(newItem);
+        state.active = 0;
         state.selectedId = null;
-        state.nextId = 1;
-        state.history = [];
-        state.hIdx = -1;
         state.crop = null;
         state.drag = null;
         state.editing = null;
@@ -439,6 +614,7 @@
         accentCache = "";
         drawnPhotoKey = "";
         els.caption.value = "";
+        els.strip.hidden = true;
         els.root.hidden = false;
         els.root.classList.remove("is-visible");
         requestAnimationFrame(() => els.root.classList.add("is-visible"));
@@ -448,37 +624,37 @@
         document.body.classList.add("pe-open");
 
         try {
-            const bitmap = await createImageBitmap(file);
-            const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
-            const canvas = makeCanvas(bitmap.width * scale, bitmap.height * scale);
-            canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-            bitmap.close?.();
-            state.orig = canvas;
-            state.base = canvas;
+            await decodeItem(state.items[0], state.maxSide);
         } catch (error) {
             console.warn("Редактор: не удалось открыть изображение", error);
             closeEditor(true);
             note("Не удалось открыть фото в редакторе — отправляем как есть");
-            onSend?.(file);
+            onSend?.(files, { caption: "" });
             return;
         }
 
         els.loading.hidden = true;
         els.wrap.style.visibility = "";
         els.sendBtn.disabled = false;
-        setBase(state.base);
-        syncAdjustUI();
-        applyFilter();
-        record();
+        loadActive(0);
         setTool("move");
         els.sendBtn.focus({ preventScroll: true });
+
+        // Остальные фото расшифровываем по очереди, не блокируя окно (память не раздуваем).
+        (async () => {
+            for (let i = 1; i < state.items.length && state.open; i++) {
+                const item = state.items[i];
+                try { await decodeItem(item, state.maxSide); } catch { item.failed = true; renderStrip(); }
+            }
+        })();
 
     }
 
     function closeEditor(force) {
 
         if (!state.open) return;
-        if (!force && state.hIdx > 0 && !confirm("Закрыть редактор? Изменения не сохранятся.")) return;
+        const edited = state.items.some((item, i) => (i === state.active ? state.hIdx : item.hIdx) > 0);
+        if (!force && edited && !confirm("Закрыть редактор? Изменения не сохранятся.")) return;
 
         finishTextEdit(true);
         state.open = false;
@@ -489,9 +665,11 @@
         state.layers = [];
         state.history = [];
         state.file = null;
+        state.items = [];
+        state.active = 0;
+        els.strip.innerHTML = "";
 
     }
-
     /* ---- холсты и отрисовка ---------------------------------------------- */
 
     function setBase(canvas) {
@@ -1509,16 +1687,26 @@
 
         if (state.busy || !state.base) return;
         finishTextEdit();
+        captureActive();
 
         const onSend = state.onSend;
-        const original = state.file;
-
-        // Ничего не менялось (или выбрано «без изменений») — уходит исходный файл, без пересжатия.
+        const items = state.items.slice();
         const caption = els.caption.value.trim();
 
-        if (asOriginal || state.hIdx <= 0) {
+        // Дожидаемся расшифровки всех фото (если кто-то ещё в очереди).
+        if (items.some((item) => item.pending)) {
+            state.busy = true;
+            els.sendBtn.disabled = true;
+            els.sendBtn.querySelector("span").textContent = "Готовим…";
+            try { await Promise.all(items.map((item) => item.ready || decodeItem(item, state.maxSide))); } catch { /* недоступные ниже уйдут как есть */ }
+            state.busy = false;
+            els.sendBtn.disabled = false;
+        }
+
+        // Ничего не менялось (или выбрано «без изменений») — уходят исходные файлы, без пересжатия.
+        if (asOriginal || items.every((item) => item.hIdx <= 0)) {
             closeEditor(true);
-            onSend?.(original, { caption });
+            onSend?.(items.map((item) => item.file), { caption });
             return;
         }
 
@@ -1526,13 +1714,17 @@
         els.sendBtn.disabled = true;
         els.sendBtn.querySelector("span").textContent = "Готовим…";
         try {
-            const canvas = exportCanvas();
-            const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
-            if (!blob) throw new Error("не удалось собрать изображение");
-            const baseName = (original?.name || "photo").replace(/\.[^.]+$/, "") || "photo";
-            const file = new File([blob], `${baseName}-edited.jpg`, { type: "image/jpeg" });
+            const files = [];
+            for (const item of items) {
+                if (item.hIdx <= 0 || !item.base) { files.push(item.file); continue; }
+                const canvas = withItem(item, () => exportCanvas());
+                const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+                if (!blob) throw new Error("не удалось собрать изображение");
+                const baseName = (item.file?.name || "photo").replace(/\.[^.]+$/, "") || "photo";
+                files.push(new File([blob], `${baseName}-edited.jpg`, { type: "image/jpeg" }));
+            }
             closeEditor(true);
-            onSend?.(file, { caption });
+            onSend?.(files, { caption });
         } catch (error) {
             console.warn("Редактор: экспорт не удался", error);
             note("Не удалось собрать изображение: " + (error?.message || error));
@@ -1540,12 +1732,11 @@
             state.busy = false;
             if (els) {
                 els.sendBtn.disabled = false;
-                els.sendBtn.querySelector("span").textContent = "Отправить";
+                updateSendLabel();
             }
         }
 
     }
-
     /* ---- подключение к чату ------------------------------------------------- */
 
     function canEditHere() {
@@ -1555,32 +1746,42 @@
             && !state.open;
     }
 
-    function openForChat(file) {
+    // Отправка результата редактора: одно фото — обычным вложением, несколько — альбомом.
+    function sendEdited(list, extra) {
+        const files = Array.isArray(list) ? list : [list];
+        if (files.length > 1 && typeof sendRealAlbum === "function") sendRealAlbum(files, extra);
+        else sendRealAttachment(files[0], "image", extra);
+    }
+
+    function openForChat(files) {
         const targetChat = currentChatId;
-        openPhotoEditor(file, (final, extra) => {
+        openPhotoEditor(files, (final, extra) => {
             // Пока редактировали, могли переключить чат — шлём туда, откуда открывали.
             if (currentChatId !== targetChat && typeof openRealChat === "function") {
-                openRealChat(targetChat).then(() => sendRealAttachment(final, "image", extra)).catch(() => sendRealAttachment(final, "image", extra));
-            } else sendRealAttachment(final, "image", extra);
+                openRealChat(targetChat).then(() => sendEdited(final, extra)).catch(() => sendEdited(final, extra));
+            } else sendEdited(final, extra);
         });
     }
 
-    // Выбор через «+ → Фото» и перетаскивание файла в окно (его обработчик зовёт handleAttachFile).
+    // Выбор через «+ → Фото» и перетаскивание файлов в окно (его обработчик зовёт handleAttachFile).
     if (typeof handleAttachFile === "function") {
         const original = handleAttachFile;
         handleAttachFile = function (input, kind) {
-            const file = input?.files?.[0];
-            if (kind === "media" && isEditableImage(file) && canEditHere()) {
+            const files = [...(input?.files || [])];
+            const images = files.filter(isEditableImage);
+            if (kind === "media" && images.length && canEditHere()) {
                 try { input.value = ""; } catch { /* у перетаскивания input — простой объект */ }
                 if (typeof closeAttachMenu === "function") closeAttachMenu();
-                openForChat(file);
+                // Видео и GIF из той же пачки уходят сразу, как обычно; фото — в редактор.
+                files.filter((file) => !isEditableImage(file)).forEach((file) => original.call(this, { files: [file] }, "media"));
+                openForChat(images.slice(0, MAX_PHOTOS));
                 return;
             }
             return original.apply(this, arguments);
         };
     }
 
-    // Ctrl+V: картинка из буфера (скриншот, скопированное изображение).
+    // Ctrl+V: картинки из буфера (скриншот, скопированное изображение).
     document.addEventListener("paste", (event) => {
 
         if (state.open || !document.body.classList.contains("chat-selected") || !canEditHere()) return;
@@ -1588,23 +1789,25 @@
         if (!data) return;
 
         const text = data.getData("text/plain");
-        const item = [...(data.items || [])].find((i) => i.kind === "file" && /^image\//i.test(i.type));
-        if (!item || (text && text.trim())) return;          // обычный текст вставляем как обычно
+        const items = [...(data.items || [])].filter((i) => i.kind === "file" && /^image\//i.test(i.type));
+        if (!items.length || (text && text.trim())) return;          // обычный текст вставляем как обычно
 
-        const file = item.getAsFile();
-        if (!isEditableImage(file)) return;
+        const files = items.map((item) => item.getAsFile()).filter(isEditableImage);
+        if (!files.length) return;
         event.preventDefault();
-        const named = file.name && file.name !== "image.png" ? file
-            : new File([file], `screenshot-${Date.now()}.${file.type.split("/")[1] || "png"}`, { type: file.type });
+        const named = files.map((file, i) => file.name && file.name !== "image.png" ? file
+            : new File([file], `screenshot-${Date.now()}${files.length > 1 ? "-" + (i + 1) : ""}.${file.type.split("/")[1] || "png"}`, { type: file.type }));
         openForChat(named);
 
     });
-
     window.openPhotoEditor = openPhotoEditor;
     window.KabanPhotoEditor = {
         open: openPhotoEditor,
         // Для проверок: состояние и экспорт без отправки.
         _state: state,
+        _activate: (i) => activateItem(i),
+        _remove: (i) => removeItem(i),
+        _add: (files) => addPhotos(files),
         _export: () => exportCanvas(),
         _setTool: (t) => setTool(t),
         _record: record,

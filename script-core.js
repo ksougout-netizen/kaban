@@ -14,9 +14,17 @@
    через window.visualViewport (там, где он есть) и гасим попытки Safari
    сдвинуть документ скроллом — наш интерфейс сам вписывается в размер. */
 
+// Подгонка под экранную клавиатуру нужна только на телефонах и планшетах. На компьютере
+// visualViewport может «залипнуть» меньше окна (сенсорная клавиатура Windows, масштаб
+// жестом) — и тогда поле ввода зависало над нижним краем с пустой полосой под ним.
+// Там берём честную высоту окна.
+const IS_PHONE_OS = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
 function setAppHeight() {
     const viewport = window.visualViewport;
-    const height = viewport ? viewport.height : window.innerHeight;
+    const useViewport = IS_PHONE_OS && viewport && viewport.scale <= 1.01;
+    const height = useViewport ? viewport.height : window.innerHeight;
     document.documentElement.style.setProperty("--app-height", `${height}px`);
     // html/body зафиксированы (position:fixed), скроллить их не должно быть
     // возможности в принципе, но подстраховываемся на случай, если Safari
@@ -93,6 +101,16 @@ let currentChatIsSecret = false;
 
 setAppHeight();
 
+// Интерфейс по высоте окна, ему нечего прокручивать. Но браузер сам сдвигает html/body,
+// когда фокус или scrollIntoView попадает на элемент вне видимой области (из-за этого всё
+// приложение «уезжало» вверх на несколько пикселей). Возвращаем на место.
+document.addEventListener("scroll", (event) => {
+    const target = event.target;
+    if (target === document) { if (window.scrollY || window.scrollX) window.scrollTo(0, 0); return; }
+    if (target === document.documentElement || target === document.body) { target.scrollTop = 0; target.scrollLeft = 0; }
+}, true);
+window.addEventListener("focus", () => setAppHeight());
+
 // resize/scroll у visualViewport летят очень часто (открытие/закрытие
 // клавиатуры на iOS, инерционная прокрутка, перетаскивание границы окна) —
 // каждый вызов setAppHeight пишет CSS-переменную (пересчёт стилей всего
@@ -110,9 +128,9 @@ function scheduleAppHeight() {
 if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", scheduleAppHeight);
     window.visualViewport.addEventListener("scroll", scheduleAppHeight);
-} else {
-    window.addEventListener("resize", scheduleAppHeight);
 }
+// На компьютере высота берётся у окна, а не у visualViewport — поэтому слушаем и resize окна.
+window.addEventListener("resize", scheduleAppHeight);
 
 // scrollTo(0,0) только если документ реально сместился — а не на каждое
 // scroll-событие подряд (оно дублировало ту же работу, что уже делает
@@ -4204,6 +4222,7 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
             onParticipants: (participants) => {
                 call.syncedOnce = true;
                 call.participants = participants;
+                trackGroupCallStats(call, participants);
                 reconcileGroupCallPeers(call);
             }
         });
@@ -4684,6 +4703,71 @@ async function toggleGroupCallCamera() {
 
 }
 
+// Для записи о звонке в чате: сколько других участников было максимум, когда звонок
+// начался (самое раннее присоединение) и включал ли кто-то видео.
+function trackGroupCallStats(call, participants) {
+    let others = 0;
+    let earliest = call.joinedAt;
+    participants.forEach((info, userId) => {
+        if (info?.withVideo) call.anyVideo = true;
+        if (userId === call.me.id) return;
+        others++;
+        if (info?.joinedAt && info.joinedAt < earliest) earliest = info.joinedAt;
+    });
+    call.maxOthers = Math.max(call.maxOthers || 0, others);
+    call.firstJoinAt = Math.min(call.firstJoinAt || earliest, earliest);
+    call.lastOthers = others;
+}
+
+// Стабильный id из строки (UUID v5-подобный): тот, кто выходит последним, пишет запись с
+// id, одинаковым у всех — если двое запишут одновременно, второй получит «уже есть» и тихо
+// ничего не создаст.
+async function uuidFromText(text) {
+    const bytes = new Uint8Array(await crypto.subtle.digest("SHA-1", new TextEncoder().encode(text))).slice(0, 16);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+// «Групповой звонок · 12:05 · 3 участника» — одной записью в группе. Пишет тот, кто вышел
+// ПОСЛЕДНИМ (после него в комнате никого). Если в звонок так никто и не пришёл — записи нет.
+async function logGroupCallToChat(call) {
+
+    if (!call || call.logged || !call.maxOthers || call.lastOthers > 0) return;
+    if (cachedChatRows.find((r) => r.chat_id === call.chatId)?.chats?.is_secret) return;
+    call.logged = true;
+
+    const startedAt = call.firstJoinAt || call.joinedAt;
+    const duration = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    const attachmentMeta = {
+        call: {
+            kind: call.anyVideo ? "video" : "audio",
+            outcome: "ended",
+            duration,
+            group: true,
+            participants: call.maxOthers + 1
+        }
+    };
+
+    try {
+        const id = await uuidFromText(`gcall:${call.chatId}:${Math.floor(startedAt / 1000)}`);
+        const message = await KabanAPI.sendMessage(call.chatId, { type: "call", attachmentMeta, id });
+        if (!message) return;
+        realMessagesById.set(message.id, message);
+        if (currentChatId === call.chatId) {
+            appendRealMessageRow(message, true);
+            updateMessageGrouping();
+            if (appSettings.autoScroll) scrollMessagesToBottom();
+        }
+        patchCachedChatLastMessage(call.chatId, message);
+    } catch (error) {
+        // 23505 — запись уже создал тот, кто вышел одновременно с нами: так и должно быть.
+        if (error?.code !== "23505") console.warn("Запись о групповом звонке не создана (выполнен ли call_log.sql?)", error);
+    }
+
+}
+
 function leaveGroupCall(reason = "left") {
 
     const call = activeGroupCall;
@@ -4691,6 +4775,7 @@ function leaveGroupCall(reason = "left") {
     activeGroupCall = null;
     call.ended = true;
     startingGroupCall = false;
+    if (reason === "left" || reason === "ended") logGroupCallToChat(call);
 
     clearInterval(call.timer);
     clearInterval(call.watchTimer);

@@ -1329,6 +1329,8 @@ const MESSAGE_TYPE_PREVIEW_LABELS = {
 function messagePreviewText(message) {
     if (message.type === "text") return message.text || "";
     if (message.type === "call" && typeof callLogInfo === "function") return callLogInfo(message).title;
+    const albumCount = typeof albumPhotos === "function" ? (albumPhotos(message)?.length || 0) : 0;
+    if (albumCount) return message.text ? `📷 ${albumCount} фото, ${message.text}` : `📷 ${albumCount} фото`;
     if ((message.type === "image" || message.type === "video") && message.text) return `${MESSAGE_TYPE_PREVIEW_LABELS[message.type]}, ${message.text}`;
     return MESSAGE_TYPE_PREVIEW_LABELS[message.type] || "📎 Вложение";
 }
@@ -1429,6 +1431,8 @@ function buildChatListItemHTML(row) {
     const avatarGlyph = av.inner;
 
     const unreadCount = row.unreadCount || 0;
+    const mentionBadge = unreadCount > 0 && isGroup && typeof messageMentionsMe === "function" && messageMentionsMe(lastMessage)
+        ? `<span class="chat-mention-badge" title="Вас упомянули" aria-label="Вас упомянули">@</span>` : "";
     const unreadBadge = unreadCount > 0
         ? `<span class="chat-unread-badge" onclick="event.stopPropagation(); markChatReadWithoutOpening('${chat.id}')" title="Пометить прочитанным, не открывая">${unreadCount > 99 ? "99+" : unreadCount}</span>`
         : (row.manuallyUnread
@@ -1456,7 +1460,7 @@ function buildChatListItemHTML(row) {
                 </div>
                 <div class="chat-line">
                     <div class="chat-preview${isDraft ? " is-draft" : ""}${!isDraft && !appSettings.hideChatPreviews && lastMessage?.type === "call" && typeof callLogInfo === "function" && callLogInfo(lastMessage).missed ? " is-missed-call" : ""}">${isDraft ? `<span class="chat-draft-label">Черновик:</span> ` : ""}${escapeHTML(preview)}</div>
-                    ${unreadBadge}
+                    ${mentionBadge}${unreadBadge}
                 </div>
             </div>
         </div>
@@ -2182,14 +2186,14 @@ function messageToExportText(message) {
 
     switch (message.type) {
         case "text": return message.text || "";
-        case "image": return "[фото]" + (url ? " " + url : "");
+        case "image": { const photos = typeof albumPhotos === "function" ? albumPhotos(message) : null; return photos ? `[фото ×${photos.length}] ` + photos.map((p) => p.url).join(" ") : "[фото]" + (url ? " " + url : ""); }
         case "video": return "[видео]" + (url ? " " + url : "");
         case "video_note": return "[видео-кружок]" + (url ? " " + url : "");
         case "voice": return "[голосовое сообщение]" + (url ? " " + url : "");
         case "audio": return `[аудио] ${meta.name || ""}` + (url ? " " + url : "");
         case "location": return `[геопозиция] ${meta.lat}, ${meta.lon}`;
         case "contact": return `[контакт] ${meta.display_name || ""}`;
-        case "call": return `[${callLogInfo(message).title}${callLogInfo(message).duration ? ", " + callLogInfo(message).duration : ""}]`;
+        case "call": { const info = callLogInfo(message); return `[${info.title}${info.duration ? ", " + info.duration : ""}${info.people ? ", " + info.people : ""}]`; }
         default: return meta.name ? `[файл] ${meta.name}` + (url ? " " + url : "") : "[вложение]";
     }
 
@@ -4261,6 +4265,113 @@ async function sendRealAttachment(file, type, options = {}) {
 
     patchCachedChatLastMessage(targetChatId, message);
 
+}
+
+// АЛЬБОМ: несколько фото одним сообщением с общей подписью. Одно сообщение (type "image"):
+// attachment_url — первое фото (старые клиенты увидят хотя бы его), все фото — в
+// attachment_meta.album = [{ url, name, size, mime }]. Максимум — как в редакторе (10).
+async function sendRealAlbum(files, options = {}) {
+
+    const targetChatId = currentChatId;
+
+    if (isSecretChatId(targetChatId)) {
+        toast("Вложения в секретных чатах пока не поддерживаются");
+        return;
+    }
+
+    closeAttachMenu();
+
+    const list = [];
+    for (const original of files.slice(0, 10)) {
+        const file = await compressImageFile(original);
+        if (file.size > MAX_ATTACHMENT_SIZE) {
+            toast(`«${original.name}» слишком большое (максимум ${formatFileSize(MAX_ATTACHMENT_SIZE)})`);
+            return;
+        }
+        list.push(file);
+    }
+    if (list.length < 2) {
+        if (list[0]) return sendRealAttachment(list[0], "image", options);
+        return;
+    }
+
+    const replyToId = pendingReply?.messageId || null;
+    if (currentChatId === targetChatId) {
+        pendingReply = null;
+        document.getElementById("reply-preview").classList.remove("visible");
+    }
+
+    const caption = String(options?.caption || "").trim().slice(0, 1024);
+    toast(`Загружаем ${list.length} фото…`);
+
+    let message;
+    try {
+        message = await sendAlbumReliably(targetChatId, list, (urls) => ({
+            type: "image",
+            ...(caption ? { text: caption } : {}),
+            attachmentUrl: urls[0],
+            attachmentMeta: {
+                name: list[0].name,
+                size: list.reduce((sum, file) => sum + file.size, 0),
+                mime: list[0].type,
+                album: urls.map((url, i) => ({ url, name: list[i].name, size: list[i].size, mime: list[i].type }))
+            },
+            replyToId
+        }));
+    } catch (error) {
+        toast("Не удалось отправить альбом: " + (error?.message || error));
+        return;
+    }
+
+    realMessagesById.set(message.id, message);
+    if (currentChatId === targetChatId) {
+        appendRealMessageRow(message, true);
+        updateMessageGrouping();
+        if (appSettings.sendSound) playSendSound();
+        if (appSettings.autoScroll) scrollMessagesToBottom();
+    }
+    patchCachedChatLastMessage(targetChatId, message);
+
+}
+
+// Как sendAttachmentReliably, но для нескольких файлов: загруженные сохраняются между
+// попытками (после обрыва догружаются только недостающие), id сообщения общий — повтор
+// не создаёт дубль; если сообщение точно не создано, все загруженные файлы удаляются.
+async function sendAlbumReliably(targetChatId, files, buildMessage) {
+    const messageId = KabanOutbox.newId();
+    const startedAt = Date.now();
+    const urls = new Array(files.length).fill(null);
+    let attempt = 0;
+    let notified = false;
+    const cleanup = () => urls.filter(Boolean).forEach((url) => KabanAPI.deleteStorageFile("attachments", url).catch(() => {}));
+    for (;;) {
+        try {
+            for (let i = 0; i < files.length; i++) {
+                if (!urls[i]) urls[i] = await KabanAPI.uploadAttachment(targetChatId, files[i]);
+            }
+            const message = await KabanAPI.sendMessage(targetChatId, { ...buildMessage(urls), id: messageId });
+            if (notified) toast("Связь вернулась — альбом отправлен");
+            return message;
+        } catch (error) {
+            const text = String(error?.message || error || "");
+            if (error?.code === "23505" || /duplicate key/i.test(text)) {
+                const existing = await KabanAPI.getMessageById(messageId).catch(() => null);
+                if (existing) return existing;
+            }
+            const network = KabanOutbox.isNetworkError(error);
+            if (!network || Date.now() - startedAt > 15 * 60 * 1000) {
+                // Сообщение могло всё-таки создаться (оборвался ответ) — тогда файлы нужны.
+                const existing = await KabanAPI.getMessageById(messageId).catch(() => null);
+                if (existing) return existing;
+                cleanup();
+                throw error;
+            }
+            if (!notified) { notified = true; toast("Нет связи — альбом отправится, как только появится сеть"); }
+            if (typeof KabanConn !== "undefined") KabanConn.suspect();
+            attempt += 1;
+            await waitForNetworkOrDelay(Math.min(30000, 2000 * 2 ** Math.min(attempt, 4)));
+        }
+    }
 }
 
 // Звуковая волна голосового — считается ОДИН раз, в момент записи, а не

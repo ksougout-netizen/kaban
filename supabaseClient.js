@@ -125,6 +125,15 @@ function isMissingRpcError(error) {
 // незачем хранить. Никогда не бросает исключение: неудачная уборка не
 // должна ломать основное действие пользователя (профиль/сообщение уже
 // сохранены к моменту вызова).
+// Все файлы сообщения: основное вложение и фото альбома (attachment_meta.album).
+function messageFileUrls(row) {
+    const urls = new Set();
+    if (row?.attachment_url) urls.add(row.attachment_url);
+    const album = row?.attachment_meta?.album;
+    if (Array.isArray(album)) album.forEach((item) => { if (item && typeof item.url === "string" && item.url) urls.add(item.url); });
+    return [...urls];
+}
+
 async function deleteStorageObjectByUrl(bucket, url) {
     if (!url) return;
     const db = getSupabaseClient();
@@ -1146,21 +1155,21 @@ const KabanAPI = {
 
         // Удаление сразу возвращает удалённую строку (ссылку на вложение) — один
         // запрос вместо «сначала прочитать, потом удалить».
-        const { data: removed, error } = await db.from("messages").delete().eq("id", messageId).select("attachment_url");
+        const { data: removed, error } = await db.from("messages").delete().eq("id", messageId).select("attachment_url, attachment_meta");
         if (error) throw error;
         // RLS молча не дала удалить (чужое сообщение без прав) — честно сообщаем.
         if (!removed?.length) throw new Error("Нет прав удалить это сообщение у всех");
 
-        await deleteStorageObjectByUrl("attachments", removed[0]?.attachment_url);
+        await Promise.all(messageFileUrls(removed[0]).map((url) => deleteStorageObjectByUrl("attachments", url)));
     },
 
     // Массовое «удалить у всех» одним запросом (раньше — по запросу на сообщение).
     // Возвращает id реально удалённых (на чужие без прав RLS молча не даст).
     async deleteMessagesForEveryone(ids) {
         const db = getSupabaseClient();
-        const { data: removed, error } = await db.from("messages").delete().in("id", ids).select("id, attachment_url");
+        const { data: removed, error } = await db.from("messages").delete().in("id", ids).select("id, attachment_url, attachment_meta");
         if (error) throw error;
-        await Promise.all((removed || []).map((row) => deleteStorageObjectByUrl("attachments", row.attachment_url)));
+        await Promise.all((removed || []).flatMap((row) => messageFileUrls(row).map((url) => deleteStorageObjectByUrl("attachments", url))));
         return (removed || []).map((row) => row.id);
     },
 
@@ -1439,15 +1448,18 @@ const KabanAPI = {
     async searchMessages(query, limit = 25) {
         const db = getSupabaseClient();
         const pattern = "%" + String(query).replace(/[\\%_]/g, (m) => "\\" + m) + "%";
+        // Значение внутри or(...) берём в кавычки: запятые и скобки в запросе не ломают фильтр.
+        const quoted = `"${pattern.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
         const { data, error } = await db
             .from("messages")
-            .select("id, chat_id, sender_id, text, created_at")
-            .eq("type", "text")
+            .select("id, chat_id, sender_id, type, text, attachment_meta, created_at")
+            // Текст, подписи к фото/видео и имена файлов. Записи звонков и служебные не ищем.
+            .in("type", ["text", "image", "video", "document", "audio"])
             .is("deleted_at", null)
             // В секретных чатах текст — шифротекст: искать в нём бессмысленно, а
             // «совпадения» по base64 выдавали мусор в результатах.
             .is("encryption_iv", null)
-            .ilike("text", pattern)
+            .or(`text.ilike.${quoted},attachment_meta->>name.ilike.${quoted}`)
             .order("created_at", { ascending: false })
             .limit(limit);
         if (error) throw error;

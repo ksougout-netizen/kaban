@@ -3592,7 +3592,19 @@ function collectSharedMediaFromChat() {
         const time = new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         const dateLabel = formatSharedMediaDateLabel(message.created_at);
 
-        if (message.type === "image" || message.type === "video") {
+        const albumList = typeof albumPhotos === "function" ? albumPhotos(message) : null;
+        if (albumList) {
+            albumList.forEach((photo, index) => items.push({
+                kind: "media",
+                messageId: message.id,
+                name: `Фото ${index + 1}`,
+                metaText: `${dateLabel}, ${time}`,
+                search: `фото photo ${photo.name || ""}`.toLowerCase(),
+                createdAt: message.created_at,
+                thumbUrl: photo.url,
+                thumbLabel: "PHOTO"
+            }));
+        } else if (message.type === "image" || message.type === "video") {
             items.push({
                 kind: "media",
                 messageId: message.id,
@@ -3685,7 +3697,9 @@ function getSharedMediaItems() {
         search: (item.dataset.search || "").toLocaleLowerCase(),
         messageId: item.dataset.messageId,
         name: item.querySelector(".shared-name")?.textContent || "",
-        meta: item.dataset.meta || ""
+        meta: item.dataset.meta || "",
+        // миниатюра фото — берём ту же, что показана в большой карточке
+        thumbUrl: item.querySelector(".shared-thumb img")?.getAttribute("src") || ""
     }));
 
 }
@@ -3795,7 +3809,9 @@ function renderSharedMediaList(kind, query) {
         return `
             ${header}
             <button class="shared-row" type="button" onclick="jumpToSharedMediaMessage('${item.messageId}')">
-                <span class="shared-row-icon${kind === "voice" ? " voice" : ""}">${icon}</span>
+                ${item.thumbUrl
+                    ? `<span class="shared-row-icon has-thumb"><img src="${escapeHTML(item.thumbUrl)}" alt="" loading="lazy" decoding="async"></span>`
+                    : `<span class="shared-row-icon${kind === "voice" ? " voice" : ""}">${icon}</span>`}
                 <span class="shared-row-copy">
                     <span class="shared-row-name">${escapeHTML(item.name)}</span>
                     <span class="shared-row-meta">${escapeHTML(item.meta)}</span>
@@ -4436,7 +4452,7 @@ function renderFormattedText(text) {
             const member = [...currentChatMembersById.values()]
                 .find((m) => m.username?.toLowerCase() === uname.toLowerCase());
             if (!member) return full;
-            return `${pre}<span class="msg-mention" onclick="openContactFromMessage('${member.id}')">@${uname}</span>`;
+            return `${pre}<span class="msg-mention" onclick="openProfileOfSender('${member.id}')">@${uname}</span>`;
         });
     }
 

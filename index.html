@@ -40,7 +40,7 @@
 
 <link rel="preconnect" href="https://ketvgmietommjqutejuj.supabase.co" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261007-120">
+<link rel="stylesheet" href="style.css?v=20261007-124">
 </head>
 
 <body>
@@ -758,7 +758,7 @@
                         </button>
                     </div>
 
-                    <input type="file" id="attach-media-input" accept="image/*,video/*" hidden onchange="handleAttachFile(this,'media')">
+                    <input type="file" id="attach-media-input" accept="image/*,video/*" multiple hidden onchange="handleAttachFile(this,'media')">
                     <input type="file" id="attach-document-input" hidden onchange="handleAttachFile(this,'document')">
                     <input type="file" id="attach-music-input" accept="audio/*" hidden onchange="handleAttachFile(this,'music')">
                     <input type="file" id="attach-p2p-input" hidden onchange="handleP2PFileSelect(this)">
@@ -1857,6 +1857,11 @@
                     <button class="mute-duration" type="button" onclick="muteFor('8 часов')">8 часов</button>
                     <button class="mute-duration" type="button" onclick="muteFor('2 дня')">2 дня</button>
                 </div>
+                <button class="info-action" type="button" id="info-ttl-btn" onclick="openTtlPicker()" hidden>
+                    <span class="info-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 9.5V13l2.5 1.5M9.5 3.5h5"/></svg></span>
+                    <span class="info-action-text"><span class="info-action-label">Автоудаление</span>
+                    <span class="info-action-hint" id="info-ttl-hint">Выключено</span></span>
+                </button>
                 <button class="info-action" type="button" onclick="handleSecretChatAction()">
                     <span class="info-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>
                     <span class="info-action-text"><span class="info-action-label">Секретный чат</span>
@@ -2271,6 +2276,11 @@
                 <span class="group-ico tone-orange"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H20m-3 0v3m-3-3v2"/></svg></span>
                 <span class="group-section-title">Администраторы</span>
                 <span class="group-section-meta" id="group-info-admins-count"></span>
+            </button>
+            <button type="button" class="group-section-btn" id="group-info-ttl-btn" onclick="openTtlPicker()" hidden>
+                <span class="group-ico tone-teal"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="7"/><path d="M12 9.5V13l2.5 1.5M9.5 3.5h5"/></svg></span>
+                <span class="group-section-title">Автоудаление сообщений</span>
+                <span class="group-section-meta" id="group-info-ttl-meta">Выкл.</span>
             </button>
             <button type="button" class="group-section-btn" id="group-info-bans-btn" onclick="openGroupBansModal()" hidden>
                 <span class="group-ico tone-red"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m6 6 12 12"/></svg></span>
@@ -3306,32 +3316,33 @@
 
 <!-- Библиотеки лежат рядом с сайтом (vendor/): не зависим от CDN, которые бывают недоступны; версия supabase-js закреплена (2.117.2). -->
 <script src="vendor/supabase.js?v=2.117.2"></script>
-<script src="supabaseClient.js?v=20261007-120"></script>
-<script src="crypto.js?v=20261007-120"></script>
+<script src="supabaseClient.js?v=20261007-124"></script>
+<script src="crypto.js?v=20261007-124"></script>
 <!-- script.js разбит на 4 файла для удобства навигации (раньше был один
      файл ~350КБ/8300+ строк) — порядок подключения важен, см. комментарий
      в начале каждого файла. Это НЕ ES-модули: обычные классические
      скрипты, выполняются последовательно как один большой файл, функции
      между ними в общей глобальной области видимости, как и раньше. -->
-<script src="emoji-data.js?v=20261007-120"></script>
-<script src="script-core.js?v=20261007-120"></script>
-<script src="script-ui.js?v=20261007-120"></script>
-<script src="script-chats.js?v=20261007-120"></script>
-<script src="script-messages.js?v=20261007-120"></script>
-<script src="effects.js?v=20261007-120"></script>
-<script src="games.js?v=20261007-120"></script>
-<script src="voice-ai.js?v=20261007-120"></script>
-<script src="stories.js?v=20261007-120"></script>
-<script src="productivity.js?v=20261007-120"></script>
-<script src="reactions.js?v=20261007-120"></script>
-<script src="listen.js?v=20261007-120"></script>
-<script src="voice.js?v=20261007-120"></script>
-<script src="voice-video.js?v=20261007-120"></script>
-<script src="resilience.js?v=20261007-120"></script>
-<script src="scheduled.js?v=20261007-120"></script>
-<script src="profile.js?v=20261007-120"></script>
-<script src="desktop-app.js?v=20261007-120"></script>
-<script src="photo-editor.js?v=20261007-120"></script>
+<script src="emoji-data.js?v=20261007-124"></script>
+<script src="script-core.js?v=20261007-124"></script>
+<script src="script-ui.js?v=20261007-124"></script>
+<script src="script-chats.js?v=20261007-124"></script>
+<script src="script-messages.js?v=20261007-124"></script>
+<script src="effects.js?v=20261007-124"></script>
+<script src="games.js?v=20261007-124"></script>
+<script src="voice-ai.js?v=20261007-124"></script>
+<script src="stories.js?v=20261007-124"></script>
+<script src="productivity.js?v=20261007-124"></script>
+<script src="reactions.js?v=20261007-124"></script>
+<script src="listen.js?v=20261007-124"></script>
+<script src="voice.js?v=20261007-124"></script>
+<script src="voice-video.js?v=20261007-124"></script>
+<script src="resilience.js?v=20261007-124"></script>
+<script src="scheduled.js?v=20261007-124"></script>
+<script src="profile.js?v=20261007-124"></script>
+<script src="desktop-app.js?v=20261007-124"></script>
+<script src="photo-editor.js?v=20261007-124"></script>
+<script src="disappearing.js?v=20261007-124"></script>
 
 </body>
 </html>

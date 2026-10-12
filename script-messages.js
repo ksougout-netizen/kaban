@@ -593,6 +593,20 @@ function callLogInfo(message) {
     const outcome = call.outcome || "missed";
     const noun = video ? "видеозвонок" : "звонок";
 
+    // Групповой звонок: одна запись на всех, без направления — «Групповой звонок · 12:05 · 3 участника».
+    if (call.group) {
+        const total = Number(call.participants) || 0;
+        const secs = Number(call.duration) || 0;
+        const hh = Math.floor(secs / 3600), mm = Math.floor((secs % 3600) / 60), ss = secs % 60;
+        const dur = hh ? `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}` : `${mm}:${String(ss).padStart(2, "0")}`;
+        return {
+            title: video ? "Групповой видеозвонок" : "Групповой звонок",
+            bad: false, mine, video, group: true, missed: false, note: "",
+            duration: secs ? dur : "",
+            people: total ? `${total} ${pluralRu(total, "участник", "участника", "участников")}` : ""
+        };
+    }
+
     let title;
     let note = "";                          // подпись рядом со стрелкой (если нет длительности)
     let bad = false;                        // красная стрелка / кружок
@@ -624,8 +638,10 @@ function callLogInfo(message) {
 function buildCallLogHTML(message) {
 
     const info = callLogInfo(message);
-    // Стрелка: исходящий — вверх-вправо, входящий — вниз-влево.
-    const arrow = info.mine
+    // Стрелка: исходящий — вверх-вправо, входящий — вниз-влево; у группового — значок «люди».
+    const arrow = info.group
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19c0-3 2.4-5 5.5-5s5.5 2 5.5 5"/><circle cx="17" cy="9.5" r="2.4"/><path d="M17 14c2.3 0 4 1.4 4 3.8"/></svg>'
+        : info.mine
         ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>'
         : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 7 7 17M15 17H7V9"/></svg>';
     const icon = info.video
@@ -633,10 +649,10 @@ function buildCallLogHTML(message) {
         : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h3.5l1.7 4.2-2.1 1.4a11 11 0 0 0 5.8 5.8l1.4-2.1 4.2 1.7V19a1.5 1.5 0 0 1-1.6 1.5A14.5 14.5 0 0 1 3.5 6.1 1.5 1.5 0 0 1 5 4.5Z"/></svg>';
 
     return `
-        <button type="button" class="message-call${info.bad ? " is-bad" : ""}" onclick="callBackFromMessage('${info.video ? "video" : "audio"}')" title="Позвонить снова" aria-label="${escapeHTML(info.title)}. Позвонить снова">
+        <button type="button" class="message-call${info.bad ? " is-bad" : ""}" onclick="callBackFromMessage('${info.video ? "video" : "audio"}')" title="${info.group ? "Присоединиться к групповому звонку" : "Позвонить снова"}" aria-label="${escapeHTML(info.title)}. Позвонить снова">
             <span class="message-call-copy">
                 <span class="message-call-title">${escapeHTML(info.title)}</span>
-                <span class="message-call-sub">${arrow}${info.duration || info.note ? `<span>${info.duration || info.note}</span>` : ""}</span>
+                <span class="message-call-sub">${arrow}${info.group ? `<span>${[info.duration, info.people].filter(Boolean).join(" · ")}</span>` : (info.duration || info.note ? `<span>${info.duration || info.note}</span>` : "")}</span>
             </span>
             <span class="message-call-icon">${icon}</span>
         </button>`;
@@ -644,7 +660,8 @@ function buildCallLogHTML(message) {
 }
 
 function callBackFromMessage(kind) {
-    if (currentChatType === "group" || !currentOtherUserId) return;
+    // В группе кнопка зовёт в групповой звонок (startCall сама выбирает группу или 1:1).
+    if (currentChatType !== "group" && !currentOtherUserId) return;
     startCall(kind);
 }
 
@@ -654,12 +671,36 @@ function buildCaptionHTML(message) {
     return `<span class="message-caption">${renderFormattedText(message.text)}</span>`;
 }
 
+// АЛЬБОМ: несколько фото одним сообщением (attachment_meta.album). Строки мозаики по числу фото.
+const ALBUM_ROWS = { 2: [2], 3: [1, 2], 4: [2, 2], 5: [2, 3], 6: [3, 3], 7: [2, 2, 3], 8: [2, 3, 3], 9: [3, 3, 3], 10: [2, 2, 3, 3] };
+
+function albumPhotos(message) {
+    const album = message.attachment_meta?.album;
+    if (message.type !== "image" || !Array.isArray(album)) return null;
+    const photos = album.filter((item) => item && typeof item.url === "string" && item.url).slice(0, 10);
+    return photos.length > 1 ? photos : null;
+}
+
+function buildAlbumHTML(photos) {
+    const rows = ALBUM_ROWS[photos.length] || ALBUM_ROWS[10];
+    let index = 0;
+    return `<div class="message-album">${rows.map((count) => {
+        const cells = photos.slice(index, index + count).map((photo, i) =>
+            `<img class="message-image album-img" src="${escapeHTML(photo.url)}" alt="${escapeHTML(photo.name || "Фото")}" loading="lazy" onclick="openImageGallery(this)">`).join("");
+        index += count;
+        return `<div class="album-row r${count}">${cells}</div>`;
+    }).join("")}</div>`;
+}
+
 function buildAttachmentHTML(message) {
 
     const url = message.attachment_url;
     const meta = message.attachment_meta || {};
 
     if (message.type === "call") return buildCallLogHTML(message);
+
+    const albumList = albumPhotos(message);
+    if (albumList) return buildAlbumHTML(albumList);
 
     // P2P-передача большого файла — у нас НИКОГДА нет attachment_url (байты
     // идут напрямую между браузерами, Storage не участвует), поэтому этот
@@ -687,9 +728,10 @@ function buildAttachmentHTML(message) {
     if (message.type === "contact") {
         const name = escapeHTML(meta.display_name || "Контакт");
         const userId = escapeHTML(meta.user_id || "");
+        const avatar = avatarParts({ id: meta.user_id, name: meta.display_name || meta.username, url: meta.avatar_url });
         return `
             <button type="button" class="message-contact" onclick="openContactFromMessage('${userId}')">
-                <span class="message-contact-icon">👤</span>
+                <span class="message-contact-avatar${avatar.cls}"${avatar.style}>${avatar.inner}</span>
                 <div class="message-contact-copy">
                     <div class="message-contact-title">${name}</div>
                     <div class="message-contact-hint">${meta.username ? "@" + escapeHTML(meta.username) : "Контакт"}</div>
@@ -1210,6 +1252,15 @@ document.addEventListener("keydown", (event) => {
     });
 })();
 
+// Упомянули ли МЕНЯ в этом сообщении (@мой_ник): такие сообщения подсвечиваются в группе,
+// а в списке чатов у группы появляется значок «@».
+function messageMentionsMe(message) {
+    const username = cachedMyProfile?.username;
+    if (!username || !message || message.type !== "text" || !message.text) return false;
+    if (message.sender_id === myRealUserId) return false;
+    return new RegExp(`(^|[^\\w@])@${username.replace(/[^a-zA-Z0-9_]/g, "")}\\b`, "i").test(message.text);
+}
+
 function buildMessageRowInnerHTML(message, isMine) {
 
     const time = new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1263,7 +1314,17 @@ function buildMessageRowInnerHTML(message, isMine) {
     // has-block — в пузыре не текст, а «карточка» (игра, опрос, файл, голосовое):
     // время и галочки тогда встают отдельной строкой СПРАВА, а не прилипают слева под карточкой.
     const isBlockBody = !message.deleted_at && (message.attachment_meta?.poll || message.attachment_meta?.game || message.type !== "text");
-    const bubbleClass = bodyText.includes('class="video-circle"') ? "message has-video-circle" : isBlockBody ? "message has-block" : "message";
+    // ФОТО / ВИДЕО / АЛЬБОМ — как в Telegram: снимок занимает пузырь целиком (без рамки вокруг),
+    // время и галочки — таблеткой поверх снимка; с подписью — снимок сверху, текст под ним.
+    // media-only: нет подписи; media-bare: ещё и нет шапки (имя/ответ/пересылка) — пузыря как такового нет.
+    const isMedia = !message.deleted_at && (message.type === "image" || message.type === "video")
+        && !message.attachment_meta?.poll && !message.attachment_meta?.game && !message.attachment_meta?.p2p
+        && !!(message.attachment_url || albumPhotos(message));
+    const mediaClass = !isMedia ? ""
+        : " has-media" + (message.text ? "" : " media-only") + (!message.text && !senderLabel && !replyMarkup && !forwardedMarkup ? " media-bare" : "")
+            + (message.type === "video" ? " media-video" : "");
+    const mentionClass = currentChatType === "group" && messageMentionsMe(message) ? " mentions-me" : "";
+    const bubbleClass = (bodyText.includes('class="video-circle"') ? "message has-video-circle" : isBlockBody ? "message has-block" : "message") + mediaClass + mentionClass;
 
     return `
         <div class="${bubbleClass}">
@@ -2043,11 +2104,13 @@ window.addEventListener("drop", (event) => {
     dragCounter = 0;
     document.getElementById("drop-overlay").classList.remove("active");
 
-    const file = event.dataTransfer.files?.[0];
+    const files = [...(event.dataTransfer.files || [])];
+    const file = files[0];
     if (!file) return;
 
     const kind = file.type.startsWith("image/") || file.type.startsWith("video/") ? "media" : "document";
-    handleAttachFile({ files: [file] }, kind);
+    // Несколько фото сразу — одним альбомом (редактор сам разберёт); документ — по одному, как раньше.
+    handleAttachFile({ files: kind === "media" ? files : [file] }, kind);
 
 });
 
@@ -2269,6 +2332,8 @@ function messagePreviewText(message) {
     if (message.attachment_meta?.poll) return "📊 " + message.attachment_meta.poll.question;
     if (message.type === "call") return callLogInfo(message).title;
     if (message.type === "text") return message.text || "Сообщение";
+    const albumCount = albumPhotos(message)?.length || 0;
+    if (albumCount) return message.text ? `🖼 ${albumCount} фото, ${message.text}` : `🖼 ${albumCount} фото`;
     if ((message.type === "image" || message.type === "video") && message.text) return `${MESSAGE_TYPE_LABELS[message.type]}, ${message.text}`;
     const label = MESSAGE_TYPE_LABELS[message.type] || "Вложение";
     const name = message.attachment_meta?.name;

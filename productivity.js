@@ -424,6 +424,18 @@ function highlightSnippet(text, query) {
     return escapeHTML(prefix + slice.slice(0, rel)) + "<mark>" + escapeHTML(slice.slice(rel, rel + query.length)) + "</mark>" + escapeHTML(slice.slice(rel + query.length));
 }
 
+// Что показывать в результате поиска: сам текст, подпись к фото или имя файла — где совпало.
+const SEARCH_KIND_LABEL = { image: "Фото", video: "Видео", document: "Файл", audio: "Аудио" };
+
+function searchHitText(message, query) {
+    const q = String(query || "").toLocaleLowerCase();
+    const text = String(message.text || "");
+    const name = String(message.attachment_meta?.name || "");
+    const base = (text && text.toLocaleLowerCase().includes(q)) || !name ? text : name;
+    const label = SEARCH_KIND_LABEL[message.type];
+    return label ? `${label}: ${base || "—"}` : base;
+}
+
 function chatDisplayName(chatId) {
     const row = cachedChatRows.find((r) => r.chat_id === chatId);
     if (!row) return "Чат";
@@ -479,7 +491,7 @@ async function appendMessageSearchResults(query, token) {
     const html = messages.map((m) => `
         <button type="button" class="msg-hit" data-chat="${escapeHTML(m.chat_id)}" data-message="${escapeHTML(m.id)}" onclick="jumpToMessage(this.dataset.chat, this.dataset.message)">
             <span class="msg-hit-head"><span class="msg-hit-chat">${escapeHTML(chatDisplayName(m.chat_id))}</span><span class="msg-hit-date">${escapeHTML(new Date(m.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "short" }))}</span></span>
-            <span class="msg-hit-text">${highlightSnippet(m.text, query)}</span>
+            <span class="msg-hit-text">${highlightSnippet(searchHitText(m, query), query)}</span>
         </button>`).join("");
 
     resultsEl.insertAdjacentHTML("beforeend", `<div class="section-label">Сообщения</div>${html}`);
@@ -533,6 +545,7 @@ function getCommandPaletteItems() {
     if (inChat) {
         commands.unshift(
             { icon: "pin", label: "Закреплённые сообщения чата", keywords: "закрепы pin", hint: "В этом чате", run: () => { close(); openPinnedList(); } },
+            { icon: "bell", label: "Автоудаление сообщений", keywords: "исчезающие таймер удалять самоуничтожение", hint: "В этом чате", run: () => { close(); if (typeof openTtlPicker === "function") openTtlPicker(); } },
             { icon: "bell", label: "Запланированные сообщения", keywords: "отложенные отправить позже", hint: "В этом чате", run: () => { close(); if (typeof openSchedulePicker === "function") openSchedulePicker(); } },
             { icon: "poll", label: "Создать опрос", keywords: "голосование", hint: "В этом чате", run: () => { close(); openPollModal(); } },
             { icon: "game", label: "Сыграть в игру", keywords: "крестики нолики камень ножницы кубик", hint: "В этом чате", run: () => { close(); openGamesModal(); } },
@@ -589,7 +602,7 @@ function renderCommandPaletteResults(query) {
             try { messages = await searchAllMessages(query.trim()); } catch { return; }
             if (token !== paletteSearchToken || !messages.length) return;
             const extra = messages.slice(0, 8).map((m) => ({
-                kind: "message", icon: "msg", label: String(m.text || "").replace(/\s+/g, " ").slice(0, 80),
+                kind: "message", icon: "msg", label: searchHitText(m, query.trim()).replace(/\s+/g, " ").slice(0, 80),
                 hint: chatDisplayName(m.chat_id),
                 run: () => { closeCommandPalette(); jumpToMessage(m.chat_id, m.id); }
             }));
