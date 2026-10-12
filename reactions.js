@@ -331,7 +331,8 @@ function openReactionBar(row) {
     reactionBarRow = row;
     contextMenuTargetRow = row; // полный пикер «+» опирается на эту строку
     const rect = bubble.getBoundingClientRect();
-    reactionPickerAnchor = { rect, isSent: row.classList.contains("sent") };
+    const alignRight = row.classList.contains("sent") && !document.body.classList.contains("messages-left");
+    reactionPickerAnchor = { rect, isSent: alignRight };
     lastContextMenuX = rect.left;
     lastContextMenuY = rect.bottom;
 
@@ -347,8 +348,7 @@ function openReactionBar(row) {
     document.body.appendChild(bar);
 
     const width = bar.offsetWidth, height = bar.offsetHeight;
-    const isSent = row.classList.contains("sent");
-    let left = isSent ? rect.right - width : rect.left;
+    let left = alignRight ? rect.right - width : rect.left;
     left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
     let top = rect.top - height - 8;
     if (top < 8) top = rect.bottom + 8;
@@ -414,7 +414,8 @@ document.addEventListener("pointerdown", (event) => {
         const rect = bubble.getBoundingClientRect();
         const listRect = messages.getBoundingClientRect();
         const size = 30;
-        const isSent = row.classList.contains("sent");
+        // «Все сообщения слева»: свои пузыри тоже у левого края, кнопка — справа от всех.
+        const isSent = row.classList.contains("sent") && !document.body.classList.contains("messages-left");
         let left = isSent ? rect.left - size - 6 : rect.right + 6;
         left = Math.max(listRect.left + 4, Math.min(left, listRect.right - size - 4));
         const top = Math.max(listRect.top + 4, Math.min(rect.top + rect.height / 2 - size / 2, listRect.bottom - size - 4));

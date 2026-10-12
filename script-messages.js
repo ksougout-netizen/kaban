@@ -617,7 +617,7 @@ function buildAttachmentHTML(message) {
                 <span class="message-contact-icon">👤</span>
                 <div class="message-contact-copy">
                     <div class="message-contact-title">${name}</div>
-                    <div class="message-contact-hint">Контакт</div>
+                    <div class="message-contact-hint">${meta.username ? "@" + escapeHTML(meta.username) : "Контакт"}</div>
                 </div>
             </button>
         `;
@@ -1056,6 +1056,7 @@ function cycleVideoCircleSpeed(button) {
 
 function openContactFromMessage(userId) {
     if (!userId) { toast("Профиль недоступен"); return; }
+    if (userId === myRealUserId) { openProfileScreen(); return; }
     startRealChatWith(userId);
 }
 

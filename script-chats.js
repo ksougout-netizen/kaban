@@ -3509,7 +3509,7 @@ function messageAvatarParts(senderId) {
 function messageAvatarHTML(senderId) {
     const av = messageAvatarParts(senderId);
     const key = escapeHTML(av.style + av.inner);
-    return `<span class="msg-avatar${av.cls}"${av.style} data-av="${key}" aria-hidden="true">${av.inner}</span>`;
+    return `<span class="msg-avatar${av.cls}"${av.style} data-av="${key}" role="button" tabindex="0" aria-label="Открыть профиль" title="Профиль">${av.inner}</span>`;
 }
 
 function refreshMessageAvatars() {
@@ -3533,6 +3533,36 @@ function refreshMessageAvatars() {
         if (author.textContent !== name) author.textContent = name;
     });
 }
+
+// Клик по аватару (или имени отправителя в группе) открывает профиль этого человека:
+// свой — экран профиля, в личном чате — карточка собеседника, в группе — карточка участника.
+function openProfileOfSender(senderId) {
+    if (!senderId) return;
+    if (senderId === myRealUserId) { openProfileScreen(); return; }
+    if (currentChatType === "group") {
+        if (currentChatMembersById.has(senderId)) openGroupMemberModal(senderId);
+        else toast("Профиль недоступен: человека уже нет в группе");
+        return;
+    }
+    toggleContactPopover();
+}
+
+document.getElementById("messages")?.addEventListener("click", (event) => {
+    const target = event.target.closest?.(".msg-avatar, .message-sender-name");
+    if (target && !document.getElementById("messages").classList.contains("selection-mode")) {
+        const senderId = target.closest(".message-row")?.dataset.senderId;
+        if (senderId) { event.stopPropagation(); openProfileOfSender(senderId); return; }
+    }
+});
+
+document.getElementById("messages")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const avatar = event.target.closest?.(".msg-avatar");
+    const senderId = avatar?.closest(".message-row")?.dataset.senderId;
+    if (!senderId) return;
+    event.preventDefault();
+    openProfileOfSender(senderId);
+});
 
 document.getElementById("messages")?.addEventListener("click", (event) => {
     const quote = event.target.closest?.(".message-reply-quote[data-reply-to]");

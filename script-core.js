@@ -214,6 +214,77 @@ const VIVID_COLORS = [
 
 const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
 
+/* Готовые темы: один клик выставляет режим, акцент, подкраску фона, заливку
+   пузырей и обои. Форма пузырей и хвостик остаются как у пользователя.
+   Всё считается теми же computeThemeTokens, что и ручной выбор, поэтому
+   контраст текста на пузырях и читаемость акцента гарантированы так же. */
+const THEME_PRESETS = [
+    { id: "classic",   label: "Классика",  dark: false, accent: "default", tint: 0, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" },
+    { id: "night",     label: "Ночь",      dark: true,  accent: "default", tint: 0, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" },
+    { id: "ocean",     label: "Океан",     dark: false, accent: "#0ea5e9", tint: 2, fill: "gradient", bubbleIn: "neutral", wallpaper: "default" },
+    { id: "mint",      label: "Мята",      dark: false, accent: "#10b981", tint: 2, fill: "solid",    bubbleIn: "tint",    wallpaper: "default" },
+    { id: "sunset",    label: "Закат",     dark: false, accent: "#f97316", tint: 2, fill: "gradient", bubbleIn: "neutral", wallpaper: "sunset" },
+    { id: "sakura",    label: "Сакура",    dark: false, accent: "#ec4899", tint: 2, fill: "gradient", bubbleIn: "tint",    wallpaper: "default" },
+    { id: "lavender",  label: "Лаванда",   dark: false, accent: "#8b5cf6", tint: 2, fill: "gradient", bubbleIn: "tint",    wallpaper: "default" },
+    { id: "midnight",  label: "Полночь",   dark: true,  accent: "#6366f1", tint: 2, fill: "gradient", bubbleIn: "tint",    wallpaper: "night" },
+    { id: "forest",    label: "Лес",       dark: true,  accent: "#22c55e", tint: 2, fill: "solid",    bubbleIn: "tint",    wallpaper: "forest" },
+    { id: "amber",     label: "Янтарь",    dark: true,  accent: "#f59e0b", tint: 1, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" },
+    { id: "raspberry", label: "Малина",    dark: true,  accent: "#e11d48", tint: 2, fill: "gradient", bubbleIn: "tint",    wallpaper: "default" },
+    { id: "graphite",  label: "Графит",    dark: true,  accent: "#64748b", tint: 1, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" }
+];
+
+function themePresetMatches(preset) {
+    return !!appSettings.darkMode === preset.dark
+        && String(appSettings.accentColor || "default").toLowerCase() === preset.accent
+        && (appSettings.tintLevel || 0) === preset.tint
+        && appSettings.bubbleFill === preset.fill
+        && appSettings.bubbleIn === preset.bubbleIn
+        && (appSettings.chatWallpaper || "default") === preset.wallpaper;
+}
+
+function currentThemePreset() {
+    return THEME_PRESETS.find(themePresetMatches) || null;
+}
+
+function applyThemePreset(id) {
+    const preset = THEME_PRESETS.find((p) => p.id === id);
+    if (!preset) return;
+    appSettings.darkMode = preset.dark;
+    appSettings.accentColor = preset.accent;
+    appSettings.tintLevel = preset.tint;
+    appSettings.bubbleFill = preset.fill;
+    appSettings.bubbleIn = preset.bubbleIn;
+    appSettings.chatWallpaper = preset.wallpaper;
+    applySettings();
+    saveSettings();
+    if (typeof currentChatId !== "undefined" && currentChatId && typeof applyChatWallpaper === "function") {
+        applyChatWallpaper(currentChatId);
+    }
+}
+
+function renderThemePresets() {
+
+    const grid = document.getElementById("theme-preset-grid");
+    if (!grid) return;
+
+    grid.innerHTML = THEME_PRESETS.map((preset) => {
+        const hex = HEX_COLOR_RE.test(preset.accent) ? preset.accent : DEFAULT_ACCENT_HEX;
+        const t = computeThemeTokens(hex, preset.dark, { bubbleFill: preset.fill, bubbleIn: preset.bubbleIn, tintLevel: preset.tint });
+        // Тёмная «Ночь»/светлая «Классика» без выбранного цвета рисуются штатным CSS — берём те же базовые цвета.
+        const screen = preset.tint ? t["--tint-main"] : (preset.dark ? "#101010" : "#f5f5f3");
+        const incoming = preset.bubbleIn === "tint" ? t["--bubble-in"] : (preset.dark ? "#2c2c2e" : "#e9e9eb");
+        return `
+            <button type="button" class="theme-preset" data-preset="${preset.id}" onclick="applyThemePreset('${preset.id}')" aria-label="Тема «${preset.label}»" title="${preset.label}">
+                <span class="theme-preset-screen" style="background:${screen}">
+                    <span class="theme-preset-bubble in" style="background:${incoming}"></span>
+                    <span class="theme-preset-bubble out" style="background:${t["--bubble-out"]}"></span>
+                </span>
+                <span class="theme-preset-name">${preset.label}</span>
+            </button>`;
+    }).join("");
+
+}
+
 /* ---- цветовая математика ------------------------------------------------ */
 
 function hexToRgb(hex) {
@@ -648,6 +719,8 @@ function wallpaperTileHTML(wallpaper, selected, onclick, label) {
 
 function renderThemeColorGrid() {
 
+    renderThemePresets();
+
     const vivid = document.getElementById("theme-vivid-grid");
     if (vivid) {
         vivid.innerHTML = VIVID_COLORS.map((c) => `
@@ -683,10 +756,15 @@ function syncThemeColorSelection() {
     const current = isHex
         ? { label: vividMatch ? vividMatch.label : "Свой цвет", swatch: accent }
         : { label: "Стандартный", swatch: DEFAULT_ACCENT_HEX };
+    const activePreset = currentThemePreset();
     const rowIcon = document.getElementById("theme-color-row-icon");
     const rowLabel = document.getElementById("theme-color-row-label");
     if (rowIcon) rowIcon.style.background = current.swatch;
-    if (rowLabel) rowLabel.textContent = current.label;
+    if (rowLabel) rowLabel.textContent = activePreset ? activePreset.label : current.label;
+
+    document.querySelectorAll("#theme-preset-grid .theme-preset").forEach((card) => {
+        card.classList.toggle("selected", card.dataset.preset === activePreset?.id);
+    });
 
     document.getElementById("theme-mode-light")?.classList.toggle("active", !appSettings.darkMode);
     document.getElementById("theme-mode-dark")?.classList.toggle("active", !!appSettings.darkMode);

@@ -408,10 +408,19 @@ function buildEffectPicker() {
                     <span class="effect-tile-icon">${effect.icon}</span>
                     <span class="effect-tile-label">${effect.label}</span>
                 </button>`).join("")}
-        </div>`;
+        </div>
+        <button type="button" class="effect-schedule-btn" role="menuitem" data-schedule="1">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="7"/><path d="M12 9.5V13l2.5 1.5M5 4.5 3 6.5M19 4.5l2 2"/></svg>
+            Отправить позже…
+        </button>`;
     document.body.appendChild(picker);
 
     picker.addEventListener("click", (event) => {
+        if (event.target.closest("[data-schedule]")) {
+            closeEffectPicker();
+            if (typeof openSchedulePicker === "function") openSchedulePicker();
+            return;
+        }
         const tile = event.target.closest(".effect-tile");
         if (!tile) return;
         closeEffectPicker();
@@ -427,8 +436,8 @@ function buildEffectPicker() {
 function openEffectPicker() {
 
     const input = document.getElementById("input");
-    if (!input || !input.value.trim()) { toast("Сначала напишите сообщение, потом выберите эффект"); return; }
-    if (currentChatIsSecret) { toast("В секретных чатах эффекты отключены"); return; }
+    if (!input || !input.value.trim()) { toast("Сначала напишите сообщение, потом выберите эффект или время отправки"); return; }
+    if (currentChatIsSecret) { toast("В секретных чатах эффекты и отложенная отправка отключены"); return; }
 
     buildEffectPicker();
     const picker = document.getElementById("effect-picker");
@@ -461,7 +470,7 @@ function sendWithEffect(effectId) {
     const button = document.getElementById("composer-send-button");
     if (!button) return;
 
-    button.title = "Нажмите — отправить, удерживайте — отправить с эффектом";
+    button.title = "Нажмите — отправить, удерживайте — эффект или «Отправить позже»";
 
     let timer = null;
     let longPressed = false;

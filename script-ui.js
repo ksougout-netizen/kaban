@@ -729,7 +729,7 @@ function shareOwnContactMessage() {
     }
 
     if (currentChatId) {
-        sendRealContactShare();
+        openContactPicker();
         return;
     }
 
@@ -763,7 +763,157 @@ function shareOwnContactMessage() {
 
 }
 
-async function sendRealContactShare() {
+/* Выбор контакта для отправки: «Мой профиль» и люди из ваших чатов, плюс поиск
+   по нику для остальных. Окно собирается один раз и переиспользуется. */
+let contactPickerToken = 0;
+let contactPickerTimer = null;
+let contactPickerExtra = [];
+let contactPickerExtraQuery = null;
+let contactPickerChatId = null;
+
+function contactPickerUsers() {
+    const me = {
+        id: myRealUserId,
+        display_name: cachedMyProfile?.display_name || "Пользователь",
+        username: cachedMyProfile?.username || "",
+        avatar_url: cachedMyProfile?.avatar_url || null,
+        isMe: true
+    };
+    return me;
+}
+
+function buildContactPicker() {
+
+    if (document.getElementById("contact-picker-backdrop")) return;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "forward-backdrop";
+    backdrop.id = "contact-picker-backdrop";
+    backdrop.setAttribute("aria-hidden", "true");
+    backdrop.innerHTML = `
+        <section class="forward-modal new-group-modal" role="dialog" aria-modal="true" aria-label="Отправить контакт">
+            <div class="forward-modal-header">
+                <span>Отправить контакт</span>
+                <button type="button" class="settings-close" data-picker-act="close" aria-label="Закрыть">×</button>
+            </div>
+            <input type="text" id="contact-picker-search" placeholder="Введите имя или @ник" autocomplete="off">
+            <div class="new-chat-results" id="contact-picker-results"></div>
+        </section>`;
+    document.body.appendChild(backdrop);
+
+    backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) { closeContactPicker(); return; }
+        if (event.target.closest("[data-picker-act='close']")) { closeContactPicker(); return; }
+        const row = event.target.closest(".new-chat-result-row[data-user-id]");
+        if (!row) return;
+        const user = row.dataset.userId === myRealUserId
+            ? contactPickerUsers()
+            : [...getContactsFromChats(), ...contactPickerExtra].find((u) => u.id === row.dataset.userId);
+        if (!user) return;
+        closeContactPicker();
+        sendRealContactShare(user);
+    });
+
+    document.getElementById("contact-picker-search").addEventListener("input", () => {
+        contactPickerExtraQuery = null;
+        renderContactPicker();
+        clearTimeout(contactPickerTimer);
+        contactPickerTimer = setTimeout(runContactPickerSearch, 300);
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && backdrop.classList.contains("open")) {
+            event.stopImmediatePropagation();
+            closeContactPicker();
+        }
+    }, true);
+
+}
+
+function contactPickerRowHTML(user, hint) {
+    const av = avatarParts({ id: user.id, name: user.display_name || user.username, url: user.avatar_url, kind: user.is_bot && !user.avatar_url ? "bot" : "user" });
+    return `
+        <button class="new-chat-result-row" type="button" data-user-id="${escapeHTML(user.id)}">
+            <span class="new-chat-result-avatar${av.cls}${user.is_bot ? " chat-avatar-bot" : ""}"${av.style}>${av.inner}</span>
+            <span>${escapeHTML(user.display_name || user.username || "Пользователь")} <span style="opacity:.6">${hint ?? (user.username ? "@" + escapeHTML(user.username) : "")}</span></span>
+        </button>`;
+}
+
+function renderContactPicker() {
+
+    const box = document.getElementById("contact-picker-results");
+    if (!box) return;
+    const query = document.getElementById("contact-picker-search").value.trim().replace(/^@/, "").toLocaleLowerCase();
+    const matches = (user) => !query
+        || (user.display_name || "").toLocaleLowerCase().includes(query)
+        || (user.username || "").toLocaleLowerCase().includes(query);
+
+    const rows = [];
+    const me = contactPickerUsers();
+    if (matches(me) || "мой профиль".includes(query)) rows.push(contactPickerRowHTML(me, "Мой профиль"));
+
+    const seen = new Set([myRealUserId]);
+    getContactsFromChats().filter((u) => !u.is_bot && matches(u)).forEach((u) => { seen.add(u.id); rows.push(contactPickerRowHTML(u)); });
+    if (contactPickerExtraQuery === query) {
+        contactPickerExtra.filter((u) => !seen.has(u.id) && !u.is_bot).forEach((u) => { seen.add(u.id); rows.push(contactPickerRowHTML(u)); });
+    }
+
+    let hint = "";
+    if (query.length >= 2 && contactPickerExtraQuery === query && rows.length === 0) hint = "Никого не найдено";
+    else if (!query && rows.length <= 1) hint = "Других контактов пока нет — введите ник, чтобы найти человека";
+    box.innerHTML = rows.join("") + (hint ? `<div class="group-perms-hint">${hint}</div>` : "");
+
+}
+
+async function runContactPickerSearch() {
+
+    const query = (document.getElementById("contact-picker-search")?.value || "").trim().replace(/^@/, "").toLocaleLowerCase();
+    if (query.length < 2) { contactPickerExtra = []; contactPickerExtraQuery = query; renderContactPicker(); return; }
+    const token = ++contactPickerToken;
+    try {
+        const users = await KabanAPI.searchUsersByUsername(query);
+        if (token !== contactPickerToken) return;
+        contactPickerExtra = users || [];
+    } catch {
+        if (token !== contactPickerToken) return;
+        contactPickerExtra = [];
+    }
+    contactPickerExtraQuery = query;
+    renderContactPicker();
+
+}
+
+function openContactPicker() {
+
+    buildContactPicker();
+    contactPickerChatId = currentChatId;
+    contactPickerExtra = [];
+    contactPickerExtraQuery = null;
+    const input = document.getElementById("contact-picker-search");
+    input.value = "";
+    renderContactPicker();
+
+    const backdrop = document.getElementById("contact-picker-backdrop");
+    backdrop.classList.add("open");
+    backdrop.setAttribute("aria-hidden", "false");
+    input.focus();
+
+}
+
+function closeContactPicker() {
+    const backdrop = document.getElementById("contact-picker-backdrop");
+    if (!backdrop) return;
+    clearTimeout(contactPickerTimer);
+    backdrop.classList.remove("open");
+    backdrop.setAttribute("aria-hidden", "true");
+}
+
+async function sendRealContactShare(user) {
+
+    const shared = user || contactPickerUsers();
+    // Выбор мог занять время — отправляем в тот чат, откуда его открывали.
+    const targetChatId = contactPickerChatId || currentChatId;
+    if (!targetChatId) return;
 
     const replyToId = pendingReply?.messageId || null;
     pendingReply = null;
@@ -771,11 +921,13 @@ async function sendRealContactShare() {
 
     let message;
     try {
-        message = await KabanAPI.sendMessage(currentChatId, {
+        message = await KabanAPI.sendMessage(targetChatId, {
             type: "contact",
             attachmentMeta: {
-                user_id: myRealUserId,
-                display_name: cachedMyProfile?.display_name || "Пользователь"
+                user_id: shared.id,
+                display_name: shared.display_name || shared.username || "Пользователь",
+                ...(shared.username ? { username: shared.username } : {}),
+                ...(shared.avatar_url ? { avatar_url: shared.avatar_url } : {})
             },
             replyToId
         });
@@ -785,11 +937,13 @@ async function sendRealContactShare() {
     }
 
     realMessagesById.set(message.id, message);
-    appendRealMessageRow(message, true);
-    updateMessageGrouping();
-    if (appSettings.sendSound) playSendSound();
-    if (appSettings.autoScroll) scrollMessagesToBottom();
-    patchCachedChatLastMessage(currentChatId, message);
+    if (currentChatId === targetChatId) {
+        appendRealMessageRow(message, true);
+        updateMessageGrouping();
+        if (appSettings.sendSound) playSendSound();
+        if (appSettings.autoScroll) scrollMessagesToBottom();
+    }
+    patchCachedChatLastMessage(targetChatId, message);
 
 }
 

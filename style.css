@@ -5009,6 +5009,10 @@ body.recording-locked .record-lock-hint {
    заставлял браузер следить за потомками каждого пузыря в ленте. */
 /* !important обязателен: .message-row.sent/.received .message (и их тёмная/
    акцентная вариации) выше по специфичности, чем просто .message.has-video-circle. */
+/* Без пузыря нет и хвоста: иначе у круглого видео остаётся треугольник сбоку. */
+.message-row .message.has-video-circle::before,
+.message-row .message.sticker::before { display: none !important; }
+
 .message.has-video-circle {
     background: none !important;
     border: none !important;
@@ -9099,6 +9103,63 @@ body.mobile-tab-calls #sidebar-calls-view {
 /* ОФОРМЛЕНИЕ: режим, насыщенные цвета, свой цвет, пастельные оттенки */
 #theme-color-backdrop { z-index: 97; }
 
+/* Готовые темы: карточки с мини-превью чата, цвета считаются в JS (renderThemePresets). */
+.theme-preset-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px 8px;
+    padding: 2px 2px 14px;
+}
+
+.theme-preset {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 5px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+}
+
+.theme-preset-screen {
+    position: relative;
+    display: block;
+    height: 54px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+    overflow: hidden;
+    transition: transform .15s cubic-bezier(.34,1.56,.64,1), box-shadow .15s ease;
+}
+
+.theme-preset-bubble {
+    position: absolute;
+    display: block;
+    height: 12px;
+    border-radius: 7px;
+}
+
+.theme-preset-bubble.in { left: 7px; top: 9px; width: 52%; }
+.theme-preset-bubble.out { right: 7px; bottom: 9px; width: 46%; }
+
+.theme-preset-name {
+    overflow: hidden;
+    font-size: 11.5px;
+    font-weight: 600;
+    text-align: center;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.theme-preset:hover .theme-preset-screen { transform: translateY(-2px); }
+.theme-preset:active .theme-preset-screen { transform: scale(.96); }
+.theme-preset.selected .theme-preset-screen { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.theme-preset.selected .theme-preset-name { color: var(--accent); }
+.theme-preset:focus-visible .theme-preset-screen { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text); }
+
 .theme-mode {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -10017,6 +10078,42 @@ body.reduce-motion .anim-glyph { animation: none !important; }
 
 .effect-tile:hover { background: var(--accent-wash); transform: translateY(-2px) scale(1.04); }
 .effect-tile:active { transform: scale(.96); }
+.effect-schedule-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: 10px;
+    padding: 11px 12px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--surface2);
+    color: var(--text);
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s ease;
+}
+
+.effect-schedule-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.effect-schedule-btn:hover { background: var(--accent-wash); }
+
+/* В чате есть запланированные сообщения — точка на кнопке отправки. */
+.composer-send.has-scheduled { position: relative; }
+.composer-send.has-scheduled::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #ff9f0a;
+    box-shadow: 0 0 0 2px var(--surface);
+}
+
 .effect-tile-icon { font-size: 26px; line-height: 1; }
 .effect-tile-label { font-size: 11.5px; font-weight: 600; }
 
@@ -11617,6 +11714,12 @@ body.messages-left .msg-avatar {
     box-shadow: 0 1px 2px rgba(0,0,0,.12);
 }
 body.messages-left .msg-avatar .avatar-initials { font-size: 13px; }
+/* Аватар и имя отправителя кликабельны — открывают профиль. */
+.msg-avatar, .message-sender-name { cursor: pointer; }
+.message-sender-name:hover { text-decoration: underline; }
+body.messages-left .msg-avatar { transition: transform .15s cubic-bezier(.34,1.56,.64,1), box-shadow .15s ease; }
+@media (hover: hover) { body.messages-left .msg-avatar:hover { transform: scale(1.08); box-shadow: 0 2px 8px rgba(0,0,0,.25); } }
+body.messages-left .msg-avatar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 body.messages-left .message-row.grouped-next > .msg-avatar { visibility: hidden; }
 body.messages-left .message-row.has-reactions > .msg-avatar { bottom: 0; }
 /* Свои сообщения слева: хвостик и «склейка» — тоже слева, как у входящих */

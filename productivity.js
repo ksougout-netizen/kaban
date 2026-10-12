@@ -533,6 +533,7 @@ function getCommandPaletteItems() {
     if (inChat) {
         commands.unshift(
             { icon: "pin", label: "Закреплённые сообщения чата", keywords: "закрепы pin", hint: "В этом чате", run: () => { close(); openPinnedList(); } },
+            { icon: "bell", label: "Запланированные сообщения", keywords: "отложенные отправить позже", hint: "В этом чате", run: () => { close(); if (typeof openSchedulePicker === "function") openSchedulePicker(); } },
             { icon: "poll", label: "Создать опрос", keywords: "голосование", hint: "В этом чате", run: () => { close(); openPollModal(); } },
             { icon: "game", label: "Сыграть в игру", keywords: "крестики нолики камень ножницы кубик", hint: "В этом чате", run: () => { close(); openGamesModal(); } },
             { icon: "phone", label: "Позвонить", keywords: "звонок аудио", hint: "В этом чате", run: () => { close(); startCall("audio"); } },
