@@ -1454,7 +1454,7 @@ function buildChatListItemHTML(row) {
                     <span class="chat-time">${escapeHTML(time)}</span>
                 </div>
                 <div class="chat-line">
-                    <div class="chat-preview${isDraft ? " is-draft" : ""}">${isDraft ? `<span class="chat-draft-label">Черновик:</span> ` : ""}${escapeHTML(preview)}</div>
+                    <div class="chat-preview${isDraft ? " is-draft" : ""}${!isDraft && !appSettings.hideChatPreviews && lastMessage?.type === "call" && typeof callLogInfo === "function" && callLogInfo(lastMessage).missed ? " is-missed-call" : ""}">${isDraft ? `<span class="chat-draft-label">Черновик:</span> ` : ""}${escapeHTML(preview)}</div>
                     ${unreadBadge}
                 </div>
             </div>

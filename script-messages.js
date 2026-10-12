@@ -582,8 +582,9 @@ function contextMenuForward() {
 // (.message-image/.message-audio/.message-file*), просто с настоящим
 // attachment_url вместо blob: URL выбранного файла.
 /* ЖУРНАЛ ЗВОНКОВ В ЧАТЕ (call_log.sql): запись о звонке пишет звонивший, а видят её
-   оба — каждый со своей стороны: у звонившего «Исходящий звонок / Нет ответа /
-   Отменённый», у того, кому звонили, — «Входящий / Пропущенный». */
+   оба — каждый со своей стороны. Звонившему всегда «Исходящий звонок» (чем кончилось —
+   мелкой подписью: «нет ответа», «отклонён», «отменён»). Тому, кому звонили, —
+   «Входящий звонок», а если он не взял трубку — «Пропущенный звонок» красным. */
 function callLogInfo(message) {
 
     const call = message.attachment_meta?.call || {};
@@ -593,17 +594,20 @@ function callLogInfo(message) {
     const noun = video ? "видеозвонок" : "звонок";
 
     let title;
-    let bad = false;                        // красная стрелка и подпись
-    if (outcome === "ended") {
-        title = (mine ? "Исходящий " : "Входящий ") + noun;
+    let note = "";                          // подпись рядом со стрелкой (если нет длительности)
+    let bad = false;                        // красная стрелка / кружок
+    if (mine) {
+        title = "Исходящий " + noun;
+        if (outcome !== "ended") {
+            note = outcome === "declined" ? "отклонён" : outcome === "canceled" ? "отменён" : "нет ответа";
+            bad = true;
+        }
+    } else if (outcome === "ended") {
+        title = "Входящий " + noun;
     } else if (outcome === "declined") {
-        title = mine ? (video ? "Видеозвонок отклонён" : "Звонок отклонён") : (video ? "Отклонённый видеозвонок" : "Отклонённый звонок");
-        bad = mine;
-    } else if (outcome === "canceled") {
-        title = mine ? (video ? "Отменённый видеозвонок" : "Отменённый звонок") : (video ? "Пропущенный видеозвонок" : "Пропущенный звонок");
-        bad = true;
+        title = "Отклонённый " + noun;
     } else {
-        title = mine ? "Нет ответа" : (video ? "Пропущенный видеозвонок" : "Пропущенный звонок");
+        title = "Пропущенный " + noun;
         bad = true;
     }
 
@@ -613,10 +617,10 @@ function callLogInfo(message) {
         ? (h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`)
         : "";
 
-    return { title, bad, mine, video, duration };
+    // missed — «пропустил именно я»: только это красим в списке чатов и в заголовке.
+    return { title, bad, mine, video, duration, note, missed: !mine && bad };
 
 }
-
 function buildCallLogHTML(message) {
 
     const info = callLogInfo(message);
@@ -632,7 +636,7 @@ function buildCallLogHTML(message) {
         <button type="button" class="message-call${info.bad ? " is-bad" : ""}" onclick="callBackFromMessage('${info.video ? "video" : "audio"}')" title="Позвонить снова" aria-label="${escapeHTML(info.title)}. Позвонить снова">
             <span class="message-call-copy">
                 <span class="message-call-title">${escapeHTML(info.title)}</span>
-                <span class="message-call-sub">${arrow}${info.duration ? `<span>${info.duration}</span>` : ""}</span>
+                <span class="message-call-sub">${arrow}${info.duration || info.note ? `<span>${info.duration || info.note}</span>` : ""}</span>
             </span>
             <span class="message-call-icon">${icon}</span>
         </button>`;
