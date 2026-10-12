@@ -3290,6 +3290,19 @@ body[data-tint] .sidebar {
     font-weight: 600;
 }
 
+/* «Непрочитанные сообщения» — полоса над первым непрочитанным при первом открытии чата
+   (см. positionChatOnOpen), как в Telegram. */
+.unread-divider {
+    align-self: stretch;
+    margin: 6px 0 12px;
+    padding: 5px 12px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 /* Подгрузка старой истории по скроллу вверх — см. loadOlderMessages */
 .older-messages-spinner {
     align-self: center;
@@ -6586,6 +6599,134 @@ body.reduce-motion .call-mini-avatar::after, html.app-inactive .call-mini-avatar
 .settings-close:hover {
     background: var(--border);
     color: var(--text);
+}
+
+/* Страницы настроек: главная (профиль + категории) и подстраницы с «Назад». */
+.settings-dialog .settings-header {
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+}
+
+.settings-heading {
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-back {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 auto;
+    margin-left: -4px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    transition: background .15s ease;
+}
+
+.settings-back[hidden] { display: none; }
+.settings-back:hover { background: var(--surface2); }
+
+.settings-back svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.settings-page[hidden] { display: none; }
+.settings-page > .settings-group-label:first-child { margin-top: 10px; }
+.settings-page.enter-forward { animation: settings-page-forward .22s cubic-bezier(.2,.85,.25,1); }
+.settings-page.enter-back { animation: settings-page-back .22s cubic-bezier(.2,.85,.25,1); }
+
+@keyframes settings-page-forward {
+    from { opacity: 0; transform: translateX(22px); }
+}
+
+@keyframes settings-page-back {
+    from { opacity: 0; transform: translateX(-22px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .settings-page.enter-forward,
+    .settings-page.enter-back { animation: none; }
+}
+
+.settings-profile-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    margin-top: 12px;
+    padding: 12px 14px 12px 12px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--surface2);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .15s ease;
+}
+
+.settings-profile-card[hidden] { display: none; }
+
+.settings-profile-avatar {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    flex: 0 0 52px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: linear-gradient(160deg, #3d9bff, #0a6cff) center / cover no-repeat;
+    color: #fff;
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.settings-profile-copy {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.settings-profile-name {
+    overflow: hidden;
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.settings-profile-handle {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 12.5px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.settings-categories { margin-top: 14px; }
+.settings-account-section { background: transparent; }
+
+@media (hover: hover) {
+    .settings-profile-card:hover,
+    .settings-section .settings-option-link:hover { background: color-mix(in srgb, var(--text) 5%, var(--surface2)); }
+}
+
+/* На компьютере окно одной высоты на всех страницах — не прыгает при переходе. */
+@media (min-width: 651px) {
+    .settings-dialog { height: min(640px, calc(100dvh - 32px)); }
 }
 
 .settings-group-label {

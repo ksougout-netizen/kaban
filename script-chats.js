@@ -2575,6 +2575,8 @@ function rememberChatMessages(chatId, messages, hasMore) {
 }
 
 function snapshotOpenChatToCache() {
+    // Уходим из чата — запоминаем, где был человек (см. captureChatScrollPosition).
+    if (currentChatId && typeof captureChatScrollPosition === "function") { releaseChatScrollHold(); captureChatScrollPosition(currentChatId); }
     if (!currentChatId || !realMessagesById?.size) return;
     const list = [...realMessagesById.values()]
         .filter((m) => m.chat_id === currentChatId)
@@ -2718,22 +2720,36 @@ async function reconcileOpenChatMessages(chatId, fresh, me, cachedIds) {
 // (свёрнута, другое окно), отметки копятся и уходят одной пачкой при возвращении.
 const pendingReadIds = new Set();
 
+// Отметка не ушла (нет сети, лифт) — раньше она терялась насовсем, и у отправителя
+// так и висела одна галочка, пока человек не откроет чат заново. Теперь неудавшиеся
+// отметки возвращаются в очередь и уходят при восстановлении связи (resync →
+// flushPendingReads). Повторная отправка безопасна: это upsert «прочитано».
+function sendReadMarks(ids) {
+    if (!ids.length) return;
+    KabanAPI.markMessagesAsRead(ids).catch(() => {
+        ids.forEach((id) => pendingReadIds.add(id));
+        if (typeof KabanConn !== "undefined") KabanConn.suspect();
+    });
+}
+
 function markReadWhenVisible(messageId) {
     if (!messageId) return;
     if (!document.hidden) {
-        KabanAPI.markMessagesAsRead([messageId]).catch(() => {});
+        sendReadMarks([messageId]);
         return;
     }
     pendingReadIds.add(messageId);
 }
 
-document.addEventListener("visibilitychange", () => {
+function flushPendingReads() {
     if (document.hidden || !pendingReadIds.size) return;
     // Отмечаем только то, что всё ещё в открытом чате (могли уйти в другой).
     const ids = [...pendingReadIds].filter((id) => realMessagesById.has(id));
     pendingReadIds.clear();
-    if (ids.length) KabanAPI.markMessagesAsRead(ids).catch(() => {});
-});
+    sendReadMarks(ids);
+}
+
+document.addEventListener("visibilitychange", flushPendingReads);
 
 // Подписи авторов над чужими сообщениями группы — когда список участников пришёл
 // уже после того, как история показана (открытие не ждёт этот запрос).
@@ -3109,8 +3125,10 @@ async function openRealChat(chatId) {
         }
 
         updateMessageGrouping();
-        // При открытии — сразу вниз, без анимации прокрутки через всю историю.
-        scrollMessagesToBottom({ instant: true });
+        // Сохранённая позиция этого чата, иначе первое непрочитанное, иначе низ —
+        // и удержание, пока лента «доезжает» (см. positionChatOnOpen в script-ui.js).
+        if (typeof positionChatOnOpen === "function") positionChatOnOpen(chatId, me.id);
+        else scrollMessagesToBottom({ instant: true });
         pinnedBarIndex = 0;
         renderPinnedBar();
         if (typeof KabanOutbox !== "undefined") KabanOutbox.renderFor(chatId);
@@ -4054,19 +4072,14 @@ async function sendRealAttachment(file, type) {
     toast("Загружаем файл…");
 
     let message;
-    let uploadedUrl = null;
     try {
-        uploadedUrl = await KabanAPI.uploadAttachment(targetChatId, file);
-        message = await KabanAPI.sendMessage(targetChatId, {
+        message = await sendAttachmentReliably(targetChatId, file, (url) => ({
             type,
-            attachmentUrl: uploadedUrl,
+            attachmentUrl: url,
             attachmentMeta: { name: file.name, size: file.size, mime: file.type },
             replyToId
-        });
+        }), "файл");
     } catch (error) {
-        // Файл уже залит, а сообщение не создалось (нет прав слать медиа, обрыв) —
-        // не оставляем «сироту» в хранилище.
-        if (uploadedUrl) KabanAPI.deleteStorageFile("attachments", uploadedUrl).catch(() => {});
         toast("Не удалось отправить файл: " + (error?.message || error));
         return;
     }
@@ -4169,17 +4182,14 @@ async function sendRealRecording(blob, mode, duration, targetChatId = currentCha
     const waveform = type === "voice" ? await computeWaveformPeaks(blob) : null;
 
     let message;
-    let uploadedUrl = null;
     try {
-        uploadedUrl = await KabanAPI.uploadAttachment(targetChatId, file);
-        message = await KabanAPI.sendMessage(targetChatId, {
+        message = await sendAttachmentReliably(targetChatId, file, (url) => ({
             type,
-            attachmentUrl: uploadedUrl,
+            attachmentUrl: url,
             attachmentMeta: waveform ? { duration, mime: file.type, waveform } : { duration, mime: file.type },
             replyToId
-        });
+        }), type === "voice" ? "голосовое" : "запись");
     } catch (error) {
-        if (uploadedUrl) KabanAPI.deleteStorageFile("attachments", uploadedUrl).catch(() => {});
         toast("Не удалось отправить запись: " + (error?.message || error));
         return;
     }
@@ -4194,6 +4204,63 @@ async function sendRealRecording(blob, mode, duration, targetChatId = currentCha
 
     patchCachedChatLastMessage(targetChatId, message);
 
+}
+
+// Отправка вложения (фото, файл, голосовое), переживающая обрыв связи.
+// Раньше при любой ошибке после загрузки файла он удалялся из хранилища, а
+// пользователь видел «Не удалось отправить» — голосовое, записанное в метро,
+// пропадало. Хуже: если запись сообщения на сервер на самом деле прошла и
+// оборвался только ответ, в чате оставалось сообщение со ссылкой на уже удалённый
+// файл. Теперь:
+//   • id сообщения создаём сами — повтор не создаёт дубль (сервер ответит 23505,
+//     и мы просто берём уже созданное сообщение);
+//   • при обрыве не удаляем файл и не сдаёмся: ждём сеть (до 15 минут) и
+//     повторяем — загрузку, если она не прошла, иначе только запись сообщения;
+//   • файл удаляется только если сообщение ТОЧНО не создано (настоящая ошибка:
+//     нет прав, слишком большой файл), — без «сирот» в хранилище.
+async function sendAttachmentReliably(targetChatId, file, buildMessage, label) {
+    const messageId = KabanOutbox.newId();
+    const startedAt = Date.now();
+    let uploadedUrl = null;
+    let attempt = 0;
+    let notified = false;
+    for (;;) {
+        try {
+            if (!uploadedUrl) uploadedUrl = await KabanAPI.uploadAttachment(targetChatId, file);
+            const message = await KabanAPI.sendMessage(targetChatId, { ...buildMessage(uploadedUrl), id: messageId });
+            if (notified) toast(`Связь вернулась — ${label} ${{ "файл": "отправлен", "запись": "отправлена" }[label] || "отправлено"}`);
+            return message;
+        } catch (error) {
+            const text = String(error?.message || error || "");
+            if (error?.code === "23505" || /duplicate key/i.test(text)) {
+                const existing = await KabanAPI.getMessageById(messageId).catch(() => null);
+                if (existing) return existing;
+            }
+            const network = KabanOutbox.isNetworkError(error);
+            if (!network || Date.now() - startedAt > 15 * 60 * 1000) {
+                if (uploadedUrl) {
+                    // Сообщение могло всё-таки создаться (оборвался ответ) — тогда файл нужен.
+                    const existing = await KabanAPI.getMessageById(messageId).catch(() => null);
+                    if (existing) return existing;
+                    KabanAPI.deleteStorageFile("attachments", uploadedUrl).catch(() => {});
+                }
+                throw error;
+            }
+            if (!notified) { notified = true; toast(`Нет связи — ${label} отправится, как только появится сеть`); }
+            if (typeof KabanConn !== "undefined") KabanConn.suspect();
+            attempt += 1;
+            await waitForNetworkOrDelay(Math.min(30000, 2000 * 2 ** Math.min(attempt, 4)));
+        }
+    }
+}
+
+// Пауза до следующей попытки — или раньше, если сеть вернулась.
+function waitForNetworkOrDelay(ms) {
+    return new Promise((resolve) => {
+        const done = () => { clearTimeout(timer); window.removeEventListener("online", done); resolve(); };
+        const timer = setTimeout(done, ms);
+        window.addEventListener("online", done);
+    });
 }
 
 async function startRealChatWith(userId) {

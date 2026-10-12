@@ -1146,6 +1146,7 @@ function openChat(target = document.querySelector(".chat")) {
 
 function backToChats() {
 
+    if (currentChatId) { releaseChatScrollHold(); captureChatScrollPosition(currentChatId); }
     closeContactPopover();
     closeGroupInfoModal();
     closeInfoModal();
@@ -4473,6 +4474,127 @@ function scrollMessagesToBottom({ instant = false } = {}) {
 }
 
 
+/* ---- позиция прокрутки каждого чата (как в Telegram) ------------------------------------------
+   Раньше при открытии чата лента один раз прокручивалась вниз сразу после вставки
+   строк — но высота ленты ещё «доезжала» (строки вне экрана сначала учитываются по
+   оценке, картинки догружаются позже), и прокрутка оставалась где-то посередине.
+   К тому же позиция чата не запоминалась: при возврате всегда прыгало вниз.
+
+   Теперь:
+   • позиция хранится для каждого чата отдельно: якорь — первое видимое сообщение и
+     его смещение от верха (а не голый scrollTop: он «уезжает», когда выше
+     догружается история или меняется высота строк); «в самом низу» — отдельный флаг;
+   • при уходе из чата позиция фиксируется, при прокрутке — с троттлингом (200 мс);
+   • при открытии: сохранённая позиция → ровно туда; первый раз за сессию → к первому
+     непрочитанному (с разделителем «Непрочитанные сообщения»), иначе — в самый низ;
+   • пока лента «доезжает» (до 1,5 с), позиция удерживается каждый кадр — без видимого
+     прыжка; любое действие человека (колесо, касание, клавиша) удержание снимает. */
+
+const chatScrollPositions = new Map();   // chatId → { atBottom, anchorId, offset }
+let chatScrollHold = null;               // { until, compute }
+let chatScrollSaveTimer = 0;
+
+function captureChatScrollPosition(chatId = currentChatId) {
+    const box = document.getElementById("messages");
+    if (!chatId || !box || chatScrollHold) return;
+    const distance = box.scrollHeight - box.scrollTop - box.clientHeight;
+    if (distance < 60) { chatScrollPositions.set(chatId, { atBottom: true }); return; }
+    const boxRect = box.getBoundingClientRect();
+    const boxTop = boxRect.top;
+    // Первое видимое сообщение — одним обращением, без перебора всей ленты.
+    for (const dy of [4, 24, 48]) {
+        const hit = document.elementFromPoint(boxRect.left + boxRect.width / 2, boxTop + dy)?.closest?.(".message-row[data-message-id]")
+            || document.elementFromPoint(boxRect.left + 60, boxTop + dy)?.closest?.(".message-row[data-message-id]");
+        const id = hit?.dataset.messageId;
+        if (hit && box.contains(hit) && id && !id.startsWith("pending-")) {
+            chatScrollPositions.set(chatId, { atBottom: false, anchorId: id, offset: hit.getBoundingClientRect().top - boxTop });
+            return;
+        }
+    }
+    for (const row of box.querySelectorAll(".message-row[data-message-id]")) {
+        const id = row.dataset.messageId;
+        if (!id || id.startsWith("pending-")) continue;
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom <= boxTop + 1) continue;
+        chatScrollPositions.set(chatId, { atBottom: false, anchorId: id, offset: rect.top - boxTop });
+        return;
+    }
+}
+
+function holdChatScroll(compute, ms = 1500) {
+    const box = document.getElementById("messages");
+    if (!box) return;
+    chatScrollHold = { until: performance.now() + ms, compute };
+    const hold = chatScrollHold;
+    const tick = () => {
+        if (chatScrollHold !== hold) return;
+        if (performance.now() > hold.until) { chatScrollHold = null; return; }
+        const target = hold.compute();
+        if (target != null && Math.abs(box.scrollTop - target) > 1) box.scrollTop = target;
+        requestAnimationFrame(tick);
+    };
+    const target = compute();
+    if (target != null) box.scrollTop = target;
+    requestAnimationFrame(tick);
+}
+
+function releaseChatScrollHold() { chatScrollHold = null; }
+
+// Первое непрочитанное чужое сообщение (по статусам прочтения из базы).
+function firstUnreadMessageRow(myId) {
+    const box = document.getElementById("messages");
+    for (const row of box.querySelectorAll(".message-row.received[data-message-id]")) {
+        const message = realMessagesById.get(row.dataset.messageId);
+        if (!message || message.sender_id === myId || message.type === "system") continue;
+        const read = (message.message_status || []).some((s) => s.user_id === myId && s.status === "read");
+        if (!read) return row;
+    }
+    return null;
+}
+
+// Позиция при открытии чата — вызывается после вставки истории (openRealChat).
+function positionChatOnOpen(chatId, myId) {
+    const box = document.getElementById("messages");
+    if (!box) return;
+    box.querySelectorAll(".unread-divider").forEach((el) => el.remove());
+    setScrollToBottomBadge(0);
+    const boxTopOf = () => box.getBoundingClientRect().top;
+    const saved = chatScrollPositions.get(chatId);
+
+    if (saved && !saved.atBottom) {
+        const row = box.querySelector(`.message-row[data-message-id="${CSS.escape(saved.anchorId)}"]`);
+        if (row) {
+            holdChatScroll(() => box.scrollTop + (row.getBoundingClientRect().top - boxTopOf()) - saved.offset);
+            return;
+        }
+    }
+
+    if (!saved) {
+        const meta = cachedChatRows.find((r) => r.chat_id === chatId);
+        const firstUnread = (meta?.unreadCount || 0) > 0 ? firstUnreadMessageRow(myId) : null;
+        if (firstUnread) {
+            const divider = document.createElement("div");
+            divider.className = "unread-divider";
+            divider.textContent = "Непрочитанные сообщения";
+            firstUnread.before(divider);
+            holdChatScroll(() => box.scrollTop + (divider.getBoundingClientRect().top - boxTopOf()) - 12);
+            return;
+        }
+    }
+
+    holdChatScroll(() => box.scrollHeight - box.clientHeight);
+}
+
+// Действия человека снимают удержание — его прокрутку не перебиваем.
+["wheel", "touchstart", "keydown", "pointerdown"].forEach((type) => {
+    document.getElementById("messages")?.addEventListener(type, releaseChatScrollHold, { passive: true });
+});
+// Запоминаем позицию по ходу прокрутки, не чаще раза в 200 мс (без нагрузки на каждый кадр).
+document.getElementById("messages")?.addEventListener("scroll", () => {
+    if (chatScrollSaveTimer) return;
+    chatScrollSaveTimer = setTimeout(() => { chatScrollSaveTimer = 0; captureChatScrollPosition(); }, 200);
+}, { passive: true });
+
 function updateScrollToBottomButton() {
 
     const messages = document.getElementById("messages");
@@ -5073,7 +5195,8 @@ document.addEventListener("keydown", (event) => {
     }
 
     if (document.getElementById("settings-backdrop").classList.contains("open")) {
-        closeSettings();
+        if (settingsPage !== "main") showSettingsPage("main");
+        else closeSettings();
         return;
     }
 

@@ -126,6 +126,11 @@ const KabanOutbox = (() => {
         const text = String(error?.message || error || "");
         if (error?.status === 0 || error?.code === "ETIMEDOUT") return true;
         if (error?.status >= 502 && error?.status <= 504) return true;
+        // Протухший токен после офлайна: пока сети не было, библиотека не смогла его
+        // обновить, и первая отправка после возвращения связи получает «JWT expired».
+        // Это не «не отправилось навсегда» (раньше сообщение помечалось ⚠ и ждало
+        // ручного «Повторить») — токен обновится, и следующая попытка пройдёт.
+        if (error?.code === "PGRST301" || error?.status === 401 || /jwt expired|invalid jwt|jwt.*expired|token.*expired/i.test(text)) return true;
         return /failed to fetch|networkerror|network request failed|load failed|network error|fetch failed|timed? ?out|timeout|ERR_INTERNET|ERR_NETWORK|ERR_CONNECTION|AuthRetryableFetchError/i.test(text);
     }
 
@@ -253,9 +258,15 @@ const KabanOutbox = (() => {
 
     }
 
+    // Сообщение уже на сервере (прошлая попытка дошла, оборвался только ответ) —
+    // берём его по id. Раньше искали среди последних 20 сообщений чата: в активной
+    // группе за время обрыва их набиралось больше, своё не находилось, и строка
+    // просто исчезала из ленты до перезахода в чат.
     async function deliverExisting(item) {
         try {
-            const recent = await KabanAPI.getMessages(item.chatId, { limit: 20 });
+            const message = await KabanAPI.getMessageById?.(item.clientId);
+            if (message) { deliver(item, message); return; }
+            const recent = await KabanAPI.getMessages(item.chatId, { limit: 50 });
             deliver(item, recent.find((m) => m.id === item.clientId) || null);
         } catch {
             deliver(item, null);
@@ -517,11 +528,17 @@ const KabanConn = (() => {
         step();
     }
 
-    // Догоняем всё, что случилось, пока нас не было.
+    // Догоняем всё, что случилось, пока нас не было. Просьба, пришедшая в первые 4 с
+    // после прошлой синхронизации, раньше просто терялась (а это мог быть как раз
+    // повторный обрыв) — теперь она переносится на конец этого окна.
+    let resyncLater = null;
     async function resync() {
 
         const now = Date.now();
-        if (now - lastSyncAt < 4000) return;
+        if (now - lastSyncAt < 4000) {
+            if (!resyncLater) resyncLater = setTimeout(() => { resyncLater = null; resync(); }, 4000 - (now - lastSyncAt) + 50);
+            return;
+        }
         lastSyncAt = now;
 
         KabanOutbox.resetAttempts();
@@ -532,8 +549,33 @@ const KabanConn = (() => {
 
         try { if (typeof loadChatList === "function") await loadChatList(); } catch { /* не критично */ }
         try { if (typeof refreshStories === "function") refreshStories(); } catch { /* не критично */ }
+        try { if (typeof flushPendingReads === "function") flushPendingReads(); } catch { /* не критично */ }
 
     }
+
+    // Realtime-сокет переподключился сам (после «тихого» обрыва библиотека
+    // переоткрывает его без нашего участия): всё, что пришло, пока он был мёртв,
+    // через него уже не придёт — догружаем. Раньше догрузка запускалась только по
+    // возврату на вкладку или событию online, и сообщения за время обрыва в
+    // открытом чате просто не появлялись.
+    function watchRealtimeSocket() {
+        let client;
+        try { client = getSupabaseClient(); } catch { return; }
+        const rt = client?.realtime;
+        if (typeof rt?.onOpen !== "function" || typeof rt?.onClose !== "function") return;
+        let wasClosed = false;
+        rt.onClose(() => { wasClosed = true; });
+        rt.onError?.(() => { wasClosed = true; });
+        rt.onOpen(() => {
+            if (!wasClosed) return;           // самое первое подключение — не «восстановление»
+            wasClosed = false;
+            if (typeof myRealUserId === "undefined" || !myRealUserId) return;
+            reachable = true;
+            update();
+            resync();
+        });
+    }
+    watchRealtimeSocket();
 
     // Сторож каналов: раньше упавший канал (входящие звонки, файлы, истории…) оживал
     // только после сна/смены сети — до тех пор события по нему просто не приходили.
@@ -562,8 +604,22 @@ const KabanConn = (() => {
         const chatId = typeof currentChatId !== "undefined" ? currentChatId : null;
         if (!chatId || typeof realMessagesById === "undefined" || !document.getElementById("messages")) return;
 
-        let fetched;
-        try { fetched = await KabanAPI.getMessages(chatId, { limit: 50 }); } catch { return; }
+        // Дельта, а не «последние 50»: раньше, если за время обрыва в чате набралось
+        // больше 50 сообщений (активная группа, 10 минут в метро), всё, что старше
+        // последних 50, просто пропадало из ленты — дыра посередине переписки.
+        // Листаем назад страницами, пока не встретим уже известное сообщение
+        // (не больше 10 страниц — дальше разумнее переоткрыть чат).
+        let fetched = [];
+        try {
+            let before = null;
+            for (let page = 0; page < 10; page++) {
+                const batch = await KabanAPI.getMessages(chatId, before ? { limit: 50, before } : { limit: 50 });
+                if (currentChatId !== chatId) return;
+                fetched = batch.concat(fetched);
+                if (batch.length < 50 || batch.some((m) => realMessagesById.has(m.id))) break;
+                before = batch[0].created_at;
+            }
+        } catch { return; }
         if (currentChatId !== chatId || !fetched.length) return;
 
         const me = myRealUserId;
@@ -603,7 +659,10 @@ const KabanConn = (() => {
             updateMessageGrouping();
             if (wasAtBottom && appSettings.autoScroll) scrollMessagesToBottom();
         }
-        if (unread.length) KabanAPI.markMessagesAsRead(unread).catch(() => {});
+        if (unread.length) {
+            if (typeof sendReadMarks === "function" && !document.hidden) sendReadMarks(unread);
+            else unread.forEach((id) => typeof pendingReadIds !== "undefined" && pendingReadIds.add(id));
+        }
 
     }
 

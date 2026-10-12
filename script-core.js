@@ -946,9 +946,68 @@ function openSettings() {
     const backdrop =
         document.getElementById("settings-backdrop");
 
+    showSettingsPage("main", { instant: true });
+    fillSettingsProfileCard();
     backdrop.classList.add("open");
     backdrop.setAttribute("aria-hidden", "false");
     document.getElementById("settings-close").focus();
+
+}
+
+
+/* Настройки разбиты на страницы, как в Telegram Desktop: главная — профиль
+   и список категорий, по клику категория открывается своей страницей с
+   кнопкой «Назад». Строки с переключателями те же, что были (name/form/id
+   не менялись), поэтому сохранение настроек об этом ничего не знает. */
+let settingsPage = "main";
+
+function showSettingsPage(id, { instant = false } = {}) {
+
+    const dialog = document.querySelector("#settings-backdrop .settings-dialog");
+    const target = dialog?.querySelector(`[data-settings-page="${id}"]`);
+    if (!target) return;
+
+    const isMain = id === "main";
+    const previous = settingsPage;
+    settingsPage = id;
+
+    dialog.querySelectorAll("[data-settings-page]").forEach((page) => {
+        const active = page === target;
+        page.hidden = !active;
+        page.classList.toggle("is-active", active);
+        page.classList.remove("enter-forward", "enter-back");
+    });
+    if (!instant && previous !== id) {
+        void target.offsetWidth;
+        target.classList.add(isMain ? "enter-back" : "enter-forward");
+    }
+
+    document.getElementById("settings-title").textContent = target.dataset.settingsTitle || "Настройки";
+    document.getElementById("settings-back").hidden = isMain;
+    dialog.classList.toggle("is-subpage", !isMain);
+    dialog.scrollTop = 0;
+
+    if (instant) return;
+    const focusTarget = isMain
+        ? dialog.querySelector(`[data-settings-open="${previous}"]`)
+        : document.getElementById("settings-back");
+    focusTarget?.focus({ preventScroll: true });
+
+}
+
+function fillSettingsProfileCard() {
+
+    const avatar = document.getElementById("settings-profile-avatar");
+    if (!avatar) return;
+    const profile = typeof cachedMyProfile !== "undefined" ? cachedMyProfile : null;
+    const name = (profile?.display_name || "").trim();
+    const image = document.getElementById("sidebar-profile-avatar")?.style.backgroundImage || "";
+
+    avatar.style.backgroundImage = image;
+    avatar.textContent = image ? "" : (name[0] || "Я").toUpperCase();
+    document.getElementById("settings-profile-name").textContent = name || "Мой профиль";
+    document.getElementById("settings-profile-handle").textContent =
+        profile?.username ? `@${profile.username}` : "Имя пользователя, фото и статус";
 
 }
 

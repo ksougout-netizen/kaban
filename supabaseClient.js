@@ -51,7 +51,20 @@ function getSupabaseClient() {
                 "(ссылка есть в комментарии в начале этого файла)."
             );
         }
-        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+            realtime: {
+                // «Тихий» обрыв (Wi-Fi формально подключён, интернета нет; лифт,
+                // туннель): сокет не закрывается сам, и понять, что он мёртв, можно
+                // только по пропущенному пингу. По умолчанию пинг раз в 30 с — обрыв
+                // замечался через 30–60 с; теперь раз в 15 с — не дольше 30 с.
+                heartbeatIntervalMs: 15000,
+                // Пинг не вернулся — сразу проверяем связь (баннер «Нет связи»,
+                // очередь отправки), а не ждём, пока библиотека сама переподключится.
+                heartbeatCallback: (status) => {
+                    if ((status === "timeout" || status === "disconnected" || status === "error") && typeof KabanConn !== "undefined") KabanConn.suspect();
+                }
+            }
+        });
     }
 
     return supabaseClient;
@@ -971,6 +984,18 @@ const KabanAPI = {
     /* ------------------------------------------------------------------
        СООБЩЕНИЯ
        ------------------------------------------------------------------ */
+
+    // Одно сообщение по id (null — нет или нет доступа).
+    async getMessageById(messageId) {
+        const db = getSupabaseClient();
+        const { data, error } = await db
+            .from("messages")
+            .select("*, message_status(user_id, status), reactions(user_id, emoji)")
+            .eq("id", messageId)
+            .maybeSingle();
+        if (error) throw error;
+        return data || null;
+    },
 
     async getMessages(chatId, { limit = 50, before = null } = {}) {
         const db = getSupabaseClient();

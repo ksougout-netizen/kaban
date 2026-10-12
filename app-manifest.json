@@ -1,5 +1,5 @@
 {
- "version": "20261007-98",
+ "version": "20261007-101",
  "minShell": "1.0.0",
  "files": {
   "apple-touch-icon.png": {
@@ -39,8 +39,8 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "18d903f978780bcbdb25cd75464919a8d2973ab3da7f66dcfcab793d02d375c8",
-   "size": 224654
+   "sha256": "4b8ba0e9c74abf37258e6327955354c17b14c146cfec2c06d8c0a7f417ed4baa",
+   "size": 232491
   },
   "listen.js": {
    "sha256": "f4fc2d9a71b7e2f2e96651e08f9e86cb3a3fe9e00ee5f5f527de1161b7f58668",
@@ -63,24 +63,24 @@
    "size": 25578
   },
   "resilience.js": {
-   "sha256": "36a8868f2e531b3ee364b7373609053bc3e58bee5c41a6f71d2e5a9c5165e75a",
-   "size": 28980
+   "sha256": "ef72da8923bb039a60b13029fce958cc2899cc149b64637c62457d496e50ca6b",
+   "size": 33596
   },
   "script-chats.js": {
-   "sha256": "ffa6e415409a3d0cdfe146078a5bcf59d4fabf9a8a593318f04fea982ba1315a",
-   "size": 225512
+   "sha256": "9e4860f7f556cd96e4c152c008ed261b33839019078de4fdeb9d53e0e227f09a",
+   "size": 230108
   },
   "script-core.js": {
-   "sha256": "2265cbfe8f2c0d071accb1fb8264add1771a87fef91adbbaca5429d230b11155",
-   "size": 355562
+   "sha256": "cf3e0bc69057dd9236065488c95ddf629b30f29864319f4c6886d63b031552e7",
+   "size": 358179
   },
   "script-messages.js": {
    "sha256": "72b4052b6adf823a1355125a6226d496e705fa4d32ac49c759f56b23a477e205",
    "size": 110034
   },
   "script-ui.js": {
-   "sha256": "2c98d37a716b6b0ed27459a5025d196b86418f9d8d928f1e297f4845b5ebd47b",
-   "size": 269306
+   "sha256": "2e52159fdf91c9251c810dfb307af4f2ec1c9fe6da6506efb5e01ba404e8d985",
+   "size": 276587
   },
   "splash-1170x2532.png": {
    "sha256": "143b4e1ec0f720e5d1422effa249d3bcf43f85a18d9b58609aa8fef65cb46f35",
@@ -107,12 +107,12 @@
    "size": 23113
   },
   "style.css": {
-   "sha256": "2a8a818652e8190879695205d5109a89257d73f9dcb122309aa5d2a5240c943a",
-   "size": 373923
+   "sha256": "931db71b32acd9b8ba8bae0126a21785110bee3c8992369ba32d1dca0126a56f",
+   "size": 377547
   },
   "supabaseClient.js": {
-   "sha256": "b06fe6429c5598e98260753bdbfa8bf44c7d8b51a261d24a7256bb629b7477cb",
-   "size": 114565
+   "sha256": "f19ebbb379594e75ea52b9289cc575c2bee3ea5ac700f0787a13fb38713da7fb",
+   "size": 116132
   },
   "sw.js": {
    "sha256": "6d912aaaf45d6146bc24272eaf1f4101f4876713c9830d3da7592a2df1fc9693",
