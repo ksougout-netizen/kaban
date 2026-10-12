@@ -12059,9 +12059,9 @@ html.app-inactive .anim-emoji .anim-glyph { animation-play-state: paused !import
     display: grid;
     place-items: center;
     padding: 16px;
-    background: rgba(6,7,10,.78);
-    -webkit-backdrop-filter: blur(14px);
-    backdrop-filter: blur(14px);
+    /* Без backdrop-filter: размытие всего приложения под окном перерисовывалось на каждый кадр
+       (под ним анимации чата) и давало микрофризы. Тёмная подложка выглядит так же. */
+    background: rgba(6,7,10,.9);
     opacity: 0;
     transition: opacity .2s ease;
 }
@@ -12079,7 +12079,8 @@ html.app-inactive .anim-emoji .anim-glyph { animation-play-state: paused !import
     background: var(--pe-bg);
     color: var(--pe-text);
     font-size: 13px;
-    box-shadow: 0 40px 120px rgba(0,0,0,.6), 0 0 0 1px var(--pe-line);
+    box-shadow: 0 0 0 1px var(--pe-line);
+    contain: layout paint;
     transform: translateY(14px) scale(.98);
     transition: transform .26s cubic-bezier(.2,.85,.25,1);
 }
@@ -12216,7 +12217,7 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
 }
 
 .pe-overlay { touch-action: none; user-select: none; -webkit-user-select: none; }
-.pe-photo { pointer-events: none; transition: filter .08s linear; }
+.pe-photo { pointer-events: none; }
 
 .pe-text-input {
     position: absolute;

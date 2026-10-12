@@ -318,6 +318,8 @@
         // Рисование и перетаскивание — на верхнем холсте.
         const overlay = els.overlay;
         overlay.addEventListener("pointerdown", onPointerDown);
+        // Без этого браузер после клика отдаёт фокус странице и поле ввода текста сразу закрывается.
+        overlay.addEventListener("mousedown", (event) => event.preventDefault());
         overlay.addEventListener("pointermove", onPointerMove);
         overlay.addEventListener("pointerup", onPointerUp);
         overlay.addEventListener("pointercancel", onPointerUp);
@@ -337,10 +339,18 @@
 
         // Поле ввода текста
         els.textInput.addEventListener("input", resizeTextInput);
-        els.textInput.addEventListener("blur", () => finishTextEdit());
+        els.textInput.addEventListener("blur", () => {
+            const editing = state.editing;
+            // Сразу после клика фокус мог «уйти» — возвращаем, а не закрываем пустое поле.
+            if (editing && Date.now() - editing.t0 < 350 && !editing.leave) {
+                setTimeout(() => { if (state.editing === editing) els.textInput.focus(); }, 0);
+                return;
+            }
+            finishTextEdit();
+        });
         els.textInput.addEventListener("keydown", (event) => {
-            if (event.key === "Escape") { event.stopPropagation(); event.preventDefault(); finishTextEdit(); }
-            else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); finishTextEdit(); }
+            if (event.key === "Escape") { event.stopPropagation(); event.preventDefault(); if (state.editing) state.editing.leave = true; finishTextEdit(); }
+            else if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (state.editing) state.editing.leave = true; finishTextEdit(); }
         });
 
         window.addEventListener("resize", () => { if (state.open) fit(); });
@@ -403,6 +413,8 @@
         state.tool = "move";
         state.busy = false;
 
+        accentCache = "";
+        drawnPhotoKey = "";
         els.root.hidden = false;
         els.root.classList.remove("is-visible");
         requestAnimationFrame(() => els.root.classList.add("is-visible"));
@@ -463,6 +475,7 @@
         state.base = canvas;
         els.photo.width = els.overlay.width = canvas.width;
         els.photo.height = els.overlay.height = canvas.height;
+        drawnPhotoKey = "";
         fit();
         render();
 
@@ -541,9 +554,24 @@
             scratch.height = base.height;
         }
         const small = pixelated(base);
+        const W = base.width, H = base.height;
+        const kx = small.width / W, ky = small.height / H;
+
         blurs.forEach((layer) => {
+            // Работаем только в рамке мазка, а не на всём холсте (до 2400 px): так размытие
+            // не тормозит, даже когда мазков много.
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            layer.points.forEach(([x, y]) => {
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+            });
+            const pad = layer.width / 2 + 2;
+            const x0 = Math.max(0, Math.floor(minX - pad)), y0 = Math.max(0, Math.floor(minY - pad));
+            const bw = Math.min(W, Math.ceil(maxX + pad)) - x0, bh = Math.min(H, Math.ceil(maxY + pad)) - y0;
+            if (bw <= 0 || bh <= 0) return;
+
             scratchCtx.globalCompositeOperation = "source-over";
-            scratchCtx.clearRect(0, 0, scratch.width, scratch.height);
+            scratchCtx.clearRect(x0, y0, bw, bh);
             scratchCtx.lineCap = scratchCtx.lineJoin = "round";
             scratchCtx.strokeStyle = "#fff";
             scratchCtx.lineWidth = layer.width;
@@ -551,8 +579,8 @@
             scratchCtx.stroke();
             scratchCtx.globalCompositeOperation = "source-in";
             scratchCtx.imageSmoothingEnabled = false;
-            scratchCtx.drawImage(small, 0, 0, scratch.width, scratch.height);
-            ctx.drawImage(scratch, 0, 0);
+            scratchCtx.drawImage(small, x0 * kx, y0 * ky, bw * kx, bh * ky, x0, y0, bw, bh);
+            ctx.drawImage(scratch, x0, y0, bw, bh, x0, y0, bw, bh);
         });
         scratchCtx.globalCompositeOperation = "source-over";
 
@@ -670,6 +698,12 @@
 
     }
 
+    let accentCache = "";
+    function accentColor() {
+        if (!accentCache) accentCache = getComputedStyle(els.root).getPropertyValue("--pe-accent").trim() || "#3390ec";
+        return accentCache;
+    }
+
     function drawSelection(ctx, layer) {
 
         const box = textBox(ctx, layer);
@@ -688,7 +722,7 @@
         // уголок масштабирования
         const hx = box.x + box.w + 4 * px, hy = box.y + box.h + 4 * px;
         ctx.fillStyle = "#ffffff";
-        ctx.strokeStyle = getComputedStyle(els.root).getPropertyValue("--pe-accent").trim() || "#3390ec";
+        ctx.strokeStyle = accentColor();
         ctx.lineWidth = 2.4 * px;
         ctx.beginPath();
         ctx.arc(hx, hy, 8 * px, 0, Math.PI * 2);
@@ -731,10 +765,31 @@
 
     }
 
+    // Фото (с размытыми областями) — самая тяжёлая часть: холст до 2400 px. Перерисовываем его
+    // ТОЛЬКО когда изменилась подложка (поворот, кадр) или размытые области; смена вкладки,
+    // выделение, перетаскивание текста и рисование поверх фото его не трогают.
+    const baseIds = new WeakMap();
+    let baseIdCounter = 0;
+    let drawnPhotoKey = "";
+
+    function photoKey() {
+        const base = state.base;
+        if (!baseIds.has(base)) baseIds.set(base, ++baseIdCounter);
+        let key = baseIds.get(base) + ":" + base.width + "x" + base.height;
+        for (const layer of state.layers) {
+            if (layer.type === "blur") key += "|" + layer.id + ":" + layer.points.length + ":" + Math.round(layer.width);
+        }
+        return key;
+    }
+
     function render() {
 
         if (!state.base) return;
-        drawPhotoInto(photoCtx);
+        const key = photoKey();
+        if (key !== drawnPhotoKey) {
+            drawPhotoInto(photoCtx);
+            drawnPhotoKey = key;
+        }
         overlayCtx.clearRect(0, 0, els.overlay.width, els.overlay.height);
         drawLayers(overlayCtx, true);
         const selected = selectedLayer();
@@ -942,14 +997,16 @@
     function startTextEdit(layer, isNew) {
 
         select(layer.id);
-        state.editing = { id: layer.id, isNew, before: layer.text };
+        state.editing = { id: layer.id, isNew, before: layer.text, t0: Date.now() };
         const input = els.textInput;
         input.hidden = false;
         input.value = layer.text;
         positionTextInput();
         render();
-        input.focus();
-        input.select();
+        const focusInput = () => { if (state.editing?.id === layer.id) { input.focus({ preventScroll: true }); input.select(); } };
+        focusInput();
+        setTimeout(focusInput, 0);           // и после того, как завершится обработка нажатия мыши
+        setTimeout(focusInput, 120);
 
     }
 
