@@ -69,12 +69,80 @@ async function loadProfileExtras() {
     document.getElementById("profile-phone-input").value = formatPhonePretty(myProfileExtras.phone);
     document.getElementById("profile-phone-visibility").value = myProfileExtras.phone_visibility || "contacts";
     document.getElementById("profile-birthday-input").value = myProfileExtras.birthday || "";
-    document.getElementById("profile-birthday-input").max = new Date().toISOString().slice(0, 10);
+    applyBirthdayLimits();
     document.getElementById("profile-birthday-visibility").value = myProfileExtras.birthday_visibility || "contacts";
     profileColorDraft = myProfileExtras.profile_color ?? null;
     renderProfileColorRow();
     applyMyProfileColor();
 }
+
+/* ---- день рождения: только настоящая дата и разумный возраст ----
+   Раньше проверка сравнивала даты как строки: год из пяти цифр, напечатанный
+   вручную («20025-01-01»), проходил как «раньше сегодняшнего», а годовалый
+   «пользователь» или дата из 1901 года — тем более. */
+const BIRTHDAY_MIN_AGE = 6;
+const BIRTHDAY_MAX_AGE = 110;
+
+function localIsoDate(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function birthdayBounds() {
+    const today = new Date();
+    const latest = new Date(today.getFullYear() - BIRTHDAY_MIN_AGE, today.getMonth(), today.getDate());
+    const earliest = new Date(today.getFullYear() - BIRTHDAY_MAX_AGE, today.getMonth(), today.getDate() + 1);
+    return { min: localIsoDate(earliest), max: localIsoDate(latest) };
+}
+
+// Пусто — можно (день рождения необязателен). Иначе — текст ошибки или null.
+function birthdayError(value) {
+    if (!value) return null;
+    if (/^\d{5,}-/.test(value)) return "Проверьте год";
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return "Введите дату полностью: день, месяц и год";
+    const [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])];
+    if (y < 1000) return "Проверьте год";
+    const date = new Date(y, m - 1, d);
+    // 31 февраля и т. п. браузер «перекатывает» в март — значит, такой даты нет.
+    if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return "Такой даты не существует";
+    const { min, max } = birthdayBounds();
+    if (value > localIsoDate(new Date())) return "Дата рождения не может быть в будущем";
+    if (value > max) return `Вам должно быть не меньше ${BIRTHDAY_MIN_AGE} лет`;
+    if (value < min) return `Проверьте год: возраст больше ${BIRTHDAY_MAX_AGE} лет`;
+    return null;
+}
+
+const BIRTHDAY_HINT = "В этот день друзья увидят 🎂 рядом с вашим именем";
+
+function showBirthdayValidity() {
+    const input = document.getElementById("profile-birthday-input");
+    const hint = document.getElementById("profile-birthday-hint");
+    if (!input) return null;
+    // У незаполненного до конца поля value пустое, но браузер знает, что ввод неполный.
+    const error = input.validity?.badInput ? "Введите дату полностью: день, месяц и год" : birthdayError(input.value);
+    input.classList.toggle("invalid", !!error);
+    input.setAttribute("aria-invalid", error ? "true" : "false");
+    if (hint) { hint.textContent = error || BIRTHDAY_HINT; hint.classList.toggle("error", !!error); }
+    return error;
+}
+
+function birthdayChanged() {
+    const input = document.getElementById("profile-birthday-input");
+    return !!input && (input.validity?.badInput || (input.value || null) !== (myProfileExtras?.birthday || null));
+}
+
+function applyBirthdayLimits() {
+    const input = document.getElementById("profile-birthday-input");
+    if (!input) return;
+    const { min, max } = birthdayBounds();
+    input.min = min;     // календарь браузера не даст выбрать дату вне диапазона
+    input.max = max;
+    showBirthdayValidity();
+}
+
+document.addEventListener("input", (event) => { if (event.target?.id === "profile-birthday-input") showBirthdayValidity(); });
+document.addEventListener("change", (event) => { if (event.target?.id === "profile-birthday-input") showBirthdayValidity(); });
+applyBirthdayLimits();
 
 function renderProfileColorRow() {
     const row = document.getElementById("profile-color-row");
@@ -119,6 +187,9 @@ function profileExtrasDirty() {
 
 async function saveProfileExtras() {
     if (!myProfileExtras || !profileExtrasDirty()) return true;
+    // Последний рубеж: даже если сюда пришли в обход кнопки «Сохранить».
+    const birthdayProblem = showBirthdayValidity();
+    if (birthdayProblem && birthdayChanged()) { toast(birthdayProblem); return false; }
     const phone = normalizePhone(document.getElementById("profile-phone-input").value) || null;
     const birthday = document.getElementById("profile-birthday-input").value || null;
     try {
@@ -145,8 +216,9 @@ if (typeof saveProfileChanges === "function") {
             const raw = document.getElementById("profile-phone-input").value.trim();
             const phone = normalizePhone(raw);
             if (raw && !/^\+\d{8,15}$/.test(phone)) { toast("Номер телефона: от 8 до 15 цифр, например +7 900 000-00-00"); return; }
-            const birthday = document.getElementById("profile-birthday-input").value;
-            if (birthday && (birthday > new Date().toISOString().slice(0, 10) || birthday < "1900-01-02")) { toast("Проверьте дату рождения"); return; }
+            // Проверяем, только если дату меняли: старая сохранённая не мешает сохранить, например, имя.
+            const birthdayProblem = showBirthdayValidity();
+            if (birthdayProblem && birthdayChanged()) { toast(birthdayProblem); document.getElementById("profile-birthday-input").focus(); return; }
         }
         const ok = await originalSaveProfileChanges();
         if (ok === false) return false;

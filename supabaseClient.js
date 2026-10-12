@@ -1288,6 +1288,18 @@ const KabanAPI = {
         return { stories: stories || [], seen };
     },
 
+    // Новые/удалённые истории мгновенно (раньше — опрос раз в минуту). Нужна таблица
+    // stories в публикации supabase_realtime (см. realtime_stories.sql); права доступа
+    // применяются те же, что к обычному select (can_view_stories). Возвращает функцию отписки.
+    subscribeToStories(onChange) {
+        const db = getSupabaseClient();
+        const channel = db
+            .channel(`stories-feed:${Math.random().toString(36).slice(2)}`)
+            .on("postgres_changes", { event: "*", schema: "public", table: "stories" }, () => onChange?.())
+            .subscribe();
+        return () => db.removeChannel(channel);
+    },
+
     async createStory({ kind, file, text, bg, caption }) {
         const db = getSupabaseClient();
         const me = await KabanAuth.getCurrentUser();
@@ -1692,6 +1704,25 @@ const KabanAPI = {
         return () => db.removeChannel(channel);
     },
 
+    // «Звонок завершён» при закрытии/перезагрузке страницы. Обычное сообщение канала
+    // в этот момент не успевает уйти (страница выгружается), и собеседник ещё 30 с
+    // «переподключался», а для всех был «занят». Здесь — тот же broadcast, но HTTP-
+    // запросом с keepalive: браузер досылает его уже после ухода со страницы.
+    sendCallEndBeacon(callId, payload) {
+        try {
+            let token = SUPABASE_ANON_KEY;
+            const key = Object.keys(localStorage).find((k) => /^sb-.*-auth-token$/.test(k));
+            const stored = key ? JSON.parse(localStorage.getItem(key) || "null") : null;
+            if (stored?.access_token) token = stored.access_token;
+            fetch(`${SUPABASE_URL}/realtime/v1/api/broadcast`, {
+                method: "POST",
+                keepalive: true,
+                headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ messages: [{ topic: `call:${callId}`, event: "end", payload: payload || {} }] })
+            }).catch(() => {});
+        } catch { /* страница уже закрывается */ }
+    },
+
     // Разовая отправка offer вызываемому — своего "постоянного" канала не
     // требует, дальнейший обмен (answer/ice/end) идёт через canal самого
     // звонка (joinCallChannel), а не через этот.
@@ -1711,10 +1742,13 @@ const KabanAPI = {
     // привязаны к конкретному callId, а не к пользователю (иначе стало бы
     // не различить сигналы разных, пусть даже не пересекающихся по времени,
     // звонков одному и тому же собеседнику).
-    joinCallChannel(callId, { onAnswer, onIceCandidate, onEnd, onRenegotiate, onRestartRequest, onState, onClaim } = {}) {
+    joinCallChannel(callId, { onAnswer, onIceCandidate, onEnd, onRenegotiate, onRestartRequest, onState, onClaim, onRinging } = {}) {
         const db = getSupabaseClient();
         const channel = db
             .channel(`call:${callId}`)
+            // Собеседник получил приглашение — у него звонит (звонящий отвечает тем же
+            // событием с from:"caller" — «я ещё звоню», см. восстановление после перезагрузки).
+            .on("broadcast", { event: "ringing" }, ({ payload }) => onRinging?.(payload))
             // Состояние собеседника: микрофон / камера / показ экрана (как в Telegram).
             .on("broadcast", { event: "state" }, ({ payload }) => onState?.(payload))
             // «Беру звонок» от одного из устройств собеседника и подтверждение звонящего.
@@ -1735,6 +1769,7 @@ const KabanAPI = {
             sendRestartRequest: () => channel.send({ type: "broadcast", event: "restart-request", payload: {} }),
             sendState: (payload) => channel.send({ type: "broadcast", event: "state", payload }),
             sendClaim: (payload) => channel.send({ type: "broadcast", event: "claim", payload }),
+            sendRinging: (payload) => channel.send({ type: "broadcast", event: "ringing", payload: payload || {} }),
             sendAnswer: (payload) => channel.send({ type: "broadcast", event: "answer", payload }),
             sendIceCandidate: (payload) => channel.send({ type: "broadcast", event: "ice-candidate", payload }),
             sendEnd: (payload) => channel.send({ type: "broadcast", event: "end", payload: payload || {} }),
@@ -1956,10 +1991,12 @@ const KabanAPI = {
     // отправитель шлёт НОВЫЙ SDP offer на этом же канале (он не закрывается
     // при обрыве самого WebRTC-соединения, только при завершении/отмене
     // передачи), получатель отвечает новым answer как обычно.
-    joinFileTransferChannel(transferId, { onAnswer, onReoffer, onIceCandidate, onEnd } = {}) {
+    joinFileTransferChannel(transferId, { onAnswer, onReoffer, onIceCandidate, onEnd, onRequestOffer } = {}) {
         const db = getSupabaseClient();
         const channel = db
             .channel(`file-transfer:${transferId}`)
+            // Получатель нажал «Принять» и просит свежее предложение (см. acceptFileTransfer).
+            .on("broadcast", { event: "request-offer" }, ({ payload }) => onRequestOffer?.(payload))
             .on("broadcast", { event: "answer" }, ({ payload }) => onAnswer?.(payload))
             .on("broadcast", { event: "reoffer" }, ({ payload }) => onReoffer?.(payload))
             .on("broadcast", { event: "ice-candidate" }, ({ payload }) => onIceCandidate?.(payload))
@@ -1971,6 +2008,7 @@ const KabanAPI = {
             ready,
             sendAnswer: (payload) => channel.send({ type: "broadcast", event: "answer", payload }),
             sendReoffer: (payload) => channel.send({ type: "broadcast", event: "reoffer", payload }),
+            sendRequestOffer: (payload) => channel.send({ type: "broadcast", event: "request-offer", payload: payload || {} }),
             sendIceCandidate: (payload) => channel.send({ type: "broadcast", event: "ice-candidate", payload }),
             sendEnd: (payload) => channel.send({ type: "broadcast", event: "end", payload: payload || {} }),
             leave: () => db.removeChannel(channel)

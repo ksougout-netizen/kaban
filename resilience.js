@@ -341,6 +341,87 @@ const KabanOutbox = (() => {
 
 })();
 
+// Окна-«страницы» (профиль, настройки, сохранённое, карточки, медиа…) открываются
+// по одному: открыли новое — прежнее само закрывается. Раньше они накладывались друг
+// на друга, и чтобы попасть в «Настройки» из «Моего профиля», профиль сначала нужно
+// было закрыть вручную. Следим за классом open у всех окон сразу, а не правим каждую
+// кнопку, — так правило действует и для окон, которые появятся позже.
+// Вложенные окна (участник группы поверх группы, подтверждения) в список не входят —
+// им как раз нужно лежать поверх родителя.
+const KabanExclusiveWindows = (() => {
+    const IDS = [
+        "profile-screen-backdrop", "settings-backdrop", "saved-messages-backdrop", "info-modal-backdrop",
+        "contact-modal-backdrop", "group-info-backdrop", "new-group-backdrop", "shared-media-backdrop",
+        "command-palette-backdrop"
+    ];
+    const isOpen = (el) => el.classList.contains("open");
+    const wasOpen = new Set();
+
+    function check(changedId) {
+        const el = document.getElementById(changedId);
+        if (!el) return;
+        const open = isOpen(el);
+        if (!open) { wasOpen.delete(changedId); return; }
+        if (wasOpen.has(changedId)) return;
+        wasOpen.add(changedId);
+        const closers = (typeof SHEET_CLOSE_BY_BACKDROP_ID !== "undefined" && SHEET_CLOSE_BY_BACKDROP_ID) || {};
+        for (const id of IDS) {
+            if (id === changedId) continue;
+            const other = document.getElementById(id);
+            if (!other || !isOpen(other)) continue;
+            try { closers[id]?.(); } catch { /* закрыть не вышло */ }
+            // Не закрылось (например, в профиле несохранённые правки и человек нажал
+            // «Отмена») — не оставляем два окна сразу, убираем только что открытое.
+            if (isOpen(other)) {
+                try { closers[changedId]?.(); } catch { /* ок */ }
+                return;
+            }
+            wasOpen.delete(id);
+        }
+    }
+
+    const observer = new MutationObserver((records) => {
+        const ids = new Set(records.map((r) => r.target.id).filter(Boolean));
+        ids.forEach(check);
+    });
+    IDS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (isOpen(el)) wasOpen.add(id);
+        observer.observe(el, { attributes: true, attributeFilter: ["class"] });
+    });
+    return { check };
+})();
+
+// «Медиа» (фото, файлы, голосовые, ссылки) строится по сообщениям чата, но
+// перерисовывалось только при открытии чата и подгрузке истории: новое голосовое
+// появлялось в «Медиа» лишь после повторного входа в чат. Теперь любое появление,
+// изменение или удаление сообщения обновляет список (склеиваем всплески в одно
+// обновление), а открытое окно «Медиа» перерисовывается тут же.
+const KabanSharedMedia = (() => {
+    let timer = 0;
+    function refresh() {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+            try {
+                if (typeof renderSharedMediaDataForCurrentChat === "function") renderSharedMediaDataForCurrentChat();
+                if (document.getElementById("shared-media-backdrop")?.classList.contains("open") && typeof filterSharedMediaModal === "function") filterSharedMediaModal();
+            } catch { /* не критично */ }
+        }, 120);
+    }
+    ["appendRealMessageRow", "updateRealMessageRow", "removeMessageRowCompletely"].forEach((name) => {
+        const original = globalThis[name];
+        if (typeof original !== "function") return;
+        // function-объявления верхнего уровня — свойства window; переприсваиваем так же, как openRealChat ниже.
+        globalThis[name] = function (...args) {
+            const result = original.apply(this, args);
+            refresh();
+            return result;
+        };
+    });
+    return { refresh };
+})();
+
 // После открытия чата — показать его неотправленные сообщения.
 if (typeof openRealChat === "function") {
     const originalOpenRealChat = openRealChat;
@@ -450,8 +531,17 @@ const KabanConn = (() => {
         await fillGap();
 
         try { if (typeof loadChatList === "function") await loadChatList(); } catch { /* не критично */ }
+        try { if (typeof refreshStories === "function") refreshStories(); } catch { /* не критично */ }
 
     }
+
+    // Сторож каналов: раньше упавший канал (входящие звонки, файлы, истории…) оживал
+    // только после сна/смены сети — до тех пор события по нему просто не приходили.
+    // Теперь раз в 8 секунд проверяем и поднимаем упавшие; ничего не стоит, если всё в порядке.
+    setInterval(() => {
+        if (!navigator.onLine || typeof myRealUserId === "undefined" || !myRealUserId) return;
+        reviveChannels();
+    }, 8000);
 
     // Каналы Realtime, которые сервер закрыл или которые оборвались, — подписываем заново.
     function reviveChannels() {

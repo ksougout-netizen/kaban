@@ -378,7 +378,10 @@ async function voiceAttachMic(local) {
             deviceId: voiceSettings.inputId ? { exact: voiceSettings.inputId } : undefined,
             echoCancellation: voiceSettings.echo,
             noiseSuppression: voiceSettings.noise,
-            autoGainControl: voiceSettings.agc,
+            // Встроенная автоподстройка Chrome на Windows двигает СИСТЕМНЫЙ ползунок
+            // микрофона и со временем опускает его (голос становится всё тише — и тут,
+            // и в звонках). Вместо неё — своё выравнивание громкости (local.leveler).
+            autoGainControl: false,
             channelCount: 1
         }
     };
@@ -391,7 +394,7 @@ async function voiceAttachMic(local) {
         if (voiceSettings.inputId && (error.name === "OverconstrainedError" || error.name === "NotFoundError")) {
             voiceSettings.inputId = "";
             saveVoiceSettings();
-            stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noise, autoGainControl: voiceSettings.agc, channelCount: 1 } });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noise, autoGainControl: false, channelCount: 1 } });
         } else {
             throw error;
         }
@@ -401,7 +404,17 @@ async function voiceAttachMic(local) {
     local.micStream?.getTracks().forEach((track) => track.stop());
     local.micStream = stream;
     local.src = local.ctx.createMediaStreamSource(stream);
-    local.src.connect(local.inputGain);
+    // «Автогромкость» в настройках — своё выравнивание (то же, что в звонках 1:1):
+    // срез гула → мягкий компрессор с компенсирующим усилением.
+    if (!local.leveler) {
+        const hp = local.ctx.createBiquadFilter();
+        hp.type = "highpass"; hp.frequency.value = 80; hp.Q.value = 0.7;
+        const comp = local.ctx.createDynamicsCompressor();
+        comp.threshold.value = -24; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.004; comp.release.value = 0.25;
+        hp.connect(comp).connect(local.inputGain);
+        local.leveler = hp;
+    }
+    local.src.connect(voiceSettings.agc !== false ? local.leveler : local.inputGain);
 
 }
 

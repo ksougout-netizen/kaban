@@ -745,6 +745,10 @@ function buildAttachmentHTML(message) {
 // статус. Прогресс и статус дальше обновляются НАПРЯМУЮ через DOM по id
 // (p2p-status-/p2p-progress-${transferId}) из обработчиков дата-канала —
 // без перерисовки всего сообщения на каждый чанк.
+function transferIdIsSafe(id) {
+    return /^[A-Za-z0-9_-]{1,64}$/.test(String(id || ""));
+}
+
 function buildP2PFileHTML(message) {
 
     const meta = message.attachment_meta || {};
@@ -757,7 +761,13 @@ function buildP2PFileHTML(message) {
     const rawTransferId = String(meta.transferId || "");
     const transferId = /^[A-Za-z0-9_-]{1,64}$/.test(rawTransferId) ? rawTransferId : "";
     const isMine = message.sender_id === myRealUserId;
-    const status = meta.status || "pending";
+    let status = meta.status || "pending";
+    // Своя передача «ожидает/в очереди», но в этой вкладке её нет (перезагрузили
+    // страницу или закрыли программу) — она уже не пойдёт; раньше плашка навсегда
+    // показывала «Ожидает подтверждения…».
+    const stale = isMine && (status === "pending" || status === "queued")
+        && typeof activeFileTransfers !== "undefined" && transferIdIsSafe(meta.transferId) && !activeFileTransfers.has(meta.transferId);
+    if (stale) status = "stale";
 
     const statusLabels = {
         queued: "В очереди…",
@@ -772,7 +782,8 @@ function buildP2PFileHTML(message) {
         declined: isMine ? "Собеседник отклонил" : "Вы отклонили",
         failed: "Передача не удалась",
         cancelled: "Передача отменена",
-        unsupported: "У собеседника нет поддержки (нужен Chrome/Edge на компьютере)"
+        unsupported: "У собеседника нет поддержки (нужен Chrome/Edge на компьютере)",
+        stale: "Не отправлено: страница была перезагружена — отправьте файл ещё раз"
     };
 
     // Блок кнопок рендерим ВСЕГДА (даже пустым) — так setP2PStatus (см.

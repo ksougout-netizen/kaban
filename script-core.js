@@ -1021,22 +1021,26 @@ let managedIceServers = null;
 let managedIceExpiresAt = 0;
 let managedIcePromise = null;
 
-// Включить, если будет развёрнута функция turn-credentials (Cloudflare); сейчас
-// ретранслятор — ExpressTURN из DEFAULT_TURN, и лишний запрос не нужен.
-const USE_MANAGED_TURN = false;
+// Ретранслятор Cloudflare (функция turn-credentials) — отвечает из ближайшего
+// города: бесплатный ExpressTURN стоит во Франции, и звонок через него идёт с
+// задержкой ~320 мс туда-обратно (её слышно в разговоре). Пока функция не
+// развёрнута, её вызов быстро падает — тогда 30 минут не пробуем и звоним через
+// ExpressTURN, звонок лишнего не ждёт.
+const USE_MANAGED_TURN = true;
+let managedIceUnavailableUntil = 0;
 
 function ensureTurnServers(timeoutMs = 3000) {
-    if (!USE_MANAGED_TURN) return Promise.resolve();
+    if (!USE_MANAGED_TURN || Date.now() < managedIceUnavailableUntil) return Promise.resolve();
     if (managedIceServers && Date.now() < managedIceExpiresAt) return Promise.resolve();
     if (typeof getSupabaseClient !== "function" || typeof myRealUserId === "undefined" || !myRealUserId) return Promise.resolve();
     if (!managedIcePromise) {
         managedIcePromise = getSupabaseClient().functions.invoke("turn-credentials")
             .then(({ data, error }) => {
-                if (error || !Array.isArray(data?.iceServers) || !data.iceServers.length) return;
+                if (error || !Array.isArray(data?.iceServers) || !data.iceServers.length) { managedIceUnavailableUntil = Date.now() + 30 * 60 * 1000; return; }
                 managedIceServers = data.iceServers;
                 managedIceExpiresAt = Date.now() + Math.max(600, (Number(data.ttl) || 86400) - 3600) * 1000;
             })
-            .catch(() => { /* функция не развёрнута или сеть — звонок пойдёт напрямую */ })
+            .catch(() => { managedIceUnavailableUntil = Date.now() + 30 * 60 * 1000; })
             .finally(() => { managedIcePromise = null; });
     }
     // Звонок не должен ждать дольше пары секунд, даже если сервер не отвечает.
@@ -1218,6 +1222,8 @@ function startCallInbox(myUserId) {
     callInboxUnsubscribe = KabanAPI.subscribeToCallInbox(myUserId, {
         onOffer: (payload) => handleIncomingCallOffer(payload)
     });
+    // Звонили, пока страница перезагружалась, — показать вызов снова.
+    setTimeout(restoreIncomingCall, 300);
 }
 
 function stopCallInbox() {
@@ -1251,7 +1257,36 @@ function playOrUnlock(el) {
 // открыто несколько устройств, и ответить должен ровно один из них.
 const CALL_TAB_ID = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
 
+const handledCallIds = new Set();   // уже полученные приглашения (повторы — см. scheduleCallOfferResend)
+
 function handleIncomingCallOffer(payload) {
+
+    if (!payload?.callId) return;
+    // Повтор приглашения: если звонок ещё звонит — снова подтверждаем «звонит»; если
+    // его уже приняли, отклонили или пропустили — молча игнорируем (а не звоним снова
+    // и не отвечаем «занято»).
+    if (handledCallIds.has(payload.callId)) {
+        const watch = pendingIncomingCall?.callId === payload.callId ? pendingIncomingCall._watch : null;
+        if (watch) Promise.resolve(watch.ready).then(() => watch.sendRinging?.()).catch(() => {});
+        return;
+    }
+    handledCallIds.add(payload.callId);
+    if (handledCallIds.size > 200) handledCallIds.delete(handledCallIds.values().next().value);
+
+    // Звонит тот же человек, с которым у нас «висит» прежний звонок (он обновил
+    // страницу, у него упала программа или пропала сеть): его старый звонок уже
+    // мёртв. Раньше мы отвечали ему «занято», а сами ещё до 30 с «переподключались» —
+    // дозвониться друг другу было нельзя. Теперь старый звонок закрываем, новый звонит.
+    if (activeCall && activeCall.remoteUserId === payload.callerId && activeCall.callId !== payload.callId) {
+        teardownActiveCall(activeCall.connectedAt ? "completed" : "missed");
+    }
+    if (pendingIncomingCall && pendingIncomingCall.callerId === payload.callerId && pendingIncomingCall.callId !== payload.callId) {
+        const old = pendingIncomingCall;
+        closeIncomingWatch(old);
+        pendingIncomingCall = null;
+        forgetIncomingCall();
+        updateCallHistoryEntry(old.callId, { result: "missed", seen: true });
+    }
 
     saveCallHistoryEntry({
         id: payload.callId,
@@ -1283,19 +1318,71 @@ function handleIncomingCallOffer(payload) {
     // «Звонит вам…» (теперь ещё и с мелодией) висело у собеседника бесконечно.
     // Ответ с ДРУГОГО устройства этого же аккаунта (телефон + ПК) — гасим звонок здесь.
     payload._watch = KabanAPI.joinCallChannel(payload.callId, {
+        onRinging: (p) => { if (p?.from === "caller") payload._callerAlive = true; },
         onAnswer: (p) => { if (pendingIncomingCall === payload && p?.tab !== CALL_TAB_ID) dismissIncomingCall(payload, "elsewhere"); },
         onClaim: (p) => { if (pendingIncomingCall === payload && !p?.ok && p?.tab && p.tab !== CALL_TAB_ID) dismissIncomingCall(payload, "elsewhere"); },
         onEnd: (p) => { if (pendingIncomingCall === payload) dismissIncomingCall(payload, p?.reason); }
     });
+    // Подтверждаем звонящему, что приглашение дошло и у нас звонит.
+    const watch = payload._watch;
+    Promise.resolve(watch.ready).then(() => { if (pendingIncomingCall === payload) return watch.sendRinging?.(); }).catch(() => {});
+    rememberIncomingCall(payload);
+    // Восстановленный после перезагрузки вызов звонит не дольше, чем звонил бы исходный.
+    const ringLeft = CALL_RING_TIMEOUT_MS + 5000 - (Date.now() - (payload._receivedAt || Date.now()));
     payload._ringTimer = setTimeout(() => {
         if (pendingIncomingCall === payload) dismissIncomingCall(payload);
-    }, CALL_RING_TIMEOUT_MS + 5000);
+    }, Math.max(1000, ringLeft));
+    // Восстановленный: звонящий мог сбросить вызов, пока страница перезагружалась (его
+    // «отбой» мы тогда не услышали). Живой звонящий отвечает на наше «звонит» — нет
+    // ответа за 4 с — вызова больше нет, тихо убираем.
+    if (payload._restored) {
+        setTimeout(() => {
+            if (pendingIncomingCall === payload && !payload._callerAlive) dismissIncomingCall(payload, "gone");
+        }, 4000);
+    }
 
 }
+
+/* ---- входящий вызов переживает перезагрузку страницы ----
+   Раньше обновление страницы, пока звонят, просто теряло вызов: у звонящего ещё 30 с
+   шёл «Вызов…», а ответить было нечем. Теперь звонящий вызов запоминается в
+   sessionStorage (только эта вкладка) и после перезагрузки звонит снова. */
+const INCOMING_CALL_STORAGE_KEY = "kaban-incoming-call";
+
+function rememberIncomingCall(payload) {
+    try {
+        const { callId, sdp, callerId, callerName, callerAvatarUrl, isVideo } = payload;
+        sessionStorage.setItem(INCOMING_CALL_STORAGE_KEY, JSON.stringify({ callId, sdp, callerId, callerName, callerAvatarUrl, isVideo, receivedAt: payload._receivedAt || Date.now() }));
+    } catch { /* без восстановления */ }
+}
+
+function forgetIncomingCall() {
+    try { sessionStorage.removeItem(INCOMING_CALL_STORAGE_KEY); } catch { /* ок */ }
+}
+
+function restoreIncomingCall() {
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem(INCOMING_CALL_STORAGE_KEY) || "null"); } catch { /* повреждено */ }
+    forgetIncomingCall();
+    if (!saved?.callId || Date.now() - (saved.receivedAt || 0) > CALL_RING_TIMEOUT_MS) return;
+    if (activeCall || pendingIncomingCall) return;
+    handleIncomingCallOffer({ ...saved, _restored: true, _receivedAt: saved.receivedAt });
+}
+
+// Уходим со страницы (перезагрузка, закрытие вкладки, выход из программы).
+window.addEventListener("pagehide", () => {
+    const call = activeCall;
+    // Идёт звонок или мы звоним — сообщаем собеседнику, что звонок окончен, иначе он
+    // ещё 30 с «переподключается» и для всех занят.
+    if (call?.callId) KabanAPI.sendCallEndBeacon?.(call.callId, { reason: "hangup" });
+    // Нам звонят — вызов уже сохранён (rememberIncomingCall) и после перезагрузки
+    // зазвонит снова, отбой не шлём.
+});
 
 // Отписаться от «наблюдения» за входящим (перед ответом/отклонением — у них свой канал).
 function closeIncomingWatch(offer) {
     clearTimeout(offer?._ringTimer);
+    forgetIncomingCall();   // принят, отклонён или пропущен — после перезагрузки звонить уже не должен
     const watch = offer?._watch;
     if (offer) offer._watch = null;
     try { return Promise.resolve(watch?.leave()).catch(() => {}); } catch { return Promise.resolve(); }
@@ -1315,6 +1402,188 @@ function dismissIncomingCall(offer, reason) {
     hideCallUI();
     if (reason === "elsewhere") toast("Звонок принят на другом устройстве");
     else if (!handledElsewhere) toast(`Пропущенный звонок${offer.callerName ? " от " + offer.callerName : ""}`);
+}
+
+/* ---- микрофон звонка 1:1 ---------------------------------------------------------------------
+   Раньше звонок брал getUserMedia({ audio: true }) — СИСТЕМНЫЙ микрофон Windows по
+   умолчанию, а голосовые комнаты — микрофон, выбранный в настройках голоса. Если по
+   умолчанию в системе стоит другое устройство (микрофон веб-камеры, отключённый вход),
+   в комнатах человека слышно, а в звонке — нет. Теперь звонок берёт тот же микрофон
+   и ту же громкость, что и комнаты.
+
+   Громкость: встроенная автоподстройка Chrome (autoGainControl) на Windows двигает
+   СИСТЕМНЫЙ ползунок микрофона и со временем опускает его — собеседник слышит вас всё
+   тише. Вместо неё — своя обработка: срез гула ниже 80 Гц → мягкий компрессор,
+   выравнивающий громкость → усиление → ограничитель от перегруза. Ползунок ОС не
+   трогается, громкость стабильна весь разговор. */
+
+function callVoicePrefs() {
+    const s = typeof voiceSettings !== "undefined" ? voiceSettings : {};
+    return {
+        inputId: s.inputId || "",
+        echo: s.echo !== false,
+        noise: s.noise !== false,
+        level: s.agc !== false,                       // выравнивать громкость (своё, не браузерное)
+        volume: Number.isFinite(s.inputVolume) ? s.inputVolume / 100 : 1
+    };
+}
+
+async function getCallMicStream(deviceId) {
+    const prefs = callVoicePrefs();
+    const audio = (id) => ({
+        deviceId: id ? { exact: id } : undefined,
+        echoCancellation: prefs.echo,
+        noiseSuppression: prefs.noise,
+        autoGainControl: false,
+        channelCount: 1
+    });
+    try {
+        return await navigator.mediaDevices.getUserMedia({ audio: audio(deviceId) });
+    } catch (error) {
+        // Выбранное устройство отключили — берём системное, а не отказываемся от звонка.
+        if (deviceId && (error?.name === "OverconstrainedError" || error?.name === "NotFoundError")) {
+            return navigator.mediaDevices.getUserMedia({ audio: audio("") });
+        }
+        throw error;
+    }
+}
+
+async function openCallMic() {
+
+    const prefs = callVoicePrefs();
+    const raw = await getCallMicStream(prefs.inputId);
+    const rawTrack = raw.getAudioTracks()[0];
+
+    const mic = {
+        raw, track: rawTrack, processed: false, ctx: null, nodes: null,
+        deviceId: rawTrack?.getSettings?.().deviceId || prefs.inputId || "",
+        silentSince: 0, warned: false
+    };
+
+    // Обработка через WebAudio. Если звуковой контекст не запускается (браузер без
+    // жеста пользователя, нет WebAudio) — отправляем микрофон как есть: лучше без
+    // выравнивания, чем тишина.
+    try {
+        const ctx = typeof voiceEnsureCtx === "function" ? voiceEnsureCtx() : new (window.AudioContext || window.webkitAudioContext)();
+        if (ctx.state !== "running") {
+            await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, 400))]);
+        }
+        if (ctx.state === "running") {
+            const src = ctx.createMediaStreamSource(raw);
+            const hp = ctx.createBiquadFilter();
+            hp.type = "highpass"; hp.frequency.value = 80; hp.Q.value = 0.7;
+            const comp = ctx.createDynamicsCompressor();
+            // Компрессор сам добавляет компенсирующее усиление (~+10 дБ при этих
+            // настройках): тихая речь поднимается, громкая — прижимается.
+            comp.threshold.value = -24; comp.knee.value = 12; comp.ratio.value = 3; comp.attack.value = 0.004; comp.release.value = 0.25;
+            const gain = ctx.createGain();
+            gain.gain.value = prefs.volume;
+            const limiter = ctx.createDynamicsCompressor();
+            // Запас от перегруза: на −3 дБ пики громкого микрофона проходили почти до 0 дБ
+            // (хрип у собеседника); −6 дБ с быстрым срабатыванием держит их.
+            limiter.threshold.value = -6; limiter.knee.value = 0; limiter.ratio.value = 20; limiter.attack.value = 0.0005; limiter.release.value = 0.08;
+            // Компрессор WebAudio сам добавляет компенсирующее усиление (у этого
+            // «ограничителя» — ×1,48), из-за чего потолок уезжал к −2 дБ. Снимаем его.
+            const trim = ctx.createGain();
+            trim.gain.value = 0.675;
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 1024;
+            const dest = ctx.createMediaStreamDestination();
+            src.connect(analyser);                         // «живой ли микрофон» — по сырому сигналу
+            if (prefs.level) src.connect(hp).connect(comp).connect(gain).connect(limiter).connect(trim).connect(dest);
+            else src.connect(hp).connect(gain).connect(limiter).connect(trim).connect(dest);
+            mic.ctx = ctx;
+            mic.nodes = { src, hp, comp, gain, limiter, trim, analyser, dest, buf: new Float32Array(1024) };
+            mic.track = dest.stream.getAudioTracks()[0];
+            mic.processed = true;
+        }
+    } catch (error) {
+        console.warn("Обработка микрофона недоступна — отправляем как есть", error);
+    }
+
+    // Пик сырого сигнала; null — измерить нечем.
+    mic.peak = () => {
+        if (!mic.nodes) return null;
+        mic.nodes.analyser.getFloatTimeDomainData(mic.nodes.buf);
+        let p = 0;
+        for (let i = 0; i < mic.nodes.buf.length; i++) { const v = Math.abs(mic.nodes.buf[i]); if (v > p) p = v; }
+        return p;
+    };
+    // «Когда микрофон последний раз издал хоть что-то» — проверяем 4 раза в секунду:
+    // разовая проверка раз в 3 с попадала в паузы между звуками и ошибалась.
+    mic.lastSoundAt = Date.now();
+    if (mic.nodes) mic.aliveTimer = setInterval(() => { const p = mic.peak(); if (p == null || p > 0.00002) mic.lastSoundAt = Date.now(); }, 250);
+
+    // Сменить микрофон посреди звонка: меняется только источник, отправляемая дорожка
+    // та же — собеседнику ничего пересогласовывать не нужно.
+    mic.setDevice = async (deviceId) => {
+        const next = await getCallMicStream(deviceId);
+        const nextTrack = next.getAudioTracks()[0];
+        if (mic.nodes) {
+            const src = mic.ctx.createMediaStreamSource(next);
+            try { mic.nodes.src.disconnect(); } catch { /* уже отключён */ }
+            src.connect(mic.nodes.analyser);
+            src.connect(mic.nodes.hp);
+            mic.nodes.src = src;
+        } else {
+            nextTrack.enabled = mic.track.enabled;
+            mic.track = nextTrack;
+        }
+        mic.raw.getTracks().forEach((t) => t.stop());
+        mic.raw = next;
+        mic.deviceId = nextTrack?.getSettings?.().deviceId || deviceId;
+        mic.lastSoundAt = Date.now(); mic.warned = false;
+        return mic.track;
+    };
+
+    mic.stop = () => {
+        clearInterval(mic.aliveTimer);
+        try { mic.nodes?.src.disconnect(); mic.nodes?.trim.disconnect(); } catch { /* ок */ }
+        mic.raw.getTracks().forEach((t) => t.stop());
+        if (mic.processed) mic.track.stop();
+    };
+
+    return mic;
+}
+
+// Собрать поток звонка: обработанный микрофон + камера (для видеозвонка).
+async function openCallMedia(isVideo) {
+    const mic = await openCallMic();
+    const stream = new MediaStream([mic.track]);
+    if (isVideo) {
+        try {
+            const cam = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } });
+            cam.getVideoTracks().forEach((t) => stream.addTrack(t));
+        } catch (error) {
+            mic.stop();
+            throw error;
+        }
+    }
+    return { stream, mic };
+}
+
+// Голос в Opus: 64 кбит/с вместо ~32 по умолчанию, защита от потерь (FEC) и без
+// «прерывистой» передачи тишины (DTX — из-за неё начало фраз иногда съедалось).
+// Параметры в своём SDP говорят собеседнику, как ему кодировать звук ДЛЯ нас.
+function tuneCallOpusSdp(sdp) {
+    if (!sdp) return sdp;
+    const opus = /a=rtpmap:(\d+) opus\/48000[^\r\n]*/i.exec(sdp);
+    if (!opus) return sdp;
+    const pt = opus[1];
+    const wanted = { useinbandfec: "1", usedtx: "0", maxaveragebitrate: "64000", stereo: "0", maxplaybackrate: "48000" };
+    const fmtp = new RegExp(`a=fmtp:${pt} ([^\\r\\n]*)`);
+    if (fmtp.test(sdp)) {
+        return sdp.replace(fmtp, (line, params) => {
+            const map = new Map(params.split(";").map((p) => p.trim()).filter(Boolean).map((p) => { const i = p.indexOf("="); return i < 0 ? [p, ""] : [p.slice(0, i), p.slice(i + 1)]; }));
+            Object.entries(wanted).forEach(([k, v]) => map.set(k, v));
+            return `a=fmtp:${pt} ` + [...map].map(([k, v]) => (v === "" ? k : `${k}=${v}`)).join(";");
+        });
+    }
+    return sdp.replace(opus[0], `${opus[0]}\r\na=fmtp:${pt} ` + Object.entries(wanted).map(([k, v]) => `${k}=${v}`).join(";"));
+}
+
+async function setCallLocalDescription(pc, description) {
+    await pc.setLocalDescription({ type: description.type, sdp: tuneCallOpusSdp(description.sdp) });
 }
 
 // kind: "audio" | "video" — вызывается с кнопок в шапке/карточке чата,
@@ -1346,6 +1615,21 @@ async function startCall(kind) {
     // activeCall ниже: getUserMedia ждёт ответа на запрос разрешения (может
     // длиться секунды), и повторное нажатие кнопки звонка за это время иначе
     // тоже прошло бы проверку activeCall и запустило второй параллельный звонок.
+    // Звоним тому же человеку, с которым уже есть звонок: живой — просто показываем его
+    // окно; зависший (вызов без ответа, «переподключаемся» после того, как собеседник
+    // обновил страницу) — закрываем и звоним заново. Раньше в обоих случаях было
+    // «У вас уже есть активный звонок», и перезвонить было нельзя.
+    if (activeCall && activeCall.remoteUserId === currentOtherUserId && !startingCall) {
+        const healthy = activeCall.state === "connected" && !activeCall.reconnecting;
+        if (healthy) { if (typeof restoreCall === "function") restoreCall(); return; }
+        Promise.resolve(activeCall.channel?.sendEnd?.({ reason: "hangup" })).catch(() => {});
+        teardownActiveCall(activeCall.connectedAt ? "completed" : "cancelled");
+    }
+    if (pendingIncomingCall && pendingIncomingCall.callerId === currentOtherUserId) {
+        // Он же нам сейчас звонит — вместо встречного вызова просто отвечаем.
+        acceptIncomingCall();
+        return;
+    }
     if (activeCall || pendingIncomingCall || startingCall) {
         toast("У вас уже есть активный звонок");
         return;
@@ -1365,9 +1649,9 @@ async function startCall(kind) {
 
     const isVideo = kind === "video";
 
-    let localStream;
+    let localStream, callMic;
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo });
+        ({ stream: localStream, mic: callMic } = await openCallMedia(isVideo));
     } catch (error) {
         startingCall = false;
         toast("Не удалось получить доступ к " + (isVideo ? "камере/микрофону" : "микрофону"));
@@ -1391,7 +1675,7 @@ async function startCall(kind) {
         if (!isVideo) pc.addTransceiver("video", { direction: "sendrecv" });
 
         activeCall = {
-            callId, pc, localStream, isVideo,
+            callId, pc, localStream, isVideo, mic: callMic,
             isCaller: true,
             remoteUserId,
             remoteName,
@@ -1469,9 +1753,25 @@ async function startCall(kind) {
                     Promise.resolve(channelHandle.sendEnd({ reason: "answered-elsewhere", target: payload.tab })).catch(() => {});
                 }
             },
+            // Собеседник получил вызов и у него звонит — перестаём повторять приглашение.
+            onRinging: (payload) => {
+                if (!activeCall || activeCall.callId !== callId || payload?.from === "caller") return;
+                // Отвечаем «я ещё звоню»: собеседник, обновивший страницу во время вызова,
+                // так узнаёт, что звонок жив, и показывает его снова (см. restoreIncomingCall).
+                if (activeCall.state === "calling") Promise.resolve(channelHandle.sendRinging({ from: "caller" })).catch(() => {});
+                if (activeCall.ringing) return;
+                activeCall.ringing = true;
+                clearTimeout(activeCall.resendTimer);
+                const el = document.getElementById("call-state");
+                if (el && activeCall.state === "calling") el.textContent = callStatusText();
+            },
             onEnd: (payload) => {
                 if (!activeCall || activeCall.callId !== callId) return;
                 if (payload?.target) return;   // адресовано одному из устройств собеседника, не нам
+                // «Занято» в ответ на ПОВТОР нашего же приглашения от старой версии
+                // собеседника (она не узнаёт повтор и считает себя занятой): настоящее
+                // «занято» приходит сразу на первое приглашение, а это — нет.
+                if (payload?.reason === "busy" && activeCall.offerResends > 0 && Date.now() - (activeCall.offerSentAt || 0) > 2500) return;
                 toast(payload?.reason === "busy" ? "Собеседник сейчас на другом звонке" : "Звонок завершён");
                 teardownActiveCall(payload?.reason === "declined" ? "declined" : payload?.reason === "timeout" ? "missed" : undefined);
             }
@@ -1480,7 +1780,7 @@ async function startCall(kind) {
         await channelHandle.ready;
 
         const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        await setCallLocalDescription(pc, offer);
 
         // Собеседник подключается к каналу звонка только после того, как
         // нажмёт «Принять», — кандидаты, разосланные до этого по одному, уходили
@@ -1488,15 +1788,20 @@ async function startCall(kind) {
         // внутри предложения: так они гарантированно дойдут.
         await waitForIceGathering(pc, 1200);
 
-        await KabanAPI.sendCallOffer(remoteUserId, {
+        const offerPayload = {
             callId,
             sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : offer,
             callerId: me.id,
             callerName: cachedMyProfile?.display_name || "Пользователь",
             callerAvatarUrl: cachedMyProfile?.avatar_url || null,
             isVideo
-        });
-        if (activeCall?.callId === callId) activeCall.sdpSent = true;
+        };
+        await KabanAPI.sendCallOffer(remoteUserId, offerPayload);
+        if (activeCall?.callId === callId) {
+            activeCall.sdpSent = true;
+            activeCall.offerPayload = offerPayload;
+            activeCall.offerSentAt = Date.now();
+        }
 
     } catch (error) {
         // Любой сбой настройки/сигнализации до showOutgoingCallUI — без этого
@@ -1508,6 +1813,7 @@ async function startCall(kind) {
             teardownActiveCall("missed");
         } else {
             localStream.getTracks().forEach((track) => track.stop());
+            callMic?.stop();
             try { pc?.close(); } catch {}
             try { channelHandle?.leave(); } catch {}
         }
@@ -1531,6 +1837,7 @@ async function startCall(kind) {
 
     showOutgoingCallUI();
     startCallTone("ringback");
+    scheduleCallOfferResend(callId, remoteUserId, 0);
 
     activeCall.timeoutTimer = setTimeout(() => {
         if (activeCall?.callId === callId && activeCall.state === "calling") {
@@ -1542,6 +1849,25 @@ async function startCall(kind) {
 
 }
 
+// Приглашение на звонок — обычное сообщение канала без гарантии доставки: если канал
+// собеседника в этот момент переподключался (сон, смена сети, трей), оно терялось, и
+// звонящий 30 секунд видел «Вызов…» впустую («иногда не могу дозвониться»). Теперь
+// собеседник подтверждает «у меня звонит», а без подтверждения приглашение
+// повторяется (через 2,5 / 5 / 9 / 14 с). Повтор собеседник узнаёт по callId.
+const CALL_OFFER_RESEND_DELAYS = [2500, 2500, 4000, 5000];
+
+function scheduleCallOfferResend(callId, calleeId, attempt) {
+    const call = activeCall;
+    if (!call || call.callId !== callId || attempt >= CALL_OFFER_RESEND_DELAYS.length) return;
+    clearTimeout(call.resendTimer);
+    call.resendTimer = setTimeout(async () => {
+        if (activeCall !== call || call.ringing || call.state !== "calling" || call.answeredBy !== undefined || call.claimedBy) return;
+        call.offerResends = (call.offerResends || 0) + 1;
+        try { await KabanAPI.sendCallOffer(calleeId, { ...call.offerPayload, resend: call.offerResends }); } catch { /* следующая попытка */ }
+        scheduleCallOfferResend(callId, calleeId, attempt + 1);
+    }, CALL_OFFER_RESEND_DELAYS[attempt]);
+}
+
 async function acceptIncomingCall() {
 
     if (!pendingIncomingCall) return;
@@ -1551,9 +1877,9 @@ async function acceptIncomingCall() {
     const watchClosed = closeIncomingWatch(offer);
     if (typeof voiceCall !== "undefined" && voiceCall) { await voiceLeave(); toast("Вы вышли из голосовой комнаты"); }
 
-    let localStream;
+    let localStream, callMic;
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: offer.isVideo });
+        ({ stream: localStream, mic: callMic } = await openCallMedia(offer.isVideo));
     } catch (error) {
         toast("Не удалось получить доступ к " + (offer.isVideo ? "камере/микрофону" : "микрофону"));
         updateCallHistoryEntry(offer.callId, { result: "missed", seen: false });
@@ -1581,7 +1907,7 @@ async function acceptIncomingCall() {
     localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
     activeCall = {
-        callId: offer.callId, pc, localStream, isVideo: offer.isVideo,
+        callId: offer.callId, pc, localStream, isVideo: offer.isVideo, mic: callMic,
         isCaller: false,
         remoteUserId: offer.callerId,
         remoteName: offer.callerName,
@@ -1649,7 +1975,7 @@ async function acceptIncomingCall() {
             if (t.receiver?.track?.kind === "video" && t.direction === "recvonly") t.direction = "sendrecv";
         });
         const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        await setCallLocalDescription(pc, answer);
         // Свои кандидаты — внутри ответа (как и у звонящего): не зависят от
         // того, успел ли он их принять по одному.
         await waitForIceGathering(pc, 800);
@@ -1790,6 +2116,7 @@ function setupCallPeerConnection(pc, callId) {
                 playCallTone("connect");
                 startCallDurationTicker(activeCall.connectedAt);
                 startCallQualityMonitor(callId);
+                setTimeout(() => { if (activeCall?.callId === callId) logCallRoute(activeCall); }, 1500);
                 sendCallState();
                 showCallEncryptionKey(activeCall);
                 const dialog = document.querySelector("#call-backdrop .call-dialog");
@@ -1867,7 +2194,7 @@ async function restartCallIce(callId) {
     try {
         call.sdpSent = false;
         const offer = await call.pc.createOffer({ iceRestart: true });
-        await call.pc.setLocalDescription(offer);
+        await setCallLocalDescription(call.pc, offer);
         await waitForIceGathering(call.pc, 1500);
         if (activeCall !== call) return;
         call.restartSeq = (call.restartSeq || 0) + 1;
@@ -1897,7 +2224,7 @@ async function applyCallRenegotiate(call, payload) {
             call.sdpSent = false;
             await call.pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
             const answer = await call.pc.createAnswer();
-            await call.pc.setLocalDescription(answer);
+            await setCallLocalDescription(call.pc, answer);
             await waitForIceGathering(call.pc, 1500);
             call.sdpSent = true;
             if (activeCall !== call) return;
@@ -1968,6 +2295,7 @@ function startCallQualityMonitor(callId) {
     call.qualityTimer = setInterval(async () => {
         if (activeCall !== call) { clearInterval(call.qualityTimer); return; }
         if (call.reconnecting) { call.signal = 1; renderCallSignal(); return; }
+        checkCallMicAlive(call);
         let rtt = 0, lost = null, sent = null, inLost = null, inRecv = null;
         try {
             const stats = await call.pc.getStats();
@@ -2006,6 +2334,32 @@ function startCallQualityMonitor(callId) {
     }, 3000);
 }
 
+// «Меня не слышно»: выключенный или не тот микрофон отдаёт АБСОЛЮТНУЮ тишину (нули),
+// живой — хоть какой-то шум комнаты. 6 с нулей при включённом микрофоне — подсказываем
+// выбрать другой (один раз за звонок).
+function checkCallMicAlive(call) {
+    const mic = call.mic;
+    if (!mic || !mic.nodes || mic.warned) return;
+    if (call.local.muted) { mic.lastSoundAt = Date.now(); return; }
+    if (Date.now() - mic.lastSoundAt < 8000) return;
+    mic.warned = true;
+    console.error("[call] микрофон передаёт тишину, устройство " + (mic.deviceId || "по умолчанию"));
+    toast("Микрофон не передаёт звук — собеседник вас не слышит. Выберите другой микрофон кнопкой ⚙ в окне звонка");
+}
+
+// Для журнала программы: каким путём пошёл звонок — напрямую или через ретранслятор.
+async function logCallRoute(call) {
+    try {
+        const stats = await call.pc.getStats();
+        let pair = null;
+        stats.forEach((r) => { if (r.type === "transport" && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
+        if (!pair) stats.forEach((r) => { if (!pair && r.type === "candidate-pair" && r.nominated && r.state === "succeeded") pair = r; });
+        if (!pair) return;
+        const local = stats.get(pair.localCandidateId), remote = stats.get(pair.remoteCandidateId);
+        console.error(`[call] соединение: ${local?.candidateType || "?"}/${local?.protocol || "?"} → ${remote?.candidateType || "?"}, задержка ${Math.round((pair.currentRoundTripTime || 0) * 1000)} мс, микрофон ${call.mic?.processed ? "с обработкой" : "без обработки"}`);
+    } catch { /* только журнал */ }
+}
+
 function renderCallSignal() {
     const el = document.getElementById("call-signal");
     if (!el || !activeCall) return;
@@ -2027,7 +2381,8 @@ function callStatusText() {
     const call = activeCall;
     if (!call) return "";
     if (call.reconnecting) return "Переподключаемся…";
-    if (call.state === "calling") return "Вызов…";
+    // «Звонит…» — собеседник подтвердил, что вызов до него дошёл (как в Telegram).
+    if (call.state === "calling") return call.ringing ? "Звонит…" : "Вызов…";
     if (!call.connectedAt) return "Соединение…";
     const weak = (call.signal || 4) <= 1 ? " · слабая связь" : "";
     return formatCallDuration(Math.floor((Date.now() - call.connectedAt) / 1000)) + weak;
@@ -2071,6 +2426,7 @@ function teardownActiveCall(result, unseenMissedCall = false) {
         clearInterval(activeCall.qualityTimer);
         activeCall.voiceMeter?.stop();
         activeCall.localStream?.getTracks().forEach((track) => track.stop());
+        activeCall.mic?.stop();
         activeCall.screenTrack?.stop();
         try { activeCall.pc?.close(); } catch {}
         activeCall.channel?.leave();
@@ -2477,6 +2833,18 @@ function callPokeControls() {
     });
 })();
 
+// Отклик на нажатие кнопок звонка: :active на телефоне держится долю секунды и
+// почти не виден, поэтому на 450 мс ставим .call-tap (вдавливание + кольцо, см. style.css).
+document.addEventListener("pointerdown", (event) => {
+    const button = event.target.closest?.(".call-control, .call-top-btn, .call-mini-btn");
+    if (!button || button.disabled) return;
+    button.classList.remove("call-tap");
+    void button.offsetWidth;                 // перезапустить анимацию кольца при быстрых повторных нажатиях
+    button.classList.add("call-tap");
+    clearTimeout(button._tapTimer);
+    button._tapTimer = setTimeout(() => button.classList.remove("call-tap"), 450);
+}, true);
+
 /* ---- устройства: микрофон, динамик, камера ---- */
 
 async function toggleCallDevices() {
@@ -2486,7 +2854,7 @@ async function toggleCallDevices() {
     if (!call) return;
     let devices = [];
     try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { /* без списка */ }
-    const micId = call.localStream.getAudioTracks()[0]?.getSettings?.().deviceId || "";
+    const micId = call.mic?.deviceId || call.localStream.getAudioTracks()[0]?.getSettings?.().deviceId || "";
     const camId = call.cameraId || call.localStream.getVideoTracks()[0]?.getSettings?.().deviceId || "";
     const remoteEl = document.getElementById("call-remote-video");
     const canPickOutput = typeof remoteEl?.setSinkId === "function";
@@ -2508,13 +2876,28 @@ async function switchCallMic(deviceId) {
     const call = activeCall;
     if (!call) return;
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
-        const track = stream.getAudioTracks()[0];
-        track.enabled = !call.local.muted;
-        const sender = call.pc.getSenders().find((s) => s.track?.kind === "audio");
-        await sender?.replaceTrack(track);
-        call.localStream.getAudioTracks().forEach((old) => { old.stop(); call.localStream.removeTrack(old); });
-        call.localStream.addTrack(track);
+        if (call.mic) {
+            // Меняется только источник, отправляемая (обработанная) дорожка та же.
+            const before = call.mic.track;
+            const track = await call.mic.setDevice(deviceId);
+            if (track !== before) {
+                track.enabled = !call.local.muted;
+                const sender = call.pc.getSenders().find((s) => s.track?.kind === "audio");
+                await sender?.replaceTrack(track);
+                call.localStream.getAudioTracks().forEach((old) => call.localStream.removeTrack(old));
+                call.localStream.addTrack(track);
+            }
+        } else {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+            const track = stream.getAudioTracks()[0];
+            track.enabled = !call.local.muted;
+            const sender = call.pc.getSenders().find((s) => s.track?.kind === "audio");
+            await sender?.replaceTrack(track);
+            call.localStream.getAudioTracks().forEach((old) => { old.stop(); call.localStream.removeTrack(old); });
+            call.localStream.addTrack(track);
+        }
+        // Запоминаем выбор — им же пользуются голосовые комнаты и следующие звонки.
+        if (typeof voiceSettings !== "undefined") { voiceSettings.inputId = deviceId; if (typeof saveVoiceSettings === "function") saveVoiceSettings(); }
         toast("Микрофон переключён");
     } catch { toast("Не удалось переключить микрофон"); }
 }
@@ -3574,18 +3957,22 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
     startingGroupCall = true;
     closeContactPopover();
 
+    // Микрофон — тот же, что выбран в настройках голоса, с той же обработкой, что и
+    // в звонке 1:1 (см. openCallMic); раньше брался системный по умолчанию.
     let stream = null;
+    let groupMic = null;
     let cameraFailed = false;
     try {
-        stream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-            video: withVideo ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } : false
-        });
-    } catch (error) {
-        if (withVideo) {
+        groupMic = await openCallMic();
+        stream = new MediaStream([groupMic.track]);
+    } catch { /* без микрофона звонка нет — ниже */ }
+    if (stream && withVideo) {
+        try {
+            const cam = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } } });
+            cam.getVideoTracks().forEach((t) => stream.addTrack(t));
+        } catch {
             // Камеры нет/запрещена — не отказываемся от звонка совсем, идём с одним звуком.
             cameraFailed = true;
-            try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); } catch {}
         }
     }
     if (!stream) {
@@ -3602,6 +3989,7 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
         me = { id: user.id, name: cachedMyProfile?.display_name || "Я", avatar: cachedMyProfile?.avatar_url || null };
     } catch (error) {
         stream.getTracks().forEach((track) => track.stop());
+        groupMic?.stop();
         startingGroupCall = false;
         toast("Не удалось начать звонок");
         return;
@@ -3613,7 +4001,7 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
 
     const call = {
         chatId, title, me,
-        localStream: stream,
+        localStream: stream, mic: groupMic,
         audioTrack: stream.getAudioTracks()[0] || null,
         videoTrack: stream.getVideoTracks()[0] || null,
         peers: new Map(), room: null, tiles: new Map(),
@@ -3911,7 +4299,7 @@ async function startGroupCallOffer(call, peer) {
     try {
         peer.sid = Math.random().toString(36).slice(2, 10);
         const offer = await peer.pc.createOffer();
-        await peer.pc.setLocalDescription(offer);
+        await setCallLocalDescription(peer.pc, offer);
         await waitForIceGathering(peer.pc, 600);
         if (activeGroupCall !== call || call.peers.get(peer.userId) !== peer) return;
         call.room.sendSignal({ to: peer.userId, from: call.me.id, kind: "offer", data: peer.pc.localDescription.toJSON(), sid: peer.sid });
@@ -3977,7 +4365,7 @@ async function handleGroupCallSignal(call, message) {
             await attachGroupCallLocalTracks(call, peer);
             await flushGroupCallCandidates(peer);
             const answer = await peer.pc.createAnswer();
-            await peer.pc.setLocalDescription(answer);
+            await setCallLocalDescription(peer.pc, answer);
             await waitForIceGathering(peer.pc, 600);
             if (activeGroupCall !== call || call.peers.get(from) !== peer || peer.pc.signalingState !== "stable") return;
             call.room.sendSignal({ to: from, from: call.me.id, kind: "answer", data: peer.pc.localDescription.toJSON(), sid: message.sid });
@@ -4125,6 +4513,7 @@ function leaveGroupCall(reason = "left") {
     call.peers.forEach((peer) => { clearTimeout(peer.graceTimer); try { peer.pc.close(); } catch {} });
     call.peers.clear();
     call.localStream.getTracks().forEach((track) => track.stop());
+    call.mic?.stop();
     call.room?.leave();
 
     const root = document.getElementById("gcall");
@@ -4314,11 +4703,121 @@ const activeFileTransfers = new Map(); // transferId -> состояние ко�
 // упасть по памяти, либо городить костыли (IndexedDB-буфер, StreamSaver) —
 // сознательно не делаем ради надёжности, лучше честно скрыть кнопку.
 function isP2PFileTransferSupported() {
-    return typeof window.showSaveFilePicker === "function";
+    return typeof window.showSaveFilePicker === "function" || canUsePrivateFileStorage();
+}
+
+// Запасной путь приёма: личное хранилище браузера (OPFS) пишет на диск по мере
+// поступления байт так же, как выбранный файл, а по окончании файл отдаётся
+// обычной загрузкой. Нужен там, где писать в выбранный файл нельзя — в программе
+// для ПК (ей не выдано разрешение на запись файлов: «createWritable … not allowed»),
+// а также в браузерах без выбора места сохранения.
+function canUsePrivateFileStorage() {
+    return !!(navigator.storage?.getDirectory && window.FileSystemFileHandle && "createWritable" in FileSystemFileHandle.prototype);
+}
+
+const INCOMING_DIR = "kaban-incoming";
+
+async function openReceiveSink(transfer) {
+    // В программе для ПК выбор места сохранения сейчас бесполезен (запись в выбранный
+    // файл запрещена) — сразу личное хранилище, место спросит окно загрузки в конце.
+    if (typeof window.showSaveFilePicker === "function" && !window.kabanDesktop) {
+        let handle = null;
+        try {
+            handle = await window.showSaveFilePicker({ suggestedName: transfer.fileName });
+        } catch (error) {
+            if (error?.name === "AbortError") return null;   // сам отменил выбор
+        }
+        if (handle) {
+            try {
+                return { fileHandle: handle, writable: await handle.createWritable(), opfs: false };
+            } catch (error) {
+                console.warn("Запись в выбранный файл недоступна — принимаем во внутреннее хранилище", error);
+            }
+        }
+    }
+    if (!canUsePrivateFileStorage()) {
+        toast("Этот браузер не умеет принимать большие файлы — откройте KABAN в Chrome/Edge");
+        return null;
+    }
+    try {
+        const root = await navigator.storage.getDirectory();
+        const dir = await root.getDirectoryHandle(INCOMING_DIR, { create: true });
+        const name = `${Date.now()}-${transfer.transferId}`;
+        const fileHandle = await dir.getFileHandle(name, { create: true });
+        return { fileHandle, writable: await fileHandle.createWritable(), opfs: true, opfsName: name };
+    } catch (error) {
+        toast("Не удалось подготовить место для файла: " + (error?.message || error));
+        return null;
+    }
+}
+
+// Файл принят во внутреннее хранилище — отдаём его человеку обычной загрузкой
+// (в программе — окно «Сохранить как» и уведомление «Файл сохранён»).
+async function deliverPrivateFile(transfer) {
+    try {
+        const file = await transfer.fileHandle.getFile();
+        const url = URL.createObjectURL(file);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = transfer.fileName || "file";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        transfer.deliveredUrl = url;
+        // Копию во внутреннем хранилище убираем позже: загрузка читает её с диска.
+        setTimeout(() => {
+            URL.revokeObjectURL(url);
+            removePrivateFile(transfer.opfsName);
+        }, 10 * 60 * 1000);
+    } catch (error) {
+        toast("Файл получен, но не удалось его сохранить: " + (error?.message || error));
+    }
+}
+
+async function removePrivateFile(name) {
+    if (!name) return;
+    try {
+        const root = await navigator.storage.getDirectory();
+        const dir = await root.getDirectoryHandle(INCOMING_DIR, { create: true });
+        await dir.removeEntry(name);
+    } catch { /* уже удалён */ }
+}
+
+// Остатки прерванных приёмов (старше суток) — убрать, чтобы не копились на диске.
+async function cleanupPrivateFiles() {
+    if (!canUsePrivateFileStorage()) return;
+    try {
+        const root = await navigator.storage.getDirectory();
+        const dir = await root.getDirectoryHandle(INCOMING_DIR, { create: true });
+        for await (const [name] of dir.entries()) {
+            const at = Number(String(name).split("-")[0]);
+            if (!at || Date.now() - at > 24 * 3600 * 1000) await dir.removeEntry(name).catch(() => {});
+        }
+    } catch { /* не критично */ }
+}
+
+// «Принять» после перезагрузки страницы или если предложение не дошло (был не в
+// сети): данных передачи в памяти нет — восстанавливаем их из самого сообщения.
+// Раньше кнопка в этом случае молча ничего не делала.
+function rebuildReceiverTransfer(transferId) {
+    const message = [...realMessagesById.values()].find((m) => m.attachment_meta?.p2p && m.attachment_meta?.transferId === transferId);
+    if (!message || message.sender_id === myRealUserId) return null;
+    const meta = message.attachment_meta;
+    let resolveExpectedHash;
+    const expectedHashPromise = new Promise((resolve) => { resolveExpectedHash = resolve; });
+    const transfer = {
+        transferId, role: "receiver", chatId: message.chat_id, messageId: message.id, peerId: message.sender_id,
+        fileName: meta.fileName, fileSize: Number(meta.fileSize) || 0, mime: meta.mime,
+        offerSdp: null, bytesReceived: 0, expectedHash: null, expectedHashPromise, resolveExpectedHash,
+        status: "pending", finished: false
+    };
+    activeFileTransfers.set(transferId, transfer);
+    return transfer;
 }
 
 function startFileInbox(myUserId) {
     if (fileInboxUnsubscribe) return;
+    setTimeout(cleanupPrivateFiles, 5000);
     fileInboxUnsubscribe = KabanAPI.subscribeToFileInbox(myUserId, {
         onOffer: (payload) => handleIncomingFileOffer(payload)
     });
@@ -4564,8 +5063,13 @@ async function sendP2PFile(file) {
     // ("pending" у обоих), хотя фактически второй потом всё равно уходил в
     // очередь, и у получателя его карточка успевала показать кнопки
     // "Принять/Отклонить" ещё до того, как его очередь вообще дошла.
-    const shouldQueue = !!activeSendTransferId;
-    if (!shouldQueue) activeSendTransferId = transferId;
+    // Очередь отключена: раньше единственный «слот» был занят, пока собеседник не
+    // нажмёт «Принять», — и если тот не мог принять (или был не в сети), первый файл
+    // висел «Ожидает подтверждения…» вечно, а все следующие навсегда вставали «В
+    // очередь…». Ожидание ответа сеть не нагружает, а одновременные передачи просто
+    // делят канал — каждый файл теперь предлагается сразу.
+    const shouldQueue = false;
+    activeSendTransferId = transferId;
 
     let message;
     try {
@@ -4680,7 +5184,9 @@ async function startP2PFileSendNow({ file, transferId, messageId, chatId, otherU
         onEnd: (payload) => {
             const reason = payload?.reason;
             finishFileTransfer(transfer, reason === "declined" ? "declined" : reason === "unsupported" ? "unsupported" : "failed");
-        }
+        },
+        // Получатель нажал «Принять» — шлём свежее предложение прямо в канал передачи.
+        onRequestOffer: () => sendFreshFileOffer(transfer)
     });
     transfer.channel = channelHandle;
     await channelHandle.ready;
@@ -4689,6 +5195,9 @@ async function startP2PFileSendNow({ file, transferId, messageId, chatId, otherU
 
     const offer = await transfer.pc.createOffer();
     await transfer.pc.setLocalDescription(offer);
+    // Кандидаты — внутри предложения: получатель подключится к каналу передачи
+    // только после «Принять», и разосланные до этого по одному терялись.
+    await waitForIceGathering(transfer.pc, 1500);
 
     await KabanAPI.sendFileOffer(otherUserId, {
         transferId,
@@ -4699,11 +5208,42 @@ async function startP2PFileSendNow({ file, transferId, messageId, chatId, otherU
         fileName: file.name,
         fileSize: file.size,
         mime: file.type || "application/octet-stream",
-        sdp: offer
+        sdp: transfer.pc.localDescription?.toJSON ? transfer.pc.localDescription.toJSON() : offer
     });
 
     }
 
+}
+
+// Получатель нажал «Принять» и просит предложение. Предложение из file-inbox могло
+// не дойти (был не в сети, обновил страницу) или устареть (принимают через полчаса —
+// адреса ретранслятора к тому времени истекли), поэтому даём свежее, с собранными
+// кандидатами. Повторная просьба, пока ответа нет, получает то же самое предложение —
+// иначе второе соединение перебило бы первое.
+async function sendFreshFileOffer(transfer) {
+    if (!transfer || transfer.finished || transfer.started) return;
+    const pc = transfer.pc;
+    if (transfer.freshOffer && pc && pc.signalingState === "have-local-offer" && transfer.freshOfferPc === pc) {
+        Promise.resolve(transfer.channel?.sendReoffer({ sdp: transfer.freshOffer, fresh: true })).catch(() => {});
+        return;
+    }
+    if (transfer.makingFreshOffer) return;
+    transfer.makingFreshOffer = true;
+    try {
+        try { transfer.pc?.close(); } catch { /* уже закрыто */ }
+        createSenderConnection(transfer, 0, false);
+        const offer = await transfer.pc.createOffer();
+        await transfer.pc.setLocalDescription(offer);
+        await waitForIceGathering(transfer.pc, 1500);
+        if (transfer.finished) return;
+        transfer.freshOffer = transfer.pc.localDescription.toJSON();
+        transfer.freshOfferPc = transfer.pc;
+        await transfer.channel?.sendReoffer({ sdp: transfer.freshOffer, fresh: true });
+    } catch (error) {
+        console.warn("Не удалось подготовить предложение файла", error);
+    } finally {
+        transfer.makingFreshOffer = false;
+    }
 }
 
 // Вызывается из finishFileTransfer, когда освобождается активный слот —
@@ -4741,6 +5281,7 @@ function createSenderConnection(transfer, resumeFromByte, isReconnect) {
     byteChannel.bufferedAmountLowThreshold = FILE_TRANSFER_BUFFERED_LOW;
     byteChannel.onopen = () => {
         transfer.reconnecting = false;
+        transfer.started = true;   // дальше — только переподключения, свежие предложения не нужны
         if (!isReconnect) pumpFileBytes(transfer);
     };
     byteChannel.onbufferedamountlow = () => pumpFileBytes(transfer);
@@ -4820,6 +5361,12 @@ async function pumpFileBytes(transfer) {
             // байты синхронно до возврата, так что сразу после send() этот
             // же буфер безопасно отдавать на следующее BYOB-чтение.
             const { value, done } = await transfer.reader.read(new Uint8Array(transfer.readBuffer));
+            // read() «забирает» переданный буфер и возвращает его же в value — запоминаем
+            // СРАЗУ: раньше при раннем выходе ниже (канал порвался, пока читали) в
+            // transfer.readBuffer оставался уже отданный буфер, и следующая попытка
+            // падала с «Cannot perform Construct on a detached ArrayBuffer».
+            if (value) transfer.readBuffer = value.buffer;
+            else if (!done) transfer.readBuffer = new ArrayBuffer(FILE_TRANSFER_CHUNK_SIZE);
 
             if (byteChannel.readyState !== "open" || transfer.finished) return; // порвалось, пока читали чанк
 
@@ -4983,8 +5530,8 @@ function wireReceiverDataChannels(transfer, pc) {
 
 async function acceptFileTransfer(transferId) {
 
-    const transfer = activeFileTransfers.get(transferId);
-    if (!transfer || transfer.role !== "receiver") return;
+    const transfer = activeFileTransfers.get(transferId) || rebuildReceiverTransfer(transferId);
+    if (!transfer || transfer.role !== "receiver") { toast("Эта передача уже недоступна"); return; }
 
     // Двойной клик "Принять" (или повторный вызов, пока открыт диалог
     // сохранения) иначе запустил бы второй параллельный accept: второй
@@ -5002,34 +5549,26 @@ async function acceptFileTransfer(transferId) {
         return;
     }
 
-    let fileHandle;
-    try {
-        fileHandle = await window.showSaveFilePicker({ suggestedName: transfer.fileName });
-    } catch (error) {
-        transfer.accepting = false;
-        return; // отменил выбор места сохранения — просто ничего не делаем
-    }
-
-    let writable;
-    try {
-        writable = await fileHandle.createWritable();
-    } catch (error) {
-        transfer.accepting = false;
-        toast("Не удалось создать файл: " + (error?.message || error));
-        return;
-    }
-    transfer.fileHandle = fileHandle;
-    transfer.writable = writable;
+    // Куда писать: выбранный файл, а если в него писать нельзя (программа для ПК:
+    // «createWritable … not allowed») — внутреннее хранилище с загрузкой в конце.
+    // Раньше эта ошибка обрывала приём молча: отправитель ждал вечно.
+    const sink = await openReceiveSink(transfer);
+    if (!sink) { transfer.accepting = false; return; }
+    transfer.fileHandle = sink.fileHandle;
+    transfer.writable = sink.writable;
+    transfer.opfs = sink.opfs;
+    transfer.opfsName = sink.opfsName || null;
 
     setP2PStatus(transfer, "accepted", "Подключение…");
 
-    const pc = new RTCPeerConnection(RTC_CONFIG);
-    transfer.pc = pc;
-    setupFileTransferPeerConnection(transfer);
-    wireReceiverDataChannels(transfer, pc);
-
+    // Свежее предложение отправитель шлёт в канал передачи по нашей просьбе.
+    let gotFreshOffer;
+    const freshOffer = new Promise((resolve) => { gotFreshOffer = resolve; });
     const channelHandle = KabanAPI.joinFileTransferChannel(transferId, {
-        onReoffer: (payload) => handleFileReoffer(transfer, payload),
+        onReoffer: (payload) => {
+            if (payload?.fresh) { if (!transfer.answeredOffer) gotFreshOffer(payload.sdp); return; }
+            handleFileReoffer(transfer, payload);
+        },
         onIceCandidate: (payload) => {
             transfer.pc?.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch(() => {});
         },
@@ -5043,15 +5582,49 @@ async function acceptFileTransfer(transferId) {
     // висеть на диске у получателя, а передача — в состоянии "Подключение…".
     try {
         await channelHandle.ready;
-        await pc.setRemoteDescription(new RTCSessionDescription(transfer.offerSdp));
+        // Просим свежее предложение (повтор через 2 с — первая просьба могла потеряться).
+        const ask = () => Promise.resolve(channelHandle.sendRequestOffer({})).catch(() => {});
+        ask();
+        const retry = setTimeout(ask, 2000);
+        const sdp = await Promise.race([freshOffer, new Promise((resolve) => setTimeout(resolve, 5000))]) || transfer.offerSdp;
+        clearTimeout(retry);
+        if (!sdp) {
+            // Отправитель не отвечает (не в сети или перезагрузил страницу) — честно
+            // говорим об этом и возвращаем кнопку «Принять».
+            try { channelHandle.leave(); } catch { /* ок */ }
+            transfer.channel = null;
+            try { await transfer.writable.abort(); } catch { /* ок */ }
+            if (transfer.opfs) removePrivateFile(transfer.opfsName);
+            transfer.writable = null; transfer.fileHandle = null;
+            transfer.accepting = false;
+            setP2PStatus(transfer, "pending", "Предлагает файл");
+            toast("Отправитель сейчас не в сети — попросите его открыть чат или отправить файл ещё раз");
+            return;
+        }
+        transfer.answeredOffer = true;
+        const pc = new RTCPeerConnection(RTC_CONFIG);
+        transfer.pc = pc;
+        setupFileTransferPeerConnection(transfer);
+        wireReceiverDataChannels(transfer, pc);
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await channelHandle.sendAnswer({ sdp: answer });
+        await waitForIceGathering(pc, 1500);
+        await channelHandle.sendAnswer({ sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : answer });
     } catch (error) {
         toast("Не удалось установить соединение");
         finishFileTransfer(transfer, "failed");
         return;
     }
+
+    // Соединение так и не поднялось (отправитель ушёл, а мы ответили на его старое
+    // предложение) — раньше карточка навсегда оставалась «Подключение…».
+    clearTimeout(transfer.connectTimer);
+    transfer.connectTimer = setTimeout(() => {
+        if (transfer.finished || transfer.status !== "accepted" || transfer.bytesReceived > 0) return;
+        toast("Не удалось соединиться с отправителем — похоже, он не в сети. Попросите отправить файл ещё раз");
+        finishFileTransfer(transfer, "failed");
+    }, 20000);
 
     try {
         await KabanAPI.updateMessageAttachmentMeta(transfer.messageId, { status: "accepted" });
@@ -5171,6 +5744,7 @@ async function finalizeReceivedFile(transfer) {
     }
 
     transfer.controlChannel?.send(JSON.stringify({ type: "received-done", match }));
+    if (transfer.opfs) await deliverPrivateFile(transfer);
     finishFileTransfer(transfer, match === false ? "hash-mismatch" : "completed");
 
 }
@@ -5195,6 +5769,7 @@ function finishFileTransfer(transfer, finalStatus) {
     // управления именем temp-файла.
     if (transfer.role === "receiver" && transfer.writable && (finalStatus === "failed" || finalStatus === "cancelled")) {
         transfer.writable.abort().catch(() => {});
+        if (transfer.opfs) removePrivateFile(transfer.opfsName);
     }
 
     const statusText = {
@@ -5308,8 +5883,12 @@ function setP2PStatus(transfer, status, text) {
                 : `<button type="button" class="p2p-file-pause" onclick="pauseFileTransfer('${transfer.transferId}')">Пауза</button>`;
         } else if (status !== "pending") {
             actionsEl.innerHTML = "";
+        } else if (transfer.role === "receiver" && !actionsEl.querySelector(".p2p-file-accept")) {
+            // Вернулись к ожиданию (отправитель не ответил) — кнопки снова нужны.
+            actionsEl.innerHTML = `<button type="button" class="p2p-file-accept" onclick="acceptFileTransfer('${transfer.transferId}')">Принять</button>
+           <button type="button" class="p2p-file-decline" onclick="declineFileTransfer('${transfer.transferId}')">Отклонить</button>`;
         }
-        // status === "pending" — не трогаем, там уже accept/decline (если это чужое) из начального рендера.
+        // status === "pending" у отправителя — не трогаем.
     }
 
     if (row && ["completed", "hash-mismatch", "declined", "failed", "cancelled"].includes(status)) {

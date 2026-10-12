@@ -1220,7 +1220,8 @@ function toggleChatArchived(chatId) {
 }
 
 function filterChatRowsByFolder(rows) {
-    if (activeChatFolder === "unread") return rows.filter((r) => (r.unreadCount || 0) > 0);
+    // Вручную помеченные «непрочитанными» — тоже здесь (раньше учитывались только настоящие).
+    if (activeChatFolder === "unread") return rows.filter((r) => (r.unreadCount || 0) > 0 || r.manuallyUnread);
     if (activeChatFolder === "direct") return rows.filter((r) => r.chats?.type !== "group");
     if (activeChatFolder === "group") return rows.filter((r) => r.chats?.type === "group");
     if (activeChatFolder.startsWith("f:")) {
@@ -2749,6 +2750,10 @@ function refreshGroupSenderLabels() {
 
 async function openRealChat(chatId) {
 
+    // Открытие чата снимает ручную метку «непрочитано» — ДО раннего выхода ниже:
+    // раньше клик по уже открытому чату выходил раньше и метку не снимал никогда.
+    clearManualUnread(chatId);
+
     // Если за время долгой цепочки await ниже пользователь успел открыть
     // ДРУГОЙ чат (быстрый повторный клик/свайп), myRequestToken перестанет
     // совпадать с chatOpenRequestToken, и продолжение этого вызова молча
@@ -3596,6 +3601,11 @@ async function markChatReadWithoutOpening(chatId) {
     const row = cachedChatRows.find((r) => r.chat_id === chatId);
     if (!row) return;
 
+    // Ручную метку снимаем сразу и независимо от сети: раньше она снималась только
+    // после ответа сервера, и при ошибке «Пометить прочитанным» не срабатывало вовсе.
+    clearManualUnread(chatId);
+    if (!(row.unreadCount > 0)) return;
+
     try {
         try {
             await KabanAPI.markChatRead(chatId);
@@ -3640,6 +3650,15 @@ function getManuallyUnreadChatIds() {
     } catch {
         return new Set();
     }
+}
+
+function clearManualUnread(chatId) {
+    const ids = getManuallyUnreadChatIds();
+    if (!ids.delete(chatId)) return;
+    try { localStorage.setItem(manuallyUnreadStorageKey(), JSON.stringify([...ids])); } catch { /* не критично */ }
+    const row = cachedChatRows.find((r) => r.chat_id === chatId);
+    if (row) row.manuallyUnread = false;
+    if (typeof refreshChatListLocally === "function") refreshChatListLocally();
 }
 
 function toggleChatManuallyUnread(chatId) {

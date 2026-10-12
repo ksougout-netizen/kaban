@@ -36,12 +36,36 @@ function startStories() {
     // ошибке запроса не появлялась вовсе).
     renderStoryNavButton();
     refreshStories();
-    storyRefreshTimer = setInterval(() => { if (!document.hidden) refreshStories(); }, 60000);
+    // Новые истории — по realtime (почти мгновенно); опрос остаётся страховкой на случай,
+    // если таблицы нет в публикации realtime или канал молча оборвался. Раньше опроса
+    // не было вовсе, пока окно скрыто, а в программе «скрыто» — это уже 3 с без фокуса.
+    try { storyRealtimeUnsub = KabanAPI.subscribeToStories(() => scheduleStoriesRefresh()); } catch { /* опрос выручит */ }
+    storyRefreshTimer = setInterval(() => refreshStories(), 30000);
 }
+
+let storyRealtimeUnsub = null;
+let storyRefreshDebounce = null;
+let storyLastRefreshAt = 0;
+
+function scheduleStoriesRefresh(delay = 300) {
+    clearTimeout(storyRefreshDebounce);
+    storyRefreshDebounce = setTimeout(() => refreshStories(), delay);
+}
+
+// Вернулись в окно / появилась сеть — не ждём очередного опроса.
+["focus", "online"].forEach((type) => window.addEventListener(type, () => {
+    if (storyRefreshTimer && Date.now() - storyLastRefreshAt > 2000) scheduleStoriesRefresh(100);
+}));
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && storyRefreshTimer && Date.now() - storyLastRefreshAt > 2000) scheduleStoriesRefresh(100);
+});
 
 function stopStories() {
     clearInterval(storyRefreshTimer);
     storyRefreshTimer = null;
+    clearTimeout(storyRefreshDebounce);
+    try { storyRealtimeUnsub?.(); } catch { /* уже закрыт */ }
+    storyRealtimeUnsub = null;
     storyFeed = null;
     storyGroups = [];
     const bar = document.getElementById("stories-bar");
@@ -52,6 +76,7 @@ function stopStories() {
 async function refreshStories() {
 
     if (!myRealUserId) return;
+    storyLastRefreshAt = Date.now();
 
     let feed;
     try {

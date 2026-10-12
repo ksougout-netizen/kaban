@@ -2456,6 +2456,10 @@ body:not(.chat-selected) .content {
     border-color: var(--accent);
 }
 
+/* Неверная дата рождения и т. п. — красная рамка и текст ошибки вместо подсказки. */
+.auth-field input.invalid, .auth-field input.invalid:focus { border-color: #ef4444; box-shadow: 0 0 0 3px color-mix(in srgb, #ef4444 18%, transparent); }
+.auth-field-hint.error { color: #ef4444; }
+
 .auth-error {
     padding: 10px 12px;
     border-radius: 10px;
@@ -4101,6 +4105,10 @@ body.dark .message-row.sent .message-reply-quote {
     cursor: pointer;
     animation: reply-preview-enter .16s ease-out both;
 }
+
+/* Чат не открыт («Выберите чат») — закреплённого нет, какой бы путь ни закрыл чат
+   (назад, выход из аккаунта, смена сессии). Раньше полоска оставалась внизу окна. */
+body:not(.chat-selected) .pinned-bar { display: none; }
 
 .pinned-bar-icon {
     flex: 0 0 auto;
@@ -6422,6 +6430,39 @@ body.reduce-motion .call-blob { animation: none; }
 .call-control.accept-call svg { fill: currentColor; stroke: none; width: 28px; height: 28px; }
 @keyframes call-accept-wiggle { 0%, 70%, 100% { transform: rotate(0); } 75% { transform: rotate(-14deg); } 80% { transform: rotate(14deg); } 85% { transform: rotate(-10deg); } 90% { transform: rotate(8deg); } }
 body.reduce-motion .call-control.accept-call .call-control-icon, body.reduce-motion .call-control.accept-call .call-control-icon::before { animation: none; }
+
+/* ---- «Куда нажимаешь» в окне звонка ----
+   Кнопка «Принять» всё время покачивается — и эта анимация перебивала эффект
+   нажатия (transform), а под курсором кнопка дёргалась. Теперь под курсором и при
+   нажатии качание замирает; любая кнопка звонка при нажатии заметно вдавливается
+   и светлеет, а от неё расходится кольцо (класс .call-tap ставит скрипт на 450 мс,
+   чтобы отклик был виден и после короткого касания на телефоне). */
+.call-control.accept-call:hover .call-control-icon,
+.call-control.accept-call:focus-visible .call-control-icon,
+.call-control.accept-call:active .call-control-icon,
+.call-control.accept-call.call-tap .call-control-icon { animation: none; }
+.call-control .call-control-icon { position: relative; }
+.call-control:active .call-control-icon,
+.call-control.call-tap .call-control-icon { transform: scale(.86); filter: brightness(1.18); }
+.call-control:active:not([aria-pressed="true"]):not(.end-call):not(.decline-call):not(.accept-call) .call-control-icon { background: rgba(255,255,255,.4); }
+.call-control .call-control-icon::after,
+.call-top-btn::after, .call-mini-btn::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+    border: 2px solid rgba(255,255,255,.85); opacity: 0; transform: scale(1);
+}
+.call-top-btn, .call-mini-btn { position: relative; }
+.call-control.call-tap .call-control-icon::after,
+.call-top-btn.call-tap::after, .call-mini-btn.call-tap::after { animation: call-tap-ring .45s cubic-bezier(.2,.7,.3,1) forwards; }
+@keyframes call-tap-ring { from { opacity: .9; transform: scale(1); } to { opacity: 0; transform: scale(1.55); } }
+.call-mini-btn { transition: background .15s ease, transform .12s ease; }
+.call-mini-btn:active, .call-mini-btn.call-tap { transform: scale(.88); }
+.call-top-btn.call-tap { transform: scale(.9); background: rgba(255,255,255,.34); }
+/* Рамка фокуса с клавиатуры (Tab) — видно, какая кнопка сработает по Enter/Пробелу. */
+.call-control:focus-visible { outline: none; }
+.call-control:focus-visible .call-control-icon,
+.call-top-btn:focus-visible, .call-mini-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(255,255,255,.95), 0 0 0 6px rgba(0,0,0,.25); }
+body.reduce-motion .call-control.call-tap .call-control-icon::after,
+body.reduce-motion .call-top-btn.call-tap::after, body.reduce-motion .call-mini-btn.call-tap::after { animation: none; }
 
 /* видео */
 .call-video-area { position: absolute; inset: 0; z-index: 1; margin: 0; border-radius: 0; background: transparent; aspect-ratio: auto; overflow: hidden; }
@@ -11378,6 +11419,10 @@ body.recording-active .recording-status.video-recording ~ .record-lock-hint { bo
 .chat-avatar, .profile-avatar, .contact-modal-avatar, .contact-group-avatar,
 .new-chat-result-avatar, .info-avatar, .call-avatar { border-radius: 50% !important; }
 .chat-avatar { overflow: hidden; }
+/* Аватар не должен сплющиваться, если рядом длинный текст/бейджи в одной строке
+   (список участников группы, контакты, результаты поиска): фиксируем форму — круг. */
+.new-chat-result-avatar, .chat-avatar, .contact-group-avatar, .story-avatar { flex-shrink: 0 !important; aspect-ratio: 1 / 1; }
+.group-members-card .new-chat-result-avatar { min-width: 40px; max-width: 40px; min-height: 40px; max-height: 40px; }
 .has-initials { color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.12); }
 .avatar-initials { font-weight: 650; letter-spacing: .02em; line-height: 1; user-select: none; }
 .chat-avatar .avatar-initials { font-size: 16px; }

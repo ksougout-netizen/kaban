@@ -1180,6 +1180,10 @@ function backToChats() {
     currentOtherUserId = null;
     currentChatType = "direct";
     currentChatMembersById = new Map();
+    // Полоска закреплённого принадлежит закрытому чату — раньше она оставалась на
+    // экране «Выберите чат» (и уезжала вниз окна).
+    const pinnedBar = document.getElementById("pinned-bar");
+    if (pinnedBar) pinnedBar.hidden = true;
 
     // Перерисовать список из уже загруженного кэша (без похода на сервер) —
     // чтобы превью только что оставленного чата сразу показало черновик,
