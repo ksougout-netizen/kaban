@@ -13896,7 +13896,7 @@ body.reduce-motion .cap-icon svg, body.reduce-motion .cap-cover.ready .cap-icon 
    (размеры можно мерить сразу после открытия); на время анимации закрытия
    delight.js ставит .cv-keep, чтобы окно не опустело посреди затухания.
    Экран звонка не трогаем — в нём идёт видео. */
-:is(#emoji-popover, #attach-menu, [id$="-backdrop"]:not(#call-backdrop)):not(.open):not(.cv-keep):not(.cv-warm) > * { content-visibility: hidden; }
+.cv-sleep:not(.open):not(.cv-keep):not(.cv-warm) > * { content-visibility: hidden; }
 /* прогрев панели эмодзи в простое (delight.js): раскладываем по одному куску за раз */
 #emoji-popover.cv-warm .emoji-grid.cv-cold { content-visibility: hidden; }
 

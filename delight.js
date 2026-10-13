@@ -539,9 +539,15 @@
        остаётся видимым (.cv-keep), иначе оно опустело бы посреди затухания. */
 
     (function keepContentWhileClosing() {
+        // «Спят» (.cv-sleep) только окна, которые открываются классом .open. Часть окон
+        // (фоторедактор, просмотрщик…) показывается атрибутом hidden — у них .open нет
+        // никогда, и правило спрятало бы их содержимое навсегда. Поэтому: проверенный
+        // список сразу, остальные — только после того, как хоть раз открылись через .open.
+        const KNOWN = ["emoji-popover", "attach-menu", "settings-backdrop", "theme-color-backdrop", "info-modal-backdrop", "group-info-backdrop", "contact-modal-backdrop", "profile-screen-backdrop", "voice-settings-backdrop"];
         const watch = (el) => {
             if (!el || el._cvWatched || el.id === "call-backdrop") return;
             el._cvWatched = true;
+            if (KNOWN.includes(el.id) || el.classList.contains("open")) el.classList.add("cv-sleep");
             let wasOpen = el.classList.contains("open");
             let timer = null;
             new MutationObserver(() => {
@@ -549,7 +555,7 @@
                 if (open === wasOpen) return;      // наши же .cv-keep сюда не доходят
                 wasOpen = open;
                 clearTimeout(timer);
-                if (open) { el.classList.remove("cv-keep"); return; }
+                if (open) { el.classList.remove("cv-keep"); el.classList.add("cv-sleep"); return; }
                 el.classList.add("cv-keep");       // колбэк до отрисовки — пустого кадра не будет
                 timer = setTimeout(() => el.classList.remove("cv-keep"), 340);
             }).observe(el, { attributes: true, attributeFilter: ["class"] });
