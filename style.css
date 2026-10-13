@@ -13414,3 +13414,227 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
     color: var(--muted);
     font-size: 13.5px; line-height: 1.45; text-align: center;
 }
+/* ============================================================================
+   «ВАУ»-ЭФФЕКТЫ (wow.js)
+   ========================================================================= */
+
+/* холст частиц: пыль, спойлеры, подарки */
+.wow-particles { position: fixed; inset: 0; z-index: 305; width: 100vw; height: 100vh; pointer-events: none; }
+
+/* 1. сообщение рассыпается слева направо */
+.message-row.wow-dusting { pointer-events: none; }
+.message-row.wow-dusting > :not(.message) { opacity: 0; transition: opacity .3s ease; }
+.message-row.wow-dusting .message {
+    -webkit-mask-image: linear-gradient(90deg, transparent 40%, #000 60%);
+    mask-image: linear-gradient(90deg, transparent 40%, #000 60%);
+    -webkit-mask-size: 250% 100%; mask-size: 250% 100%;
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: 100% 0; mask-position: 100% 0;
+    animation: wow-dissolve .65s linear forwards;
+}
+@keyframes wow-dissolve { to { -webkit-mask-position: 0 0; mask-position: 0 0; } }
+.message-row.wow-collapsing { overflow: hidden; transition: height .22s ease, margin .22s ease; }
+
+/* 2. спойлер — мерцающая «пыль» вместо серой плашки. Текстура случайных точек
+   (--wow-noise-a/b) рисуется в wow.js; цвет точек — цвет текста пузыря. */
+.msg-spoiler:not(.revealed) {
+    color: inherit;
+    -webkit-text-fill-color: transparent;
+    background: currentColor;
+    -webkit-mask-image: var(--wow-noise-a, none), var(--wow-noise-b, none);
+    mask-image: var(--wow-noise-a, none), var(--wow-noise-b, none);
+    -webkit-mask-size: 90px 30px, 70px 26px; mask-size: 90px 30px, 70px 26px;
+    -webkit-mask-position: 0 0, 0 0; mask-position: 0 0, 0 0;
+    animation: wow-spoiler 5s linear infinite;
+}
+.msg-spoiler:not(.revealed) * { color: inherit; -webkit-text-fill-color: transparent; }
+.msg-spoiler:not(.revealed) img, .msg-spoiler:not(.revealed) .anim-emoji, .msg-spoiler:not(.revealed) .anim-glyph { opacity: 0; }
+@keyframes wow-spoiler { to { -webkit-mask-position: 90px -30px, -70px 26px; mask-position: 90px -30px, -70px 26px; } }
+.msg-spoiler.revealed { animation: wow-spoiler-in .45s ease-out; }
+@keyframes wow-spoiler-in { from { filter: blur(5px); opacity: .25; } }
+body.reduce-motion .msg-spoiler { animation: none; }
+/* 3. реакция на весь экран */
+.wow-rx { position: fixed; inset: 0; z-index: 311; pointer-events: none; overflow: hidden; }
+.wow-rx::before { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, rgba(0,0,0,.16), transparent 62%); animation: wow-rx-dim 1.8s ease both; }
+@keyframes wow-rx-dim { 0%, 100% { opacity: 0; } 25%, 70% { opacity: 1; } }
+.wow-rx-main {
+    position: absolute; left: 50%; top: 50%; width: 1em; height: 1em; margin: -.5em 0 0 -.5em; line-height: 1;
+    display: grid; place-items: center;
+    filter: drop-shadow(0 16px 32px rgba(0,0,0,.32));
+    animation: wow-rx-main 1.75s cubic-bezier(.2,.8,.25,1) both;
+}
+.wow-rx-main .anim-emoji { width: 100%; height: 100%; vertical-align: top; }
+.wow-rx-main .anim-glyph { font-size: 1em; }
+@keyframes wow-rx-main {
+    0%   { opacity: 0; transform: translate(var(--sx), var(--sy)) scale(.14); }
+    12%  { opacity: 1; }
+    32%  { transform: translate(0, 0) scale(1.14); }
+    44%  { transform: translate(0, 0) scale(.93); }
+    56%  { transform: translate(0, 0) scale(1.04); }
+    78%  { opacity: 1; transform: translate(0, 0) scale(1); }
+    100% { opacity: 0; transform: translate(0, -46px) scale(.72); }
+}
+.wow-rx-ring { position: absolute; left: 50%; top: 50%; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%; border: 3px solid color-mix(in srgb, var(--accent, #0a7cff) 55%, #fff); box-shadow: 0 0 24px color-mix(in srgb, var(--accent, #0a7cff) 45%, transparent); opacity: 0; animation: wow-rx-ring .95s cubic-bezier(.1,.6,.3,1) .5s both; }
+@keyframes wow-rx-ring { 0% { opacity: .95; transform: scale(.5); } 100% { opacity: 0; transform: scale(9); } }
+.wow-rx-fly { position: absolute; left: 50%; top: 50%; width: 1em; height: 1em; margin: -.5em 0 0 -.5em; line-height: 1; opacity: 0; animation: wow-rx-fly 1.2s cubic-bezier(.12,.7,.3,1) var(--d) both; }
+@keyframes wow-rx-fly {
+    0%   { opacity: 0; transform: translate(0, 0) scale(.3) rotate(0deg); }
+    10%  { opacity: 1; }
+    70%  { opacity: 1; }
+    100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(1.1) rotate(var(--r)); }
+}
+body.reduce-motion .wow-rx { display: none; }
+
+/* 4. подарок: коробка */
+.wow-box { --g1: #ff6b6b; --g2: #d63447; --rb: #ffd36b; position: relative; display: block; width: 92px; height: 82px; flex: none; }
+.wow-box-body { position: absolute; left: 9px; right: 9px; bottom: 0; height: 52px; border-radius: 7px; background: linear-gradient(160deg, var(--g1), var(--g2)); box-shadow: inset 0 -6px 0 rgba(0,0,0,.12), 0 8px 18px rgba(0,0,0,.18); }
+.wow-box-body::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 13px; margin-left: -6.5px; background: var(--rb); box-shadow: inset 2px 0 0 rgba(255,255,255,.35); }
+.wow-box-lid { position: absolute; left: 3px; right: 3px; top: 16px; height: 20px; border-radius: 6px; background: linear-gradient(160deg, color-mix(in srgb, var(--g1) 80%, #fff), var(--g1)); box-shadow: 0 3px 6px rgba(0,0,0,.18); }
+.wow-box-lid::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 15px; margin-left: -7.5px; background: var(--rb); }
+.wow-box-bow { position: absolute; left: 50%; top: 0; width: 0; height: 0; }
+.wow-box-bow::before, .wow-box-bow::after { content: ""; position: absolute; top: 1px; width: 22px; height: 15px; border: 5px solid var(--rb); border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; box-sizing: border-box; }
+.wow-box-bow::before { right: -1px; transform: rotate(-24deg); transform-origin: 100% 100%; }
+.wow-box-bow::after { left: -1px; transform: rotate(24deg); transform-origin: 0 100%; }
+
+/* подарок в ленте */
+.message-row.wow-gift-wrapped .message > :not(.wow-gift-cover) { display: none !important; }
+.message-row.wow-gift-wrapped .message { min-width: 200px; padding: 0 !important; overflow: hidden; }
+.wow-gift-cover {
+    display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; padding: 18px 22px 14px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.wow-gift-cover .wow-box { margin-bottom: 10px; animation: wow-gift-wiggle 3.4s ease-in-out 1s infinite; transform-origin: 50% 100%; }
+.wow-gift-cover b { font-size: 15px; font-weight: 650; }
+.wow-gift-cover em { font-style: normal; font-size: 12.5px; opacity: .65; }
+.wow-gift-cover:hover .wow-box { animation-duration: 1.1s; animation-delay: 0s; }
+@keyframes wow-gift-wiggle {
+    0%, 70%, 100% { transform: rotate(0) scale(1); }
+    74% { transform: rotate(-7deg) scale(1.04); }
+    79% { transform: rotate(6deg) scale(1.04); }
+    84% { transform: rotate(-4deg); }
+    89% { transform: rotate(2deg); }
+}
+.wow-gift-cover.opening { pointer-events: none; }
+.wow-gift-cover.opening .wow-box { animation: none; }
+.wow-gift-cover.opening .wow-box-lid, .wow-gift-cover.opening .wow-box-bow { animation: wow-lid-off .55s cubic-bezier(.3,.7,.4,1) forwards; }
+.wow-gift-cover.opening .wow-box-body { animation: wow-body-drop .6s ease .15s forwards; }
+.wow-gift-cover.opening b, .wow-gift-cover.opening em { transition: opacity .2s ease; opacity: 0; }
+@keyframes wow-lid-off { 30% { transform: translateY(-14px) rotate(-6deg); } 100% { transform: translate(28px, -90px) rotate(38deg); opacity: 0; } }
+@keyframes wow-body-drop { to { transform: scale(.6) translateY(16px); opacity: 0; } }
+.message-row.wow-gift-revealed .message > * { animation: wow-gift-in .55s cubic-bezier(.2,.8,.3,1) both; }
+@keyframes wow-gift-in { from { opacity: 0; transform: scale(.85); filter: blur(4px); } }
+.wow-gift-tag { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 650; opacity: .8; }
+body.reduce-motion .wow-gift-cover .wow-box { animation: none; }
+
+/* окно «Подарок» */
+.wow-gift-backdrop { position: fixed; inset: 0; z-index: 260; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.42); opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility .2s; }
+.wow-gift-backdrop.open { opacity: 1; visibility: visible; }
+.wow-gift-dialog { width: min(380px, 100%); padding: 22px 22px 18px; border-radius: 18px; background: var(--surface); color: var(--text); box-shadow: 0 24px 60px rgba(0,0,0,.3); text-align: center; transform: translateY(12px) scale(.97); transition: transform .25s cubic-bezier(.2,.8,.3,1); }
+.wow-gift-backdrop.open .wow-gift-dialog { transform: none; }
+.wow-gift-stage { display: grid; place-items: center; height: 104px; }
+.wow-gift-stage .wow-box { animation: wow-gift-float 2.6s ease-in-out infinite; }
+@keyframes wow-gift-float { 50% { transform: translateY(-6px) rotate(-2deg); } }
+.wow-gift-dialog h3 { margin: 6px 0 4px; font-size: 19px; font-weight: 650; }
+.wow-gift-hint { margin: 0 0 14px; font-size: 13.5px; color: var(--muted); line-height: 1.4; }
+.wow-gift-dialog textarea { width: 100%; box-sizing: border-box; min-height: 78px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface2); color: inherit; font: inherit; font-size: 15px; resize: vertical; outline: none; }
+.wow-gift-dialog textarea:focus { border-color: var(--accent); }
+.wow-gift-dialog textarea.shake { animation: wow-shake .35s ease; }
+@keyframes wow-shake { 25% { transform: translateX(-6px); } 50% { transform: translateX(5px); } 75% { transform: translateX(-3px); } }
+.wow-gift-colors { display: flex; justify-content: center; gap: 12px; margin: 14px 0 18px; }
+.wow-gift-color { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: linear-gradient(160deg, var(--g1), var(--g2)); cursor: pointer; box-shadow: 0 0 0 2px var(--surface), 0 0 0 2px transparent; transition: box-shadow .15s ease, transform .15s ease; }
+.wow-gift-color:hover { transform: scale(1.08); }
+.wow-gift-color.active { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--g1); }
+.wow-gift-actions { display: flex; gap: 10px; }
+.wow-gift-actions button { flex: 1; height: 42px; border: 0; border-radius: 12px; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+.wow-gift-cancel { background: var(--surface2); color: var(--text); }
+.wow-gift-send { background: var(--accent); color: #fff; }
+.attach-menu-icon.gift { color: #e0574f; }
+
+/* 5. сезонная атмосфера: над обоями, под сообщениями */
+.chat-area > .wow-season { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; pointer-events: none; }
+.chat-area > .wow-season[hidden] { display: none; }
+
+/* 6. экран звонка дышит голосом собеседника */
+.call-aura {
+    position: absolute; inset: -13px; border-radius: 50%; opacity: 0; pointer-events: none;
+    background: conic-gradient(from 0deg, rgba(255,255,255,0), rgba(255,255,255,.7) 12%, rgba(255,255,255,0) 30%, rgba(255,255,255,.45) 55%, rgba(255,255,255,0) 72%, rgba(255,255,255,.6) 88%, rgba(255,255,255,0));
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+    transition: opacity .3s ease, scale .12s linear;
+}
+.call-dialog[data-phase="connected"] .call-aura { opacity: calc(.28 + var(--level) * .72); scale: calc(1 + var(--level) * .1); animation: call-aura-spin 7s linear infinite; }
+@keyframes call-aura-spin { to { rotate: 360deg; } }
+.call-dialog[data-phase="connected"] .call-avatar { scale: calc(1 + var(--level) * .05); transition: box-shadow .12s linear, scale .12s linear; }
+.call-dialog[data-phase="connected"] .call-wave { animation: none; transition: transform .14s linear, opacity .2s linear; }
+.call-dialog[data-phase="connected"] .call-wave.w1 { opacity: calc(var(--level) * .5); transform: scale(calc(1 + var(--level) * .32)); }
+.call-dialog[data-phase="connected"] .call-wave.w2 { opacity: calc(var(--level) * .32); transform: scale(calc(1 + var(--level) * .62)); }
+.call-dialog[data-phase="connected"] .call-wave.w3 { opacity: calc(var(--level) * .18); transform: scale(calc(1 + var(--level) * .95)); }
+.call-dialog[data-phase="connected"] .call-blob { scale: calc(1 + var(--vl, 0) * .22); opacity: calc(.5 + var(--vl, 0) * .35); transition: scale .25s ease-out, opacity .25s ease-out; }
+.call-backdrop:not(.open) .call-aura,
+body.reduce-motion .call-aura { animation: none; }
+
+/* ============================================================================
+   СТИКЕР ИЗ ФОТО (sticker-maker.js) — тёмное окно, как фоторедактор
+   ========================================================================= */
+.sm-backdrop { position: fixed; inset: 0; z-index: 270; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,.55); opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility .2s; }
+.sm-backdrop.open { opacity: 1; visibility: visible; }
+.sm-window { --sm-accent: var(--accent, #0a7cff); display: flex; flex-direction: column; width: min(560px, 100%); max-height: calc(100vh - 32px); border-radius: 18px; background: #16181d; color: #f2f4f7; box-shadow: 0 30px 80px rgba(0,0,0,.45); overflow: hidden; }
+.sm-head { display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px; }
+.sm-head b { flex: 1; text-align: center; font-size: 16px; font-weight: 650; }
+.sm-icon-btn { display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: inherit; cursor: pointer; }
+.sm-icon-btn:hover { background: rgba(255,255,255,.08); }
+.sm-icon-btn svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sm-stage { position: relative; display: grid; place-items: center; min-height: 220px; margin: 0 14px; border-radius: 12px; overflow: hidden; background: #0d0e11; }
+.sm-stage canvas { display: block; max-width: 100%; max-height: min(52vh, 420px); cursor: crosshair; }
+.sm-canvas-wrap { position: relative; line-height: 0; }
+.sm-tap { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px color-mix(in srgb, var(--sm-accent) 70%, transparent), 0 2px 8px rgba(0,0,0,.5); pointer-events: none; transform-origin: center; }
+.sm-tap.busy { animation: sm-pulse 1s ease-in-out infinite; }
+@keyframes sm-pulse { 50% { transform: scale(1.5); box-shadow: 0 0 0 10px color-mix(in srgb, var(--sm-accent) 20%, transparent); } }
+/* Сам холст масштабируется, поэтому точку позиционируем внутри обёртки того же размера. */
+.sm-stage { isolation: isolate; }
+.sm-status { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 7px 13px; border-radius: 999px; background: rgba(0,0,0,.62); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.sm-status[hidden] { display: none; }
+.sm-status[data-kind="error"] { background: rgba(170,40,40,.8); }
+.sm-bottom { display: flex; gap: 14px; align-items: center; padding: 14px; }
+.sm-preview-wrap { flex: none; width: 112px; height: 112px; border-radius: 12px; background-color: #22252c; background-image: linear-gradient(45deg, #2b2f37 25%, transparent 25%, transparent 75%, #2b2f37 75%), linear-gradient(45deg, #2b2f37 25%, transparent 25%, transparent 75%, #2b2f37 75%); background-size: 16px 16px; background-position: 0 0, 8px 8px; }
+.sm-preview { width: 100%; height: 100%; display: block; }
+.sm-preview-wrap.empty .sm-preview { opacity: 0; }
+.sm-controls { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.sm-seg { display: flex; padding: 3px; border-radius: 10px; background: rgba(255,255,255,.07); }
+.sm-seg button { flex: 1; height: 32px; border: 0; border-radius: 8px; background: transparent; color: rgba(255,255,255,.75); font: inherit; font-size: 13px; cursor: pointer; }
+.sm-seg button.active { background: rgba(255,255,255,.16); color: #fff; font-weight: 600; }
+.sm-save { display: flex; align-items: center; gap: 8px; font-size: 13px; color: rgba(255,255,255,.8); cursor: pointer; }
+.sm-save input { accent-color: var(--sm-accent); width: 16px; height: 16px; }
+.sm-send { height: 42px; border: 0; border-radius: 12px; background: var(--sm-accent); color: #fff; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+.sm-send:disabled { opacity: .45; cursor: default; }
+@media (max-width: 520px) {
+    .sm-backdrop { padding: 0; }
+    .sm-window { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+    .sm-stage { flex: 1; }
+    .sm-preview-wrap { width: 92px; height: 92px; }
+}
+.attach-menu-icon.sticker { color: #e9a23b; }
+
+/* «Мои стикеры» в панели */
+.sticker-pack-btn.sm-pack-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
+.sm-make-tile { display: flex !important; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 1.5px dashed var(--border) !important; border-radius: 14px; color: var(--accent); }
+.sm-make-tile span { font-size: 26px; line-height: 1; }
+.sm-make-tile em { font-style: normal; font-size: 11px; color: var(--muted); }
+.sm-my-sticker img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
+.sm-empty { grid-column: 1 / -1; padding: 10px 6px; font-size: 12.5px; color: var(--muted); text-align: center; line-height: 1.4; }
+
+/* фото-стикер в ленте: без пузыря */
+.message.sticker-image { background: none !important; box-shadow: none !important; overflow: visible !important; padding: 0 !important; font-size: inherit; }
+.message.sticker-image > .message-image { width: min(180px, 44vw) !important; height: auto !important; max-height: none !important; aspect-ratio: 1 / 1 !important; object-fit: contain !important; border-radius: 0 !important; background: none !important; }
+.message.sticker-image > .message-time { position: static !important; }
+
+/* ============================================================================
+   РИСУНОК ПОВЕРХ ТРАНСЛЯЦИИ (screen-draw.js)
+   ========================================================================= */
+.sdraw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.vstage-tile.sdraw-on .sdraw-canvas { pointer-events: auto; cursor: crosshair; touch-action: none; }
+.vstage-tile.sdraw-on { outline-color: var(--accent, #0a7cff); }
+.sdraw-pen { position: absolute; right: 40px; top: 6px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: rgba(0,0,0,.5); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s ease, background .15s ease; }
+.sdraw-pen svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.vstage-tile:hover .sdraw-pen, .vstage-tile.sdraw-on .sdraw-pen { opacity: 1; }
+.vstage-tile.sdraw-on .sdraw-pen { background: var(--accent, #0a7cff); }
+@media (hover: none) { .sdraw-pen { opacity: .85; } }

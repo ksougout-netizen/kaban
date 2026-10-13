@@ -182,6 +182,7 @@ const appSettings = {
     messageEffects: true,
     autoEffects: true,
     liveWallpapers: true,
+    seasonalAtmosphere: true,
     linkPreviews: true
 };
 
