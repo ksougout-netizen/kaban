@@ -116,8 +116,8 @@ async function listenEnsureYt(videoId, startSeconds, autoplay) {
             playerVars: { controls: 0, rel: 0, playsinline: 1, modestbranding: 1, disablekb: 1, start: Math.floor(startSeconds || 0), autoplay: autoplay ? 1 : 0 },
             events: {
                 onReady: () => resolve(),
-                onStateChange: (event) => { if (event.data === 0) listenOnTrackEnded(); },
-                onError: () => toast("Это видео нельзя воспроизвести во встроенном плеере")
+                onStateChange: (event) => { if (event.data === 0) listenOnTrackEnded(); if (event.data === 1) listenClearIssue(); },
+                onError: (event) => listenOnYtError(event?.data)
             }
         });
     });
@@ -195,9 +195,17 @@ async function listenReconcile(force) {
         document.getElementById("listen-cur").textContent = formatListenTime(target);
         document.getElementById("listen-dur").textContent = "–:––";
         document.getElementById("listen-seek").value = "0";
+        listenClearIssue();
+        room.waitSince = performance.now();
         if (track.kind === "youtube") {
             listenAudio.pause();
-            await listenEnsureYt(track.src, target, room.state.playing);
+            try {
+                await listenEnsureYt(track.src, target, room.state.playing);
+            } catch {
+                listenShowIssue(track, "YouTube не загружается — проверьте интернет (в некоторых сетях YouTube замедлен или заблокирован)");
+                listenRenderUi();
+                return;
+            }
         } else {
             listenYt?.pauseVideo?.();
             document.getElementById("listen-yt-wrap").hidden = true;
@@ -215,6 +223,69 @@ async function listenReconcile(force) {
     listenRenderUi();
 
 }
+
+/* ---- когда трек не играет: понятная причина вместо тишины ------------------------------------
+   Раньше при ошибке YouTube мелькал короткий тост, а плеер просто молчал — казалось, что
+   «не играет вообще». Теперь причина видна прямо в плеере, есть кнопки «Открыть на YouTube»
+   и «Следующий», а запрещённое к встраиванию видео само пропускается. Если YouTube долго
+   не отвечает (бывает при замедлении у провайдера), плеер тоже об этом скажет. */
+
+const LISTEN_YT_ERRORS = {
+    2: "Неверная ссылка на видео",
+    5: "Видео не поддерживается встроенным плеером",
+    100: "Видео удалено или скрыто",
+    101: "Владелец видео запретил воспроизводить его в других приложениях",
+    150: "Владелец видео запретил воспроизводить его в других приложениях",
+    152: "YouTube не дал воспроизвести видео во встроенном плеере",
+    153: "YouTube не дал воспроизвести видео во встроенном плеере"
+};
+
+function listenShowIssue(track, text, { skip = false } = {}) {
+    const room = listenRoom;
+    if (!room || !track) return;
+    room.issue = { trackId: track.id, text, failed: skip };
+    const wrap = document.getElementById("listen-yt-wrap");
+    let box = document.getElementById("listen-issue");
+    if (!box) {
+        box = document.createElement("div");
+        box.id = "listen-issue";
+        box.className = "listen-issue";
+        (wrap?.parentElement || document.getElementById("listen-panel"))?.insertBefore(box, wrap ? wrap.nextSibling : null);
+    }
+    const s = room.state;
+    const hasNext = s.index + 1 < s.queue.length;
+    const yt = track.kind === "youtube" ? `https://www.youtube.com/watch?v=${encodeURIComponent(track.src)}` : null;
+    box.innerHTML = `<span class="listen-issue-text">${escapeHTML(text)}${skip && hasNext ? " — включаю следующий трек" : ""}</span>
+        <span class="listen-issue-actions">
+            ${yt ? `<a class="listen-issue-btn" href="${yt}" target="_blank" rel="noopener">Открыть на YouTube</a>` : ""}
+            ${hasNext && !skip ? `<button type="button" class="listen-issue-btn" onclick="listenNext()">Следующий</button>` : ""}
+        </span>`;
+    box.hidden = false;
+    if (skip && hasNext) {
+        const index = s.index;
+        setTimeout(() => { if (listenRoom === room && room.state.index === index) listenOnTrackEnded(); }, 2500);
+    }
+}
+
+function listenClearIssue() {
+    if (listenRoom) listenRoom.issue = null;
+    const box = document.getElementById("listen-issue");
+    if (box) box.hidden = true;
+}
+
+function listenOnYtError(code) {
+    const track = listenCurrentTrack();
+    if (!track || track.kind !== "youtube") return;
+    const text = LISTEN_YT_ERRORS[code] || `YouTube не смог воспроизвести видео (код ${code ?? "?"})`;
+    listenShowIssue(track, text, { skip: code === 100 || code === 101 || code === 150 || code === 2 });
+}
+
+listenAudio.addEventListener("error", () => {
+    const track = listenCurrentTrack();
+    if (!track || track.kind === "youtube" || !listenAudio.src) return;
+    listenShowIssue(track, "Не удалось загрузить этот трек (файл недоступен или формат не поддерживается)", { skip: true });
+});
+listenAudio.addEventListener("playing", () => listenClearIssue());
 
 function listenOnTrackEnded() {
     const room = listenRoom;
@@ -500,6 +571,13 @@ async function listenAddTrack(track) {
 
     toast(`Добавлено в очередь: ${enriched.title}`);
 
+    // Текущий трек не смог заиграть — сразу переходим к только что добавленному.
+    const room = listenRoom;
+    const current = listenCurrentTrack();
+    if (room?.issue?.failed && current && room.issue.trackId === current.id && room.state.index + 1 < room.state.queue.length) {
+        listenOnTrackEnded();
+    }
+
 }
 
 async function addListenTrackFromInput() {
@@ -698,6 +776,18 @@ function listenTick() {
         }
     } else if (listenAudio.playbackRate !== 1) {
         listenAudio.playbackRate = 1;
+    }
+
+    // Сторож: трек должен играть, но за 12 с так и не заиграл — говорим об этом в плеере.
+    if (listenRoom.state.playing && listenRoom.loadedTrackId === track.id && !listenEngineReady(track)) {
+        if (!listenRoom.waitSince) listenRoom.waitSince = performance.now();
+        if (!listenRoom.issue && performance.now() - listenRoom.waitSince > 12000) {
+            listenShowIssue(track, track.kind === "youtube"
+                ? "YouTube не отвечает — видео не загружается. Возможно, YouTube замедлен в вашей сети: попробуйте позже, через VPN или пришлите трек файлом"
+                : "Трек долго не загружается — проверьте интернет");
+        }
+    } else {
+        listenRoom.waitSince = 0;
     }
 
     if (!listenSeeking) {

@@ -13912,3 +13912,11 @@ body.reduce-motion .cap-icon svg, body.reduce-motion .cap-cover.ready .cap-icon 
 .ix-flyer { position: absolute; line-height: 1; will-change: transform, opacity; }
 .ix-ring { position: absolute; border: 3px solid; border-radius: 50%; will-change: transform, opacity; }
 body.reduce-motion .ix-layer { display: none; }
+
+/* «Слушать вместе»: причина, почему трек не играет (listen.js → listenShowIssue) */
+.listen-issue { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, #e5484d 14%, transparent); border: 1px solid color-mix(in srgb, #e5484d 30%, transparent); font-size: 12.5px; line-height: 1.4; }
+.listen-issue[hidden] { display: none; }
+.listen-issue-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.listen-issue-actions:empty { display: none; }
+.listen-issue-btn { display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; text-decoration: none; cursor: pointer; }
+.listen-issue-btn:hover { background: color-mix(in srgb, var(--text) 16%, transparent); }
