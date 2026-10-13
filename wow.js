@@ -498,151 +498,13 @@
         }).observe(messagesEl, { childList: true, subtree: true });
     }
 
-    /* ---- 5. СЕЗОННАЯ АТМОСФЕРА ------------------------------------------------------- */
+    /* ---- 5. АТМОСФЕРА В ЧАТЕ — сам движок в atmosphere.js ------------------------------ */
 
     if (appSettings.seasonalAtmosphere === undefined) appSettings.seasonalAtmosphere = true;
 
-    function seasonFor(date) {
-        let forced = null;
-        try { forced = new URLSearchParams(location.search).get("season") || localStorage.getItem("kaban-season-force"); } catch { /* ок */ }
-        if (forced === "snow" || forced === "leaves" || forced === "petals") return forced;
-        if (forced === "off") return null;
-        const m = date.getMonth(), d = date.getDate();
-        if (m === 11 || (m === 0 && d <= 14)) return "snow";
-        if ((m === 8 && d >= 15) || m === 9 || m === 10) return "leaves";
-        if (m >= 2 && m <= 4) return "petals";
-        return null;
-    }
-
-    const S = { canvas: null, ctx: null, kind: null, items: [], raf: 0, last: 0, w: 0, h: 0, dpr: 1, dark: false };
-    const LEAF_COLORS = ["#e8833a", "#d9534f", "#f2b134", "#c0662b", "#e5a03c", "#b84a2a"];
-    const PETAL_COLORS = ["#ffb7c9", "#ffc8d6", "#f7a1b8", "#ffd9e3", "#fbc4e2"];
-
-    function chatArea() { return document.querySelector(".chat-area"); }
-
-    function seasonActive() {
-        const area = chatArea();
-        return !!(S.kind && appSettings.seasonalAtmosphere !== false && !appSettings.reduceMotion && !document.hidden && area && area.clientWidth > 0 && area.clientHeight > 0);
-    }
-
-    function seasonItem(fresh) {
-        const k = S.kind;
-        const base = { x: rnd(0, S.w), y: fresh ? rnd(-S.h * 0.15, S.h) : rnd(-60, -15), phase: rnd(0, 6.28) };
-        if (k === "snow") return { ...base, r: rnd(1, 3.2), vy: rnd(16, 42), sway: rnd(8, 26), freq: rnd(0.4, 1.1), a: rnd(0.45, 0.95) };
-        const leaf = k === "leaves";
-        return {
-            ...base, size: leaf ? rnd(7, 12) : rnd(4.5, 7.5), vy: leaf ? rnd(20, 38) : rnd(16, 30), sway: leaf ? rnd(26, 52) : rnd(18, 38),
-            freq: rnd(0.3, 0.7), rot: rnd(0, 6.28), vr: rnd(-1.4, 1.4), flip: rnd(0, 6.28), vf: rnd(1.2, 2.6),
-            color: (leaf ? LEAF_COLORS : PETAL_COLORS)[(Math.random() * (leaf ? LEAF_COLORS : PETAL_COLORS).length) | 0], a: leaf ? rnd(0.7, 0.9) : rnd(0.7, 0.95)
-        };
-    }
-
-    function seasonCount() {
-        const area = S.w * S.h;
-        if (S.kind === "snow") return Math.min(90, Math.round(area / 9000));
-        if (S.kind === "leaves") return Math.min(16, Math.max(5, Math.round(area / 48000)));
-        return Math.min(22, Math.max(6, Math.round(area / 36000)));
-    }
-
-    function ensureSeasonCanvas() {
-        const area = chatArea();
-        if (!area) return false;
-        if (!S.canvas) {
-            S.canvas = document.createElement("canvas");
-            S.canvas.className = "wow-season";
-            S.canvas.setAttribute("aria-hidden", "true");
-            S.ctx = S.canvas.getContext("2d");
-        }
-        // Над обоями, но под сообщениями: сразу после слоя обоев.
-        const wallpaper = area.querySelector(":scope > .chat-wallpaper-layer");
-        if (wallpaper) { if (wallpaper.nextSibling !== S.canvas) wallpaper.after(S.canvas); }
-        else if (S.canvas.parentNode !== area) area.prepend(S.canvas);
-        const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-        const w = area.clientWidth, h = area.clientHeight;
-        if (w !== S.w || h !== S.h || dpr !== S.dpr) {
-            S.w = w; S.h = h; S.dpr = dpr;
-            S.canvas.width = Math.round(w * dpr);
-            S.canvas.height = Math.round(h * dpr);
-        }
-        return true;
-    }
-
     function refreshSeason() {
-        S.kind = seasonFor(new Date());
-        if (!seasonActive() || !ensureSeasonCanvas()) { stopSeason(); return; }
-        S.dark = document.body.classList.contains("dark");
-        const need = seasonCount();
-        if (S.items.length > need) S.items.length = need;
-        while (S.items.length < need) S.items.push(seasonItem(true));
-        S.canvas.hidden = false;
-        if (!S.raf) { S.last = performance.now(); S.raf = requestAnimationFrame(seasonTick); }
+        if (window.KabanAtmosphere) window.KabanAtmosphere.refresh();
     }
-
-    function stopSeason() {
-        if (S.raf) cancelAnimationFrame(S.raf);
-        S.raf = 0;
-        if (S.canvas) { S.canvas.hidden = true; S.ctx.clearRect(0, 0, S.canvas.width, S.canvas.height); }
-    }
-
-    function drawLeaf(ctx, it) {
-        const s = it.size;
-        ctx.save();
-        ctx.translate(it.x, it.y);
-        ctx.rotate(it.rot);
-        ctx.scale(Math.cos(it.flip) * 0.8 + 0.2, 1);
-        ctx.globalAlpha = it.a;
-        ctx.fillStyle = it.color;
-        ctx.beginPath();
-        if (S.kind === "leaves") {
-            ctx.moveTo(0, -s);
-            ctx.quadraticCurveTo(s * 0.95, -s * 0.25, 0, s);
-            ctx.quadraticCurveTo(-s * 0.95, -s * 0.25, 0, -s);
-            ctx.fill();
-            ctx.globalAlpha = it.a * 0.5;
-            ctx.strokeStyle = "rgba(90,40,10,.55)";
-            ctx.lineWidth = 0.8;
-            ctx.beginPath();
-            ctx.moveTo(0, -s * 0.85);
-            ctx.lineTo(0, s * 1.25);
-            ctx.stroke();
-        } else {
-            ctx.ellipse(0, 0, s * 0.62, s, 0, 0, 6.2832);
-            ctx.fill();
-        }
-        ctx.restore();
-    }
-
-    function seasonTick(now) {
-        S.raf = requestAnimationFrame(seasonTick);
-        if (now - S.last < 30) return;       // ~30 кадров/с — глазу хватает, батарее легче
-        const dt = Math.min(0.08, (now - S.last) / 1000);
-        S.last = now;
-        const ctx = S.ctx;
-        ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
-        ctx.clearRect(0, 0, S.w, S.h);
-        const t = now / 1000;
-        if (S.kind === "snow") ctx.fillStyle = S.dark ? "#ffffff" : "#a9bfdc";
-        for (const it of S.items) {
-            it.y += it.vy * dt;
-            const x = it.x + Math.sin(t * it.freq + it.phase) * it.sway;
-            if (it.y > S.h + 20) Object.assign(it, seasonItem(false));
-            if (S.kind === "snow") {
-                ctx.globalAlpha = it.a;
-                ctx.beginPath();
-                ctx.arc(x, it.y, it.r, 0, 6.2832);
-                ctx.fill();
-            } else {
-                it.rot += it.vr * dt;
-                it.flip += it.vf * dt;
-                drawLeaf(ctx, { ...it, x });
-            }
-        }
-        ctx.globalAlpha = 1;
-    }
-
-    document.addEventListener("visibilitychange", refreshSeason);
-    window.addEventListener("resize", () => { clearTimeout(S.resizeTimer); S.resizeTimer = setTimeout(refreshSeason, 150); });
-    if (window.ResizeObserver && chatArea()) new ResizeObserver(() => { clearTimeout(S.resizeTimer); S.resizeTimer = setTimeout(refreshSeason, 150); }).observe(chatArea());
 
     if (typeof applySettings === "function") {
         const originalApply = applySettings;
@@ -652,7 +514,6 @@
             return result;
         };
     }
-
     /* ---- конфетти в день рождения -------------------------------------------------- */
 
     function isBirthdayToday(iso) {
@@ -712,6 +573,33 @@
         };
     }
 
+    /* ---- 5б. ГЛЯНЕЦ ПАНЕЛИ ЧАТОВ: слой бликов и блик за курсором ----------------------- */
+
+    (function sidebarGloss() {
+        const sidebar = document.querySelector(".sidebar");
+        if (!sidebar || sidebar.querySelector(".sidebar-gloss")) return;
+        const gloss = document.createElement("div");
+        gloss.className = "sidebar-gloss";
+        gloss.setAttribute("aria-hidden", "true");
+        gloss.innerHTML = `<span class="sidebar-gloss-spot"></span>`;
+        sidebar.prepend(gloss);
+        let frame = 0, x = 0, y = 0;
+        sidebar.addEventListener("pointermove", (event) => {
+            if (event.pointerType !== "mouse" || !document.body.classList.contains("gloss-on")) return;
+            const r = sidebar.getBoundingClientRect();
+            x = event.clientX - r.left;
+            y = event.clientY - r.top;
+            if (frame) return;
+            frame = requestAnimationFrame(() => {
+                frame = 0;
+                gloss.style.setProperty("--gx", x + "px");
+                gloss.style.setProperty("--gy", y + "px");
+                gloss.classList.add("hot");
+            });
+        }, { passive: true });
+        sidebar.addEventListener("pointerleave", () => gloss.classList.remove("hot"));
+    })();
+
     /* ---- 6. ЭКРАН ЗВОНКА ДЫШИТ ГОЛОСОМ ------------------------------------------------ */
 
     (function callScreen() {
@@ -730,9 +618,7 @@
         screenBurst,
         particles: addParticles,
         particle,
-        refreshSeason,
-        seasonFor,
-        _S: S
+        refreshSeason
     };
 
     refreshSeason();

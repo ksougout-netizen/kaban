@@ -1,10 +1,14 @@
 {
- "version": "20261007-143",
+ "version": "20261007-145",
  "minShell": "1.0.0",
  "files": {
   "apple-touch-icon.png": {
    "sha256": "6876b2d50ad5444ebbb360b70601925654c2880eb46d36eb7f37e7761ef679e2",
    "size": 917
+  },
+  "atmosphere.js": {
+   "sha256": "49558c255ed35491e3aafa02531c196f43400932c39784c01c1acceb6c1ca0c6",
+   "size": 46056
   },
   "avatar-cropper.js": {
    "sha256": "86cc9da853499c579d29bcdf023739a2fb6eb78adfbf554fc42b9e0b2dccdaab",
@@ -55,8 +59,8 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "5100ac922701b8720731fcb0e428a6528ba5e4901a6de97c749d7c1802f00b1b",
-   "size": 242782
+   "sha256": "847bdb4f87aa0065084781f53c3dee6b8e473cd80fc0aee0ca1bde1267feb8eb",
+   "size": 244832
   },
   "listen.js": {
    "sha256": "dd9be921b750b3502a91b37f3c52683f13c018378282e66b05655c5545b2f0d3",
@@ -103,8 +107,8 @@
    "size": 252011
   },
   "script-core.js": {
-   "sha256": "b6cc66799d9bc44caaa49a0d8399d0bb53224f143788e8b9a2a123403639e9e9",
-   "size": 377556
+   "sha256": "e7cc23cf2f04da48aed3f4e2939c48a5a2359b6882c1829dd7961fe188705858",
+   "size": 378120
   },
   "script-messages.js": {
    "sha256": "75b14ed0ef5a670509a42c1212ac1d1f10e6461e9e32d263d81c285867c08810",
@@ -151,8 +155,8 @@
    "size": 23113
   },
   "style.css": {
-   "sha256": "2301b8bad7cfce9bb581df6d97707fc95894866c1e4858aa62b949662ea74666",
-   "size": 468736
+   "sha256": "9ef8c3fb1377aec11b71ddef7eb85656082266b7548756508f4287a3f9ff28c2",
+   "size": 474101
   },
   "supabaseClient.js": {
    "sha256": "2a4bad87e7f2d9c4efbcf997ce16397e565ab3d1236c0029057902b930a6c4f5",
@@ -191,8 +195,8 @@
    "size": 110975
   },
   "wow.js": {
-   "sha256": "fda124292a933d6c160136b49ab9c54b9f66578dbc3314f66bbc098745039e95",
-   "size": 36891
+   "sha256": "dc3b422ca676a0917d0465e2adeeed1963c97d520636217058fecb414b0bc08e",
+   "size": 31801
   }
  }
 }

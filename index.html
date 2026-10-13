@@ -40,7 +40,7 @@
 
 <link rel="preconnect" href="https://ketvgmietommjqutejuj.supabase.co" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261007-143">
+<link rel="stylesheet" href="style.css?v=20261007-145">
 </head>
 
 <body>
@@ -1113,16 +1113,39 @@
                     </span>
                 </label>
                 <label class="settings-option">
+                    <span class="settings-option-icon ico-indigo"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3.5" width="16" height="17" rx="3"/><path d="M8 8h.01M12 7h.01M9.5 11h.01M14 10.5h.01M7.5 14h.01M11.5 14.5h.01M15.5 15h.01"/></svg></span>
+                    <span class="settings-option-copy">
+                        <span class="settings-option-title">Матовое стекло</span>
+                        <span class="settings-option-hint">Полупрозрачная панель чатов с цветной подсветкой в тон темы</span>
+                    </span>
+                    <span class="settings-toggle">
+                        <input type="checkbox" name="sidebarFrost" form="settings-form" class="settings-toggle-input">
+                        <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                    </span>
+                </label>
+                <label class="settings-option">
+                    <span class="settings-option-icon ico-pink"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3.5" width="16" height="17" rx="3"/><path d="M7.5 11.5 12.5 6.5M8 16l8.5-8.5"/></svg></span>
+                    <span class="settings-option-copy">
+                        <span class="settings-option-title">Глянец</span>
+                        <span class="settings-option-hint">Блики и отражение света на панели чатов, отблеск следует за курсором</span>
+                    </span>
+                    <span class="settings-toggle">
+                        <input type="checkbox" name="sidebarGloss" form="settings-form" class="settings-toggle-input">
+                        <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                    </span>
+                </label>
+                <label class="settings-option">
                     <span class="settings-option-icon ico-orange"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.5 4.5 12 7l2.5-2.5M9.5 19.5 12 17l2.5 2.5"/></svg></span>
                     <span class="settings-option-copy">
-                        <span class="settings-option-title">Сезонная атмосфера</span>
-                        <span class="settings-option-hint">Снег зимой, листопад осенью, лепестки весной, конфетти в дни рождения</span>
+                        <span class="settings-option-title">Атмосфера в чате</span>
+                        <span class="settings-option-hint">Живой фон за сообщениями: листопад, снег, дождь и другое</span>
                     </span>
                     <span class="settings-toggle">
                         <input type="checkbox" name="seasonalAtmosphere" form="settings-form" class="settings-toggle-input">
                         <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                     </span>
                 </label>
+                <div class="atmo-picker" id="atmo-picker"></div>
             </div>
 
             <div class="settings-group-label">Сообщения</div>
@@ -3366,43 +3389,44 @@
 
 <!-- Библиотеки лежат рядом с сайтом (vendor/): не зависим от CDN, которые бывают недоступны; версия supabase-js закреплена (2.117.2). -->
 <script src="vendor/supabase.js?v=2.117.2"></script>
-<script src="supabaseClient.js?v=20261007-143"></script>
-<script src="private-media.js?v=20261007-143"></script>
-<script src="crypto.js?v=20261007-143"></script>
+<script src="supabaseClient.js?v=20261007-145"></script>
+<script src="private-media.js?v=20261007-145"></script>
+<script src="crypto.js?v=20261007-145"></script>
 <!-- script.js разбит на 4 файла для удобства навигации (раньше был один
      файл ~350КБ/8300+ строк) — порядок подключения важен, см. комментарий
      в начале каждого файла. Это НЕ ES-модули: обычные классические
      скрипты, выполняются последовательно как один большой файл, функции
      между ними в общей глобальной области видимости, как и раньше. -->
-<script src="emoji-data.js?v=20261007-143"></script>
-<script src="script-core.js?v=20261007-143"></script>
-<script src="script-ui.js?v=20261007-143"></script>
-<script src="script-chats.js?v=20261007-143"></script>
-<script src="script-messages.js?v=20261007-143"></script>
-<script src="effects.js?v=20261007-143"></script>
-<script src="games.js?v=20261007-143"></script>
-<script src="voice-ai.js?v=20261007-143"></script>
-<script src="stories.js?v=20261007-143"></script>
-<script src="productivity.js?v=20261007-143"></script>
-<script src="reactions.js?v=20261007-143"></script>
-<script src="listen.js?v=20261007-143"></script>
-<script src="voice.js?v=20261007-143"></script>
-<script src="voice-video.js?v=20261007-143"></script>
-<script src="resilience.js?v=20261007-143"></script>
-<script src="scheduled.js?v=20261007-143"></script>
-<script src="profile.js?v=20261007-143"></script>
-<script src="desktop-app.js?v=20261007-143"></script>
-<script src="photo-editor.js?v=20261007-143"></script>
-<script src="disappearing.js?v=20261007-143"></script>
-<script src="viewer.js?v=20261007-143"></script>
-<script src="selection.js?v=20261007-143"></script>
-<script src="convenience.js?v=20261007-143"></script>
-<script src="contact-share.js?v=20261007-143"></script>
-<script src="avatar-cropper.js?v=20261007-143"></script>
-<script src="shared-media.js?v=20261007-143"></script>
-    <script src="wow.js?v=20261007-143"></script>
-    <script src="sticker-maker.js?v=20261007-143"></script>
-    <script src="screen-draw.js?v=20261007-143"></script>
+<script src="emoji-data.js?v=20261007-145"></script>
+<script src="script-core.js?v=20261007-145"></script>
+<script src="script-ui.js?v=20261007-145"></script>
+<script src="script-chats.js?v=20261007-145"></script>
+<script src="script-messages.js?v=20261007-145"></script>
+<script src="effects.js?v=20261007-145"></script>
+<script src="games.js?v=20261007-145"></script>
+<script src="voice-ai.js?v=20261007-145"></script>
+<script src="stories.js?v=20261007-145"></script>
+<script src="productivity.js?v=20261007-145"></script>
+<script src="reactions.js?v=20261007-145"></script>
+<script src="listen.js?v=20261007-145"></script>
+<script src="voice.js?v=20261007-145"></script>
+<script src="voice-video.js?v=20261007-145"></script>
+<script src="resilience.js?v=20261007-145"></script>
+<script src="scheduled.js?v=20261007-145"></script>
+<script src="profile.js?v=20261007-145"></script>
+<script src="desktop-app.js?v=20261007-145"></script>
+<script src="photo-editor.js?v=20261007-145"></script>
+<script src="disappearing.js?v=20261007-145"></script>
+<script src="viewer.js?v=20261007-145"></script>
+<script src="selection.js?v=20261007-145"></script>
+<script src="convenience.js?v=20261007-145"></script>
+<script src="contact-share.js?v=20261007-145"></script>
+<script src="avatar-cropper.js?v=20261007-145"></script>
+<script src="shared-media.js?v=20261007-145"></script>
+    <script src="wow.js?v=20261007-145"></script>
+    <script src="atmosphere.js?v=20261007-145"></script>
+    <script src="sticker-maker.js?v=20261007-145"></script>
+    <script src="screen-draw.js?v=20261007-145"></script>
 
 </body>
 </html>

@@ -182,7 +182,13 @@ const appSettings = {
     messageEffects: true,
     autoEffects: true,
     liveWallpapers: true,
+    // Панель чатов: матовое стекло и глянец (см. style.css → «ПАНЕЛЬ ЧАТОВ»).
+    sidebarFrost: true,
+    sidebarGloss: true,
     seasonalAtmosphere: true,
+    // Атмосфера в чате (atmosphere.js): auto — по сезону; интенсивность low|mid|high.
+    atmosphereKind: "auto",
+    atmosphereDensity: "mid",
     linkPreviews: true
 };
 
@@ -518,6 +524,8 @@ function applySettings() {
     document.body.classList.toggle("text-scale-lg", appSettings.textSize === "lg");
     document.body.classList.toggle("bubble-no-tail", !appSettings.bubbleTail);
     document.body.classList.toggle("no-live-wallpapers", appSettings.liveWallpapers === false);
+    document.body.classList.toggle("no-frost", appSettings.sidebarFrost === false);
+    document.body.classList.toggle("gloss-on", appSettings.sidebarGloss !== false);
     document.body.dataset.bubbleShape = appSettings.bubbleShape || "round";
 
     applyThemeTokens();
@@ -859,7 +867,7 @@ function initializeSettings() {
             appSettings.accentColor = savedSettings.accentColor;
         }
 
-        ["bubbleShape", "bubbleFill", "bubbleIn", "chatWallpaper"].forEach((name) => {
+        ["bubbleShape", "bubbleFill", "bubbleIn", "chatWallpaper", "atmosphereKind", "atmosphereDensity"].forEach((name) => {
             if (typeof savedSettings[name] === "string") appSettings[name] = savedSettings[name];
         });
         if (Number.isInteger(savedSettings.tintLevel)) appSettings.tintLevel = savedSettings.tintLevel;
