@@ -534,5 +534,71 @@
         };
     }
 
+    /* ---- ПРОИЗВОДИТЕЛЬНОСТЬ: закрытые окна «спят» (см. .cv-keep в style.css) ----------
+       Здесь только одно: пока окно доигрывает анимацию закрытия, его содержимое
+       остаётся видимым (.cv-keep), иначе оно опустело бы посреди затухания. */
+
+    (function keepContentWhileClosing() {
+        const watch = (el) => {
+            if (!el || el._cvWatched || el.id === "call-backdrop") return;
+            el._cvWatched = true;
+            let wasOpen = el.classList.contains("open");
+            let timer = null;
+            new MutationObserver(() => {
+                const open = el.classList.contains("open");
+                if (open === wasOpen) return;      // наши же .cv-keep сюда не доходят
+                wasOpen = open;
+                clearTimeout(timer);
+                if (open) { el.classList.remove("cv-keep"); return; }
+                el.classList.add("cv-keep");       // колбэк до отрисовки — пустого кадра не будет
+                timer = setTimeout(() => el.classList.remove("cv-keep"), 340);
+            }).observe(el, { attributes: true, attributeFilter: ["class"] });
+        };
+        const scan = () => {
+            watch(document.getElementById("emoji-popover"));
+            watch(document.getElementById("attach-menu"));
+            document.querySelectorAll('[id$="-backdrop"]').forEach(watch);
+        };
+        scan();
+        // Окна, которые создаются позже (подарок, капсула, стикер из фото…).
+        new MutationObserver((mutations) => {
+            mutations.forEach((m) => m.addedNodes.forEach((n) => { if (n.nodeType === 1 && /-backdrop$/.test(n.id || "")) watch(n); }));
+        }).observe(document.body, { childList: true });
+    })();
+
+    /* ---- ПРОИЗВОДИТЕЛЬНОСТЬ: прогрев панели эмодзи и движка анимаций в простое -------------
+       Первая раскладка панели эмодзи — дорогая (цветные эмодзи долго измеряются: ~80 мс,
+       на слабых телефонах ~300 мс). Повторная — мгновенная: браузер её запоминает. Поэтому
+       первую делаем заранее, пока приложение простаивает, по одному куску (49 эмодзи)
+       за раз — без заметных пауз. Так же заранее грузим движок анимированных эмодзи. */
+
+    (function prewarm() {
+        const idle = window.requestIdleCallback || ((fn) => setTimeout(() => fn({ timeRemaining: () => 10 }), 200));
+        const pop = document.getElementById("emoji-popover");
+        let tries = 0;
+        const warmEmoji = () => {
+            if (!pop || pop.classList.contains("open") || pop.dataset.warmed) return;
+            const grids = [...pop.querySelectorAll(".emoji-grid")];
+            if (!grids.length) { if (++tries < 40) setTimeout(warmEmoji, 1500); return; }
+            pop.dataset.warmed = "1";
+            const first = grids.slice(0, 6);
+            pop.classList.add("cv-warm");
+            grids.forEach((g) => g.classList.add("cv-cold"));
+            let i = 0;
+            const finish = () => { grids.forEach((g) => g.classList.remove("cv-cold")); pop.classList.remove("cv-warm"); };
+            const step = () => {
+                if (pop.classList.contains("open")) { finish(); return; }
+                const grid = first[i++];
+                if (grid) { grid.classList.remove("cv-cold"); void pop.offsetHeight; }
+                if (i < first.length) idle(step, { timeout: 3000 }); else finish();
+            };
+            idle(step, { timeout: 3000 });
+        };
+        setTimeout(() => idle(warmEmoji, { timeout: 5000 }), 3000);
+        setTimeout(() => idle(() => {
+            if (typeof loadLottie === "function" && typeof animatedEmojiEnabled === "function" && animatedEmojiEnabled()) loadLottie().catch(() => {});
+        }, { timeout: 8000 }), 5000);
+    })();
+
     window.KabanDelight = { flyAvatar, staggerRows, openCapsuleComposer };
 })();

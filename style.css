@@ -13886,3 +13886,29 @@ body.reduce-motion .cap-icon svg, body.reduce-motion .cap-cover.ready .cap-icon 
 
 /* ПЕРЕЛЁТ АВАТАРКИ из списка в шапку */
 .avatar-flyer { position: fixed !important; z-index: 330; margin: 0 !important; pointer-events: none; transform-origin: center; box-shadow: 0 10px 28px rgba(0,0,0,.25); }
+
+/* ПРОИЗВОДИТЕЛЬНОСТЬ: закрытые окна и панели не раскладываются.
+   Они лишь невидимы (opacity/visibility ради анимации), и при любом изменении
+   размеров (открытие чата, поворот, ресайз) браузер заново раскладывал их
+   содержимое — панель эмодзи (тысячи цветных эмодзи) давала до 300 мс фриза на
+   слабых устройствах. content-visibility: hidden пропускает раскладку и хранит
+   прошлую — повторное открытие мгновенное. Снимается сразу с классом .open
+   (размеры можно мерить сразу после открытия); на время анимации закрытия
+   delight.js ставит .cv-keep, чтобы окно не опустело посреди затухания.
+   Экран звонка не трогаем — в нём идёт видео. */
+:is(#emoji-popover, #attach-menu, [id$="-backdrop"]:not(#call-backdrop)):not(.open):not(.cv-keep):not(.cv-warm) > * { content-visibility: hidden; }
+/* прогрев панели эмодзи в простое (delight.js): раскладываем по одному куску за раз */
+#emoji-popover.cv-warm .emoji-grid.cv-cold { content-visibility: hidden; }
+
+/* ============================================================================
+   ИНТЕРАКТИВНЫЕ ЭМОДЗИ (interactive-emoji.js)
+   ========================================================================= */
+.message.emoji-only, .message.sticker:not(.sticker-image):not(.dice-message) { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.message.emoji-only:active .anim-emoji, .message.sticker:not(.sticker-image):not(.dice-message):active .anim-emoji { transform: scale(.92); transition: transform .08s ease; }
+.ix-layer { position: fixed; inset: 0; z-index: 312; pointer-events: none; overflow: hidden; }
+.ix-main { position: absolute; display: grid; place-items: center; width: 1em; height: 1em; line-height: 1; filter: drop-shadow(0 14px 26px rgba(0,0,0,.28)); will-change: transform, opacity; }
+.ix-main .anim-emoji { width: 100%; height: 100%; vertical-align: top; }
+.ix-main .anim-glyph { font-size: 1em; }
+.ix-flyer { position: absolute; line-height: 1; will-change: transform, opacity; }
+.ix-ring { position: absolute; border: 3px solid; border-radius: 50%; will-change: transform, opacity; }
+body.reduce-motion .ix-layer { display: none; }
