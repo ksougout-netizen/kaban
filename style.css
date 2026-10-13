@@ -13657,8 +13657,8 @@ body.reduce-motion .call-aura { animation: none; }
    Матовое: под панелью — размытые цветные пятна в тон акцента темы, поверх —
    полупрозрачная заливка с мелким зерном. Выключено → body.no-frost.
    Глянец (.sidebar-gloss, wow.js): изогнутое отражение сверху, диагональные блики,
-   светлая кромка, редкий пробегающий отблеск и блик за курсором. Выключен → без body.gloss-on.
-   Всё, кроме отблеска и блика за курсором, статично — прокрутку не замедляет.
+   светлая кромка, редкий пробегающий отблеск. Выключен → без body.gloss-on.
+   Всё, кроме отблеска, статично — прокрутку не замедляет.
    ========================================================================= */
 .sidebar { position: relative; isolation: isolate; }
 
@@ -13694,14 +13694,14 @@ body:not(.no-frost) .sidebar::after {
     inset: 0;
     z-index: -2;
     pointer-events: none;
-    background-color: color-mix(in srgb, var(--glass-base) 56%, transparent);
+    background-color: color-mix(in srgb, var(--glass-base) 50%, transparent);
     background-image:
-        linear-gradient(160deg, rgba(255,255,255,.10), rgba(255,255,255,0) 32%),
-        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 .09 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
-    box-shadow: inset -1px 0 0 rgba(255,255,255,.07), inset 0 1px 0 rgba(255,255,255,.10);
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 .045 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    box-shadow: inset -1px 0 0 rgba(255,255,255,.04);
 }
-body.dark:not(.no-frost) .sidebar::after { background-color: color-mix(in srgb, var(--glass-base) 60%, transparent); }
-body.dark:not(.no-frost) .sidebar::before { filter: blur(46px) saturate(1.15) brightness(.82); }
+body.dark:not(.no-frost) .sidebar::after { background-color: color-mix(in srgb, var(--glass-base) 56%, transparent); }
+/* в тёмных темах пятна приглушены — без белёсой дымки */
+body.dark:not(.no-frost) .sidebar::before { filter: blur(46px) saturate(1.2) brightness(.6); }
 
 /* элементы внутри — тоже стеклянные, чтобы фон просвечивал */
 body:not(.no-frost) .sidebar .logo-mark,
@@ -13717,7 +13717,7 @@ body:not(.no-frost) .sidebar .chat-folder-tab:not(.active):hover { background-co
 /* ---- глянец ---- */
 .sidebar-gloss { display: none; }
 body.gloss-on .sidebar-gloss {
-    --g: 2.1;
+    --g: 1;
     display: block;
     position: absolute;
     inset: 0;
@@ -13725,18 +13725,18 @@ body.gloss-on .sidebar-gloss {
     overflow: hidden;
     pointer-events: none;
     background:
-        /* изогнутое отражение света сверху — как на выпуклом стекле */
-        radial-gradient(150% 46% at 30% -8%, rgba(255,255,255,calc(.28 * var(--g))) 0, rgba(255,255,255,calc(.1 * var(--g))) 57%, rgba(255,255,255,calc(.3 * var(--g))) 59.2%, rgba(255,255,255,0) 60%),
-        radial-gradient(150% 46% at 30% -8%, rgba(0,0,0,0) 60%, rgba(0,0,0,calc(.04 * var(--g))) 61%, rgba(0,0,0,0) 72%),
-        /* диагональные блики */
-        linear-gradient(118deg, rgba(255,255,255,0) 22%, rgba(255,255,255,calc(.09 * var(--g))) 30%, rgba(255,255,255,0) 38%, rgba(255,255,255,0) 56%, rgba(255,255,255,calc(.05 * var(--g))) 61%, rgba(255,255,255,0) 66%),
+        /* мягкое отражение света сверху: плавно гаснет, без резкой белой дуги */
+        radial-gradient(150% 44% at 30% -8%, rgba(255,255,255,calc(.1 * var(--g))) 0, rgba(255,255,255,calc(.035 * var(--g))) 55%, rgba(255,255,255,0) 66%),
+        /* диагональные блики — едва заметные полосы */
+        linear-gradient(118deg, rgba(255,255,255,0) 22%, rgba(255,255,255,calc(.035 * var(--g))) 30%, rgba(255,255,255,0) 38%, rgba(255,255,255,0) 56%, rgba(255,255,255,calc(.02 * var(--g))) 61%, rgba(255,255,255,0) 66%),
         /* лёгкая глубина внизу */
         linear-gradient(to bottom, rgba(0,0,0,0) 72%, rgba(0,0,0,calc(.05 * var(--g))));
     box-shadow:
-        inset 1px 1px 0 rgba(255,255,255,calc(.22 * var(--g))),
-        inset -1px 0 0 rgba(255,255,255,calc(.08 * var(--g)));
+        inset 1px 1px 0 rgba(255,255,255,calc(.08 * var(--g))),
+        inset -1px 0 0 rgba(255,255,255,calc(.03 * var(--g)));
 }
-body.dark.gloss-on .sidebar-gloss { --g: 1; }
+body:not(.dark).gloss-on .sidebar-gloss { --g: 1.5; }
+body.dark.gloss-on .sidebar-gloss { --g: .7; }
 /* пробегающий отблеск — раз в ~9 с */
 body.gloss-on .sidebar-gloss::before {
     content: "";
@@ -13745,7 +13745,7 @@ body.gloss-on .sidebar-gloss::before {
     bottom: -20%;
     left: 0;
     width: 55%;
-    background: linear-gradient(105deg, rgba(255,255,255,0) 20%, rgba(255,255,255,calc(.16 * var(--g))) 46%, rgba(255,255,255,calc(.24 * var(--g))) 50%, rgba(255,255,255,calc(.16 * var(--g))) 54%, rgba(255,255,255,0) 80%);
+    background: linear-gradient(105deg, rgba(255,255,255,0) 22%, rgba(255,255,255,calc(.04 * var(--g))) 44%, rgba(255,255,255,calc(.065 * var(--g))) 50%, rgba(255,255,255,calc(.04 * var(--g))) 56%, rgba(255,255,255,0) 78%);
     transform: translateX(-120%) skewX(-12deg);
     animation: sidebar-sheen 9s cubic-bezier(.45,.05,.25,1) 2s infinite;
     will-change: transform;
@@ -13754,22 +13754,6 @@ body.gloss-on .sidebar-gloss::before {
     0% { transform: translateX(-120%) skewX(-12deg); }
     22%, 100% { transform: translateX(260%) skewX(-12deg); }
 }
-/* блик, который следует за курсором */
-.sidebar-gloss-spot {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 420px;
-    height: 420px;
-    margin: -210px 0 0 -210px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(255,255,255,calc(.16 * var(--g))), rgba(255,255,255,0) 62%);
-    opacity: 0;
-    transform: translate3d(var(--gx, -999px), var(--gy, -999px), 0);
-    transition: opacity .35s ease;
-    will-change: transform;
-}
-.sidebar-gloss.hot .sidebar-gloss-spot { opacity: 1; }
 body.reduce-motion .sidebar-gloss::before { animation: none; display: none; }
 /* ============================================================================
    АТМОСФЕРА В ЧАТЕ — выбор эффекта (atmosphere.js)
@@ -13792,3 +13776,113 @@ body.reduce-motion .sidebar-gloss::before { animation: none; display: none; }
     .atmo-density { flex-direction: column; align-items: stretch; gap: 8px; }
     .atmo-seg button { flex: 1; }
 }
+
+/* ============================================================================
+   ЖИВЫЕ МЕЛОЧИ (delight.js)
+   ========================================================================= */
+
+/* ЖИВЫЕ ГАЛОЧКИ: рисованные (SVG) вместо символов «✓✓»; при прочтении вторая
+   галочка дорисовывается слева направо. Состояния «отправляется/ошибка» — как раньше. */
+.message-status[data-status="sent"],
+.message-status[data-status="read"] {
+    position: relative;
+    display: inline-block;
+    width: 16px;
+    height: 11px;
+    margin-left: 3px;
+    vertical-align: -1px;
+    font-size: 0 !important;
+    letter-spacing: 0;
+    transition: color .35s ease;
+}
+.message-status[data-status="sent"]::before,
+.message-status[data-status="read"]::before,
+.message-status[data-status="sent"]::after,
+.message-status[data-status="read"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: currentColor;
+    -webkit-mask: var(--tick-mask) center / 16px 11px no-repeat;
+    mask: var(--tick-mask) center / 16px 11px no-repeat;
+}
+.message-status[data-status="sent"]::before,
+.message-status[data-status="read"]::before {
+    --tick-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><path d='M1.4 6.1 4.5 9.1 10.6 2.2' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+}
+.message-status[data-status="sent"]::after,
+.message-status[data-status="read"]::after {
+    --tick-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 11'><path d='M7.3 7.9 8.5 9.1 14.6 2.2' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+    transition: clip-path .5s cubic-bezier(.3,.7,.3,1) .05s, opacity .12s ease;
+}
+.message-status[data-status="read"]::after { clip-path: inset(0 0 0 0); opacity: 1; }
+body.reduce-motion .message-status::after { transition: none; }
+
+/* ПОЛЁТ СООБЩЕНИЯ — анимация в delight.js (Web Animations), здесь ничего не нужно. */
+
+/* КАПСУЛА ВРЕМЕНИ */
+.message-row.cap-sealed .message > :not(.cap-cover) { display: none !important; }
+.message-row.cap-sealed .message { min-width: 236px; padding: 0 !important; overflow: hidden; }
+.cap-cover {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    width: 100%; padding: 18px 20px 16px;
+    border: 0; background: none; color: inherit; font: inherit; cursor: pointer; text-align: center;
+}
+.cap-cover::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .55;
+    background: radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
+}
+.cap-icon {
+    position: relative; display: grid; place-items: center; width: 50px; height: 50px; margin-bottom: 8px; border-radius: 50%;
+    background: linear-gradient(150deg, color-mix(in srgb, var(--accent) 85%, #fff), color-mix(in srgb, var(--accent) 70%, #6d28d9));
+    color: #fff; box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.cap-icon svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; animation: cap-flip 5s cubic-bezier(.6,0,.3,1) infinite; }
+.cap-icon .cap-sand { fill: currentColor; stroke: none; opacity: .9; }
+@keyframes cap-flip { 0%, 80% { transform: rotate(0); } 92%, 100% { transform: rotate(180deg); } }
+.cap-icon.big { width: 72px; height: 72px; }
+.cap-icon.big svg { width: 36px; height: 36px; }
+.cap-cover b { position: relative; font-size: 15px; font-weight: 650; }
+.cap-when { position: relative; font-size: 12.5px; opacity: .7; }
+.cap-count { position: relative; margin-top: 6px; padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, currentColor 9%, transparent); font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.cap-cover.nudge { animation: cap-nudge .45s ease; }
+@keyframes cap-nudge { 20% { transform: rotate(-3deg); } 40% { transform: rotate(3deg); } 60% { transform: rotate(-2deg); } 80% { transform: rotate(1deg); } }
+.cap-cover.ready .cap-icon { animation: cap-glow 1.6s ease-in-out infinite; }
+.cap-cover.ready .cap-icon svg { animation: none; }
+.cap-cover.ready .cap-count { background: var(--accent); color: #fff; font-size: 13px; }
+@keyframes cap-glow { 50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 22%, transparent), 0 8px 26px color-mix(in srgb, var(--accent) 55%, transparent); transform: scale(1.06); } }
+.cap-cover.opening { pointer-events: none; animation: cap-shake .42s ease; }
+.cap-cover.opening .cap-icon { animation: cap-burst .7s cubic-bezier(.3,.7,.3,1) .38s forwards; }
+.cap-cover.opening b, .cap-cover.opening .cap-when, .cap-cover.opening .cap-count { transition: opacity .25s ease .3s; opacity: 0; }
+@keyframes cap-shake { 15% { transform: translateX(-4px) rotate(-1deg); } 30% { transform: translateX(4px) rotate(1deg); } 45% { transform: translateX(-3px); } 60% { transform: translateX(3px); } 80% { transform: translateX(-1px); } }
+@keyframes cap-burst { 40% { transform: scale(1.35); opacity: 1; } 100% { transform: scale(2.2); opacity: 0; } }
+.message-row.cap-revealed .message > * { animation: wow-gift-in .6s cubic-bezier(.2,.8,.3,1) both; }
+.cap-tag { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; font-size: 12px; font-weight: 650; opacity: .8; }
+.cap-tag svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.cap-tag .cap-sand { fill: currentColor; stroke: none; }
+body.reduce-motion .cap-icon svg, body.reduce-motion .cap-cover.ready .cap-icon { animation: none; }
+
+/* окно «Капсула времени» */
+.cap-hero { display: grid; place-items: center; height: 90px; }
+.cap-presets { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 14px 0 10px; }
+.cap-preset { height: 32px; padding: 0 13px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+.cap-preset:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.cap-preset.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); font-weight: 600; }
+.cap-date { width: 100%; box-sizing: border-box; height: 40px; margin-bottom: 8px; padding: 0 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface2); color: var(--text); font: inherit; color-scheme: light dark; }
+.cap-date[hidden] { display: none; }
+.cap-summary { min-height: 18px; margin-bottom: 16px; font-size: 13px; color: var(--muted); }
+.cap-summary.bad { color: #e5484d; }
+.attach-menu-icon.capsule { color: #7c5cff; }
+.attach-menu-icon.capsule .cap-sand { fill: currentColor; stroke: none; }
+
+/* АНИМИРОВАННЫЙ ЭМОДЗИ-СТАТУС */
+.status-emoji-badge { display: inline-flex; align-items: center; vertical-align: -0.18em; }
+.status-emoji-badge .anim-emoji.status-anim { width: 1.25em; height: 1.25em; }
+.status-emoji-badge .anim-emoji.status-anim .anim-glyph { font-size: 1em; }
+.status-emoji-picker .anim-emoji { width: 24px; height: 24px; vertical-align: middle; }
+
+/* ПЕРЕЛЁТ АВАТАРКИ из списка в шапку */
+.avatar-flyer { position: fixed !important; z-index: 330; margin: 0 !important; pointer-events: none; transform-origin: center; box-shadow: 0 10px 28px rgba(0,0,0,.25); }

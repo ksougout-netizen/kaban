@@ -573,7 +573,7 @@
         };
     }
 
-    /* ---- 5б. ГЛЯНЕЦ ПАНЕЛИ ЧАТОВ: слой бликов и блик за курсором ----------------------- */
+    /* ---- 5б. ГЛЯНЕЦ ПАНЕЛИ ЧАТОВ: слой бликов (сами блики — в style.css) --------------- */
 
     (function sidebarGloss() {
         const sidebar = document.querySelector(".sidebar");
@@ -581,23 +581,7 @@
         const gloss = document.createElement("div");
         gloss.className = "sidebar-gloss";
         gloss.setAttribute("aria-hidden", "true");
-        gloss.innerHTML = `<span class="sidebar-gloss-spot"></span>`;
         sidebar.prepend(gloss);
-        let frame = 0, x = 0, y = 0;
-        sidebar.addEventListener("pointermove", (event) => {
-            if (event.pointerType !== "mouse" || !document.body.classList.contains("gloss-on")) return;
-            const r = sidebar.getBoundingClientRect();
-            x = event.clientX - r.left;
-            y = event.clientY - r.top;
-            if (frame) return;
-            frame = requestAnimationFrame(() => {
-                frame = 0;
-                gloss.style.setProperty("--gx", x + "px");
-                gloss.style.setProperty("--gy", y + "px");
-                gloss.classList.add("hot");
-            });
-        }, { passive: true });
-        sidebar.addEventListener("pointerleave", () => gloss.classList.remove("hot"));
     })();
 
     /* ---- 6. ЭКРАН ЗВОНКА ДЫШИТ ГОЛОСОМ ------------------------------------------------ */
