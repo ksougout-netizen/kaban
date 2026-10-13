@@ -36,6 +36,15 @@ self.addEventListener("push", (event) => {
         tag: payload.tag || undefined,
         data: { chatId: payload.chatId || null, url: payload.url || self.registration.scope }
     };
+    // Входящий звонок: уведомление не исчезает само и вибрирует, пока его не тронут;
+    // «Пропущенный звонок» с тем же tag заменяет его (renotify — звук/вибрация снова).
+    if (payload.call) {
+        options.requireInteraction = true;
+        options.renotify = true;
+        options.vibrate = [400, 200, 400, 200, 400, 200, 400];
+    } else if (payload.tag && String(payload.tag).startsWith("kaban-call-")) {
+        options.renotify = true;
+    }
 
     event.waitUntil(self.registration.showNotification(title, options));
 

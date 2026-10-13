@@ -318,6 +318,30 @@
             }
         }, 0);
     }, true);
+    /* ---------- 7. Пустой чат: подсказка вместо тёмной пустоты ---------- */
+    let chatOpenedAt = 0;
+    function syncEmptyChatHint() {
+        const box = document.getElementById("messages");
+        if (!box) return;
+        const loading = !currentChatId || Date.now() - chatOpenedAt < 700 || box.querySelector(".older-messages-spinner, .messages-skeleton");
+        const empty = !loading && !box.querySelector(".message-row");
+        box.classList.toggle("is-empty-chat", empty);
+        if (empty) box.dataset.emptyHint = currentChatType === "group" ? "В группе пока нет сообщений — напишите первым" : "Сообщений пока нет — напишите первым";
+    }
+    if (typeof openRealChat === "function") {
+        const originalOpen = openRealChat;
+        openRealChat = async function () {
+            chatOpenedAt = Date.now();
+            document.getElementById("messages")?.classList.remove("is-empty-chat");
+            try { return await originalOpen.apply(this, arguments); }
+            finally { setTimeout(syncEmptyChatHint, 750); }
+        };
+    }
+    if (document.getElementById("messages")) {
+        let pending = 0;
+        new MutationObserver(() => { clearTimeout(pending); pending = setTimeout(syncEmptyChatHint, 120); })
+            .observe(document.getElementById("messages"), { childList: true });
+    }
     installBookmarkButton();
     installDateJump();
 })();

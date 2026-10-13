@@ -497,12 +497,30 @@ function desktopInit() {
     window.focus = () => { desktopBridge.show(); nativeFocus(); };
 
     // Входящий звонок, когда окно в трее или под игрой — мигаем значком и показываем окно без перехвата фокуса.
+    // В новых версиях программы (1.3+) — отдельное окошко звонка поверх всех окон
+    // с кнопками «Принять» / «Отклонить», даже когда KABAN свёрнут или под игрой.
     if (typeof showIncomingCallUI === "function") {
         const originalShowIncoming = showIncomingCallUI;
         showIncomingCallUI = function (offer) {
             originalShowIncoming(offer);
-            desktopBridge.attention("call");
+            if (desktopHas("call-popup")) {
+                desktopBridge.callPopup({ name: offer?.callerName || "", avatar: offer?.callerAvatarUrl || "", video: !!offer?.isVideo });
+            } else {
+                desktopBridge.attention("call");
+            }
         };
+    }
+    if (desktopHas("call-popup")) {
+        const hidePopup = () => desktopBridge.callPopup(null);
+        ["hideCallUI", "acceptIncomingCall", "declineIncomingCall"].forEach((name) => {
+            if (typeof window[name] !== "function") return;
+            const original = window[name];
+            window[name] = function () { hidePopup(); return original.apply(this, arguments); };
+        });
+        desktopBridge.onCallAction((action) => {
+            if (action === "accept" && typeof acceptIncomingCall === "function") acceptIncomingCall();
+            else if (action === "decline" && typeof declineIncomingCall === "function") declineIncomingCall();
+        });
     }
 
     desktopBridge.onHotkey(desktopOnHotkey);

@@ -1462,6 +1462,18 @@ function closeContactModalFromBackdrop(event) {
 }
 
 
+// Счётчики «Медиа / Файлы / Ссылки / Голосовые / GIF» в карточке группы — те же,
+// что в карточке собеседника (по уже собранным общим материалам открытого чата).
+function updateGroupMediaStats() {
+    if (typeof renderSharedMediaDataForCurrentChat === "function") {
+        try { renderSharedMediaDataForCurrentChat(); } catch { /* посчитаем по тому, что есть */ }
+    }
+    ["media", "files", "links", "voice", "gifs"].forEach((kind) => {
+        const valueEl = document.getElementById(`group-stat-${kind}`);
+        if (valueEl) valueEl.textContent = String(document.querySelectorAll(`.shared-item[data-kind="${kind}"]`).length);
+    });
+}
+
 function updateContactModalStats() {
 
     ["media", "files", "links", "voice", "gifs"].forEach((kind) => {
@@ -2916,6 +2928,7 @@ function buildGroupAvatarHTML(user, size = "") {
 
 function renderGroupInfoModal() {
 
+    updateGroupMediaStats();
     const canEdit = groupMayChangeInfo();
     const membersTotal = currentChatMembersById.size;
 
@@ -3763,7 +3776,9 @@ function closeSharedMediaFromBackdrop(event) {
 function backToContactPopoverFromMedia() {
 
     closeSharedMediaModal();
-    toggleContactPopover();
+    // В группе «назад» — к карточке группы, а не к карточке собеседника.
+    if (currentChatType === "group" && typeof openGroupInfoModal === "function") openGroupInfoModal();
+    else toggleContactPopover();
 
 }
 

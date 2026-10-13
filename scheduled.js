@@ -55,7 +55,7 @@ function buildScheduleModal() {
                 </div>
             </div>
             <div id="schedule-existing"></div>
-            <p class="group-perms-hint">Сообщение хранится на этом устройстве и уйдёт, когда KABAN открыт в назначенное время. Если он был закрыт — отправится при следующем запуске.</p>
+            <p class="group-perms-hint" id="schedule-hint">Сообщение уйдёт в назначенное время, даже если KABAN будет закрыт.</p>
         </section>`;
     document.body.appendChild(backdrop);
 
@@ -179,6 +179,7 @@ function createScheduled(dueTs) {
         due: dueTs
     });
     if (!saveScheduled(list)) return;
+    scheduledMirrorToServer(list[list.length - 1]);
 
     input.value = "";
     if (typeof resizeComposer === "function") resizeComposer();
@@ -192,6 +193,7 @@ function createScheduled(dueTs) {
 }
 
 function deleteScheduled(id) {
+    scheduledDeleteOnServer(id);
     saveScheduled(loadScheduled().filter((x) => x.id !== id));
     renderScheduledForChat();
     syncScheduledBadge();
@@ -200,6 +202,7 @@ function deleteScheduled(id) {
 function sendScheduledNow(id) {
     const item = loadScheduled().find((x) => x.id === id);
     if (!item) return;
+    scheduledDeleteOnServer(id);
     dispatchScheduled(item);
     saveScheduled(loadScheduled().filter((x) => x.id !== id));
     renderScheduledForChat();
@@ -259,4 +262,42 @@ if (typeof openRealChat === "function") {
         syncScheduledBadge();
         return result;
     };
+}
+
+/* ---- копия на сервере: сообщение уйдёт, даже если KABAN закрыт ------------------------
+   Таблица scheduled_messages (server_jobs.sql): сервер раз в минуту отправляет всё,
+   чему пришло время. Локальная копия остаётся: пока приложение открыто, оно
+   отправляет само, минута в минуту. id у сообщения один и тот же, поэтому двойной
+   отправки не бывает — второй вставке база отвечает «уже есть». Пока таблицы нет,
+   всё работает по-старому (только на этом устройстве). */
+
+let scheduledServerAvailable = null;   // null — не проверяли, false — таблицы нет
+
+function scheduledServerMissing(error) {
+    const text = String(error?.message || error || "");
+    return error?.code === "42P01" || error?.code === "PGRST205" || /scheduled_messages/.test(text) && /not find|does not exist|schema cache/i.test(text);
+}
+
+async function scheduledMirrorToServer(item) {
+    if (!item || scheduledServerAvailable === false || typeof getSupabaseClient !== "function") return;
+    try {
+        const { error } = await getSupabaseClient().from("scheduled_messages").insert({
+            id: item.id, chat_id: item.chatId, text: item.text, send_at: new Date(item.due).toISOString()
+        });
+        if (error) throw error;
+        scheduledServerAvailable = true;
+    } catch (error) {
+        if (scheduledServerMissing(error)) {
+            scheduledServerAvailable = false;
+            const hint = document.getElementById("schedule-hint");
+            if (hint) hint.textContent = "Сообщение хранится на этом устройстве и уйдёт, когда KABAN открыт в назначенное время. Если он был закрыт — отправится при следующем запуске.";
+            return;
+        }
+        console.warn("Не удалось сохранить отложенное сообщение на сервере", error);
+    }
+}
+
+function scheduledDeleteOnServer(id) {
+    if (scheduledServerAvailable === false || typeof getSupabaseClient !== "function") return;
+    getSupabaseClient().from("scheduled_messages").delete().eq("id", id).then(() => {}, () => {});
 }

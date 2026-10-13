@@ -13399,3 +13399,18 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
 .saved-messages-modal { min-height: 0; }
 .saved-messages-modal .shared-media-list:empty,
 .saved-messages-modal .shared-media-empty { min-height: 120px; }
+/* Правка подписи к фото: форма под снимком, на месте подписи */
+.message.has-media .message-edit-form.caption-edit { padding: 8px 10px 4px; }
+.message-edit-form.caption-edit .message-edit-input { min-height: 40px; }
+/* Пустой чат */
+#messages.is-empty-chat::after {
+    content: attr(data-empty-hint);
+    margin: auto;
+    padding: 14px 20px;
+    max-width: 280px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    color: var(--muted);
+    font-size: 13.5px; line-height: 1.45; text-align: center;
+}

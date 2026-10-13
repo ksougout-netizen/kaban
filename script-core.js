@@ -2030,6 +2030,7 @@ async function startCall(kind) {
     showOutgoingCallUI();
     startCallTone("ringback");
     scheduleCallOfferResend(callId, remoteUserId, 0);
+    sendCallRingPush(currentChatId, remoteUserId, kind);
 
     activeCall.timeoutTimer = setTimeout(() => {
         if (activeCall?.callId === callId && activeCall.state === "calling") {
@@ -2050,14 +2051,28 @@ const CALL_OFFER_RESEND_DELAYS = [2500, 2500, 4000, 5000];
 
 function scheduleCallOfferResend(callId, calleeId, attempt) {
     const call = activeCall;
-    if (!call || call.callId !== callId || attempt >= CALL_OFFER_RESEND_DELAYS.length) return;
+    if (!call || call.callId !== callId) return;
+    // После первых попыток — повтор раз в 4 с всё время вызова, а не только 14 с: человек,
+    // которому пришло уведомление «Входящий звонок» при закрытом приложении, открывает
+    // его и должен успеть получить вызов (раньше повторов к этому моменту уже не было).
+    call.ringStartedAt = call.ringStartedAt || Date.now();
+    if (attempt >= CALL_OFFER_RESEND_DELAYS.length && Date.now() - call.ringStartedAt > CALL_RING_TIMEOUT_MS - 2000) return;
     clearTimeout(call.resendTimer);
     call.resendTimer = setTimeout(async () => {
         if (activeCall !== call || call.ringing || call.state !== "calling" || call.answeredBy !== undefined || call.claimedBy) return;
         call.offerResends = (call.offerResends || 0) + 1;
         try { await KabanAPI.sendCallOffer(calleeId, { ...call.offerPayload, resend: call.offerResends }); } catch { /* следующая попытка */ }
         scheduleCallOfferResend(callId, calleeId, attempt + 1);
-    }, CALL_OFFER_RESEND_DELAYS[attempt]);
+    }, CALL_OFFER_RESEND_DELAYS[attempt] ?? 4000);
+}
+
+// Уведомление «Входящий звонок» на устройства собеседника, где KABAN закрыт
+// (Web Push через ту же функцию, что и сообщения; см. server_jobs.sql → call_rings).
+// Нет таблицы — молча ничего не делаем.
+function sendCallRingPush(chatId, calleeId, kind) {
+    if (!chatId || !calleeId || typeof getSupabaseClient !== "function") return;
+    getSupabaseClient().from("call_rings").insert({ chat_id: chatId, callee_id: calleeId, kind: kind === "video" ? "video" : "audio" })
+        .then(() => {}, () => {});
 }
 
 async function acceptIncomingCall() {

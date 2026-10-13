@@ -202,7 +202,9 @@ async function listenReconcile(force) {
             listenYt?.pauseVideo?.();
             document.getElementById("listen-yt-wrap").hidden = true;
             room.alignedTrackId = null;
-            listenAudio.src = track.src;
+            // Файл из чата — по подписанной ссылке (файлы чатов закрыты, см. private-media.js).
+            listenAudio.src = typeof KabanMedia !== "undefined" ? await KabanMedia.sign(track.src) : track.src;
+            if (listenRoom !== room || room.loadedTrackId !== track.id) return;
             listenAudio.currentTime = target;
         }
     } else if (force || Math.abs(listenEngineTime() - target) > LISTEN_DRIFT_LIMIT) {

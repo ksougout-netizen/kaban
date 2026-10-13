@@ -192,7 +192,11 @@ document.getElementById("messages").addEventListener("contextmenu", (event) => {
     // на этом устройстве текст утёк бы в обычный, несекретный чат — ровно
     // так же это запрещено и в настоящем Telegram).
     const isPoll = !!(realMessagesById.get(row.dataset.messageId)?.attachment_meta?.poll || realMessagesById.get(row.dataset.messageId)?.attachment_meta?.game);
-    document.getElementById("ctx-edit").hidden = !(isReal && isMine && !isDeleted) || currentChatIsSecret || isPoll;
+    const editTarget = realMessagesById.get(row.dataset.messageId);
+    // «Изменить» — только для текста и подписи к фото/видео (у голосовых, файлов и т.п. менять нечего:
+    // раньше пункт был и там, но ничего не делал).
+    const editable = !!editTarget && (editTarget.type === "text" || isCaptionEditable(editTarget));
+    document.getElementById("ctx-edit").hidden = !(isReal && isMine && !isDeleted && editable) || currentChatIsSecret || isPoll;
     document.getElementById("ctx-delete").hidden = !(isReal && !isDeleted);
     document.getElementById("ctx-forward").hidden = !(isReal && !isDeleted) || currentChatIsSecret;
     document.getElementById("ctx-select").hidden = !(isReal && !isDeleted);
@@ -1500,18 +1504,29 @@ function startEditMessage(row) {
 
     const messageId = row.dataset.messageId;
     const message = realMessagesById.get(messageId);
-    if (!message || message.deleted_at || message.type !== "text") return;
+    if (!message || message.deleted_at) return;
+    const isCaption = isCaptionEditable(message);
+    if (message.type !== "text" && !isCaption) { toast("Это сообщение нельзя изменить"); return; }
+    if (message.attachment_meta?.poll || message.attachment_meta?.game) return;
 
     const bubble = row.querySelector(".message");
-    bubble.innerHTML = `
-        <div class="message-edit-form">
-            <textarea class="message-edit-input">${escapeHTML(message.text || "")}</textarea>
+    const form = `
+        <div class="message-edit-form${isCaption ? " caption-edit" : ""}">
+            <textarea class="message-edit-input" ${isCaption ? `maxlength="1024" placeholder="Подпись (можно оставить пустой)"` : ""}>${escapeHTML(message.text || "")}</textarea>
             <div class="message-edit-actions">
                 <button type="button" onclick="cancelEditMessage('${messageId}')">Отмена</button>
                 <button type="button" onclick="confirmEditMessage('${messageId}')">Сохранить</button>
             </div>
         </div>
     `;
+    if (isCaption) {
+        // Подпись к фото/видео: само фото остаётся на месте, форма — под ним вместо подписи.
+        bubble.querySelector(".message-caption")?.remove();
+        bubble.querySelector(":scope > .message-time")?.insertAdjacentHTML("beforebegin", form);
+        if (!bubble.querySelector(".message-edit-form")) bubble.insertAdjacentHTML("beforeend", form);
+    } else {
+        bubble.innerHTML = form;
+    }
 
     const textarea = bubble.querySelector(".message-edit-input");
     textarea.focus();
@@ -1521,6 +1536,11 @@ function startEditMessage(row) {
         if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); confirmEditMessage(messageId); }
     });
 
+}
+
+// Подпись к фото, видео или альбому меняется так же, как текст сообщения (поле text).
+function isCaptionEditable(message) {
+    return !!message && (message.type === "image" || message.type === "video") && !!(message.attachment_url || message.attachment_meta?.album);
 }
 
 function cancelEditMessage(messageId) {
@@ -1535,9 +1555,11 @@ async function confirmEditMessage(messageId) {
     if (currentChatIsSecret) { toast("Редактирование в секретных чатах недоступно"); return; }
 
     const row = document.querySelector(`.message-row[data-message-id="${messageId}"]`);
-    const newText = row?.querySelector(".message-edit-input")?.value.trim();
-    if (!newText) { toast("Текст не может быть пустым"); return; }
-    if (newText.length > MAX_MESSAGE_LENGTH) { toast(`Слишком длинно: максимум ${MAX_MESSAGE_LENGTH} символов`); return; }
+    const newText = row?.querySelector(".message-edit-input")?.value.trim() ?? "";
+    const isCaption = isCaptionEditable(realMessagesById.get(messageId));
+    // Подпись к фото можно и убрать совсем; у обычного сообщения текст обязателен.
+    if (!newText && !isCaption) { toast("Текст не может быть пустым"); return; }
+    if (newText.length > (isCaption ? 1024 : MAX_MESSAGE_LENGTH)) { toast(`Слишком длинно: максимум ${isCaption ? 1024 : MAX_MESSAGE_LENGTH} символов`); return; }
     // Ничего не поменяли — не отправляем запрос и не ставим метку «изменено».
     if (newText === (realMessagesById.get(messageId)?.text || "").trim()) { cancelEditMessage(messageId); return; }
 
@@ -2040,6 +2062,24 @@ function closeForwardPopover() {
     forwardMessageIds = [];
 }
 
+// Копия файла из хранилища в папку другого чата (для пересылки). Не получилось —
+// оставляем исходную ссылку (как раньше).
+async function copyAttachmentToChat(url, targetChatId) {
+    const path = typeof KabanMedia !== "undefined" ? KabanMedia.pathOf(url) : null;
+    if (!path || path.split("/")[0] === targetChatId) return url;
+    try {
+        const name = path.split("/").pop().replace(/^[0-9a-f-]{8,}-/i, "");
+        const dest = `${targetChatId}/${crypto.randomUUID()}-${name || "file"}`;
+        const storage = getSupabaseClient().storage.from("attachments");
+        const { error } = await storage.copy(path, dest);
+        if (error) throw error;
+        return storage.getPublicUrl(dest).data.publicUrl;
+    } catch (error) {
+        console.warn("Не удалось скопировать вложение для пересылки", error);
+        return url;
+    }
+}
+
 async function forwardRealMessage(targetChatId) {
 
     const ids = forwardMessageIds;
@@ -2080,10 +2120,16 @@ async function forwardRealMessage(targetChatId) {
                             : (currentChatMembersById.get(message.sender_id)?.display_name || (currentChatType !== "group" ? currentChatTitle : "") || "Участник");
                         meta.forwarded_from = author;
                     }
+                    // Файлы закрыты по чатам: копируем вложение в папку чата-получателя, иначе
+                    // его участники (не состоящие в исходном чате) не смогли бы его открыть.
+                    const copied = await copyAttachmentToChat(message.attachment_url, targetChatId);
+                    if (Array.isArray(meta.album)) {
+                        meta.album = await Promise.all(meta.album.map(async (item) => ({ ...item, url: await copyAttachmentToChat(item.url, targetChatId) })));
+                    }
                     lastSent = await KabanAPI.sendMessage(targetChatId, {
                         type: message.type,
                         text: message.text,
-                        attachmentUrl: message.attachment_url || null,
+                        attachmentUrl: copied || null,
                         attachmentMeta: meta
                     });
                 }
