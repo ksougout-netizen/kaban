@@ -38,10 +38,58 @@
 
     /* ---- оверлеи на плитках ---- */
 
+    // Свой показ ВСЕГО экрана: живое превью снимало бы само себя («зеркальный коридор»),
+    // поэтому вместо него — заглушка со стоп-кадром (на нём видно, где рисуют зрители).
+    // Окно или вкладку показываем вживую, как раньше. Превью можно включить кнопкой.
+    let selfPreview = false;
+    let lastSnapAt = 0;
+
+    function sharingWholeScreen() {
+        const track = voiceCall?.media?.screenTrack;
+        if (!track) return false;
+        let surface = "";
+        try { surface = track.getSettings?.().displaySurface || ""; } catch { /* ок */ }
+        if (surface) return surface === "monitor";
+        // Неизвестно (бывает в программе для Windows) — смотрим на подпись дорожки.
+        return !/^(window|web-contents-media-stream|tab)[:\s]/i.test(track.label || "");
+    }
+
+    function ensureSelfPlaceholder(o) {
+        let ph = o.tile.querySelector(".sdraw-self");
+        if (!ph) {
+            ph = document.createElement("div");
+            ph.className = "sdraw-self";
+            ph.innerHTML = `<canvas class="sdraw-snap"></canvas><div class="sdraw-self-card"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12.5" rx="2"/><path d="M8.5 20h7M12 16.5V20"/></svg><b title="Зрители видят ваш экран. Живое превью скрыто, чтобы картинка не отражалась сама в себе (как два зеркала друг напротив друга).">Вы показываете весь экран</b><button type="button" class="sdraw-self-show">Показать превью</button></div>`;
+            ph.querySelector(".sdraw-self-show").addEventListener("click", (event) => {
+                event.stopPropagation();
+                selfPreview = true;
+                syncOverlays();
+            });
+            ph.addEventListener("click", (event) => event.stopPropagation());
+            ph.addEventListener("dblclick", (event) => event.stopPropagation());
+            o.tile.insertBefore(ph, o.canvas);
+            setTimeout(() => takeSnapshot(o), 1200);
+        }
+        return ph;
+    }
+
+    // Стоп-кадр своего экрана — подложка, чтобы было понятно, куда показывают зрители.
+    function takeSnapshot(o) {
+        const video = o.tile.querySelector("video");
+        const snap = o.tile.querySelector(".sdraw-snap");
+        if (!video || !snap || video.readyState < 2 || !video.videoWidth) return;
+        lastSnapAt = performance.now();
+        const scale = Math.min(1, 960 / video.videoWidth);
+        snap.width = Math.round(video.videoWidth * scale);
+        snap.height = Math.round(video.videoHeight * scale);
+        try { snap.getContext("2d").drawImage(video, 0, 0, snap.width, snap.height); } catch { /* ок */ }
+    }
+
     function syncOverlays() {
         const grid = document.getElementById("voice-stage-grid");
         if (!grid) return;
         const live = new Set();
+        if (!voiceCall?.media?.screenTrack) selfPreview = false;
         grid.querySelectorAll(".vstage-tile.live").forEach((tile) => {
             const id = tile.dataset.tile;
             live.add(id);
@@ -53,22 +101,34 @@
                 const pen = document.createElement("button");
                 pen.type = "button";
                 pen.className = "sdraw-pen";
-                pen.title = "Рисовать поверх экрана";
-                pen.setAttribute("aria-label", "Рисовать поверх экрана");
-                pen.innerHTML = `<svg viewBox="0 0 24 24"><path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M14.5 6.5l3 3"/></svg>`;
+                pen.title = "Рисовать поверх экрана — увидят все";
+                pen.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M14.5 6.5l3 3"/></svg><span>Рисовать</span>`;
                 pen.addEventListener("click", (event) => { event.stopPropagation(); toggleDrawing(id); });
+                pen.addEventListener("dblclick", (event) => event.stopPropagation());
                 tile.appendChild(pen);
-                o = { canvas, ctx: canvas.getContext("2d"), tile, pen };
+                const hint = document.createElement("div");
+                hint.className = "sdraw-hint";
+                hint.textContent = "Рисуйте мышью — увидят все · Esc — выйти";
+                tile.appendChild(hint);
+                o = { canvas, ctx: canvas.getContext("2d"), tile, pen, hint };
                 overlays.set(id, o);
                 bindPointer(o, id);
             }
-            o.tile.classList.toggle("sdraw-on", drawingTile === id);
+            const self = id === "me:screen";
+            const placeholder = self && !selfPreview && sharingWholeScreen();
+            tile.classList.toggle("sdraw-self-mode", placeholder);
+            if (placeholder) ensureSelfPlaceholder(o);
+            else tile.querySelector(".sdraw-self")?.remove();
+            tile.classList.toggle("sdraw-on", drawingTile === id);
+            o.pen.querySelector("span").textContent = drawingTile === id ? "Готово" : "Рисовать";
         });
         [...overlays.keys()].forEach((id) => {
             if (!live.has(id)) {
                 const o = overlays.get(id);
                 o.canvas.remove();
                 o.pen.remove();
+                o.hint.remove();
+                o.tile.querySelector(".sdraw-self")?.remove();
                 overlays.delete(id);
                 if (drawingTile === id) drawingTile = null;
             }
@@ -78,13 +138,15 @@
 
     function toggleDrawing(id) {
         drawingTile = drawingTile === id ? null : id;
-        overlays.forEach((o, key) => o.tile.classList.toggle("sdraw-on", key === drawingTile));
-        if (drawingTile && !localStorage.getItem("kaban-sdraw-hint")) {
-            try { localStorage.setItem("kaban-sdraw-hint", "1"); } catch { /* ок */ }
-            toast("Рисуйте прямо по экрану — линию увидят все. Почти прямая линия станет стрелкой");
-        }
+        overlays.forEach((o, key) => {
+            o.tile.classList.toggle("sdraw-on", key === drawingTile);
+            o.pen.querySelector("span").textContent = key === drawingTile ? "Готово" : "Рисовать";
+        });
     }
 
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && drawingTile) { event.stopPropagation(); toggleDrawing(drawingTile); }
+    }, true);
     // Где на плитке реально картинка (видео вписано в плитку с полями).
     function videoRect(o) {
         const box = o.tile.getBoundingClientRect();
@@ -166,6 +228,8 @@
             if (strokes.size > 60) return;
             s = { tile: tileIdFor(owner), owner, by: from, name: nameFor(from), color: colorFor(from), pts: [], done: false, endAt: 0, lastAt: performance.now() };
             strokes.set(key, s);
+            const own = overlays.get(s.tile);
+            if (own && s.tile === "me:screen" && performance.now() - lastSnapAt > 2500) takeSnapshot(own);
         }
         payload.pts.slice(0, 400).forEach((p) => {
             if (Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]) && s.pts.length < 1600) {

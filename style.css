@@ -13630,11 +13630,84 @@ body.reduce-motion .call-aura { animation: none; }
 /* ============================================================================
    РИСУНОК ПОВЕРХ ТРАНСЛЯЦИИ (screen-draw.js)
    ========================================================================= */
-.sdraw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.sdraw-canvas { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
+.vstage-tile > .vstage-name, .vstage-tile > .vstage-live, .vstage-tile > .vstage-full { z-index: 2; }
 .vstage-tile.sdraw-on .sdraw-canvas { pointer-events: auto; cursor: crosshair; touch-action: none; }
 .vstage-tile.sdraw-on { outline-color: var(--accent, #0a7cff); }
-.sdraw-pen { position: absolute; right: 40px; top: 6px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: rgba(0,0,0,.5); color: #fff; cursor: pointer; opacity: 0; transition: opacity .15s ease, background .15s ease; }
-.sdraw-pen svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.vstage-tile:hover .sdraw-pen, .vstage-tile.sdraw-on .sdraw-pen { opacity: 1; }
+/* кнопка «Рисовать» — всегда видна, с подписью */
+.sdraw-pen { position: absolute; right: 8px; bottom: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px 0 10px; border: 0; border-radius: 999px; background: rgba(0,0,0,.6); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); color: #fff; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: background .15s ease, transform .15s ease; }
+.sdraw-pen:hover { background: rgba(0,0,0,.78); transform: translateY(-1px); }
+.sdraw-pen svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .vstage-tile.sdraw-on .sdraw-pen { background: var(--accent, #0a7cff); }
-@media (hover: none) { .sdraw-pen { opacity: .85; } }
+.sdraw-hint { position: absolute; left: 50%; top: 10px; z-index: 3; transform: translate(-50%, -6px); padding: 6px 12px; border-radius: 999px; background: rgba(0,0,0,.7); color: #fff; font-size: 12.5px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .2s ease, transform .2s ease; }
+.vstage-tile.sdraw-on .sdraw-hint { opacity: 1; transform: translate(-50%, 0); }
+/* свой показ всего экрана: заглушка со стоп-кадром вместо «зеркального коридора» */
+.vstage-tile.sdraw-self-mode video { visibility: hidden; }
+.sdraw-self { position: absolute; inset: 0; z-index: 0; background: #11141a; }
+.sdraw-snap { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: .5; filter: saturate(.75); }
+.sdraw-self-card { position: absolute; left: 50%; top: 40px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 5px 6px 5px 12px; border-radius: 999px; background: rgba(10,12,16,.78); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); color: #fff; white-space: nowrap; }
+.sdraw-self-card svg { flex: none; width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+.sdraw-self-card b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; font-weight: 600; }
+.sdraw-self-show { flex: none; height: 26px; padding: 0 11px; border: 0; border-radius: 999px; background: rgba(255,255,255,.16); color: #fff; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.sdraw-self-show:hover { background: rgba(255,255,255,.26); }
+.vstage-tile.sdraw-on .sdraw-self-card { opacity: 0; pointer-events: none; }
+
+/* ============================================================================
+   МАТОВОЕ СТЕКЛО: панель чатов (все темы)
+   Под панелью — размытые цветные пятна в тон акцента темы, поверх — полупрозрачная
+   «матовая» заливка с мелким зерном и светлым бликом по краю. Всё статично
+   (рисуется один раз), прокрутку списка не замедляет.
+   ========================================================================= */
+.sidebar {
+    --glass-base: var(--surface);
+    --glass-fill: color-mix(in srgb, var(--text) 6.5%, transparent);
+    --glass-fill-hover: color-mix(in srgb, var(--text) 9%, transparent);
+    position: relative;
+    isolation: isolate;
+    background: transparent !important;
+    border-right-color: color-mix(in srgb, var(--text) 9%, transparent);
+}
+body[data-tint] .sidebar { --glass-base: var(--tint-side, var(--surface)); }
+
+/* цветные пятна за стеклом */
+.sidebar::before {
+    content: "";
+    position: absolute;
+    inset: -20%;
+    z-index: -2;
+    pointer-events: none;
+    background:
+        radial-gradient(44% 28% at 20% 16%, var(--accent), transparent 74%),
+        radial-gradient(46% 32% at 90% 44%, color-mix(in srgb, var(--accent) 50%, #ff6fb1), transparent 74%),
+        radial-gradient(50% 34% at 24% 82%, color-mix(in srgb, var(--accent) 45%, #2fd3c4), transparent 74%),
+        var(--glass-base);
+    filter: blur(46px) saturate(1.25);
+    will-change: transform;
+}
+
+/* матовая заливка + зерно + блик */
+.sidebar::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-color: color-mix(in srgb, var(--glass-base) 56%, transparent);
+    background-image:
+        linear-gradient(160deg, rgba(255,255,255,.10), rgba(255,255,255,0) 32%),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 .09 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    box-shadow: inset -1px 0 0 rgba(255,255,255,.07), inset 0 1px 0 rgba(255,255,255,.10);
+}
+body.dark .sidebar::after { background-color: color-mix(in srgb, var(--glass-base) 60%, transparent); }
+body.dark .sidebar::before { filter: blur(46px) saturate(1.15) brightness(.82); }
+
+/* элементы внутри — тоже стеклянные, чтобы фон просвечивал */
+.sidebar .logo-mark,
+.sidebar #search,
+.sidebar .chat-folder-tab:not(.active),
+.sidebar .chat.active {
+    background-color: var(--glass-fill) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 5%, transparent);
+}
+.sidebar .chat:hover:not(.active) { background-color: color-mix(in srgb, var(--text) 4%, transparent); }
+.sidebar .chat-folder-tab:not(.active):hover { background-color: var(--glass-fill-hover) !important; }
