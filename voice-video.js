@@ -75,7 +75,7 @@ async function voiceStartScreen(presetId) {
     try {
         stream = await navigator.mediaDevices.getDisplayMedia({
             video: { width: { ideal: preset.width }, height: { ideal: preset.height }, frameRate: { ideal: preset.fps, max: preset.fps } },
-            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+            audio: voiceScreenAudioConstraints(),
             systemAudio: "include",
             selfBrowserSurface: "exclude",
             surfaceSwitching: "include"
@@ -91,11 +91,43 @@ async function voiceStartScreen(presetId) {
     video.addEventListener("ended", () => { if (call.media?.screenTrack === video) voiceStopScreen(call); });
     call.media.screenTrack = video;
     call.media.screenAudioTrack = stream.getAudioTracks()[0] || null;
+    voiceScreenAudioCheck(call.media.screenAudioTrack, true);
     call.media.screenPreset = preset;
     voiceStageFocus = "me:screen";
     voiceStageMinimized = false;
     voiceMediaChanged(call);
     voiceSound("unmute");
+}
+
+// Звук трансляции без эха. «Звук компьютера» — это весь звук Windows, и в нём же
+// голоса комнаты и музыка, которые играет сам KABAN: раньше они уходили зрителям
+// обратно, и те слышали себя с задержкой (эхо). restrictOwnAudio исключает из захвата
+// звук самого приложения (Chrome/Electron берут «звук системы без KABAN»), а звук
+// игры, видео в другом окне и т. п. остаётся.
+function voiceScreenAudioConstraints() {
+    const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 };
+    try { if (navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio) audio.restrictOwnAudio = true; } catch { /* старый браузер */ }
+    return audio;
+}
+
+// После начала трансляции: если звук захвачен, но исключить свой звук браузер не смог —
+// предупредить (иначе у зрителей будет эхо), а при открытом микрофоне — подсказать про наушники.
+function voiceScreenAudioCheck(track, inVoiceRoom) {
+    if (!track) return;
+    let restricted = false;
+    try { restricted = track.getSettings?.().restrictOwnAudio === true; } catch { /* ок */ }
+    const surface = (() => { try { return track.getSettings?.().displaySurface || ""; } catch { return ""; } })();
+    if (!restricted && inVoiceRoom && surface !== "browser") {
+        try { track.applyConstraints({ restrictOwnAudio: true }).catch(() => {}); } catch { /* не поддерживается */ }
+        toast("Звук компьютера включает голоса комнаты — у зрителей может быть эхо. Обновите браузер или показывайте вкладку/окно");
+        return;
+    }
+    try {
+        if (!localStorage.getItem("kaban-screen-audio-tip")) {
+            localStorage.setItem("kaban-screen-audio-tip", "1");
+            toast("Совет: при трансляции со звуком лучше в наушниках — иначе микрофон повторяет звук игры");
+        }
+    } catch { /* ок */ }
 }
 
 function voiceStopScreen(call) {

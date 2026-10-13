@@ -677,8 +677,25 @@ const ALBUM_ROWS = { 2: [2], 3: [1, 2], 4: [2, 2], 5: [2, 3], 6: [3, 3], 7: [2, 
 function albumPhotos(message) {
     const album = message.attachment_meta?.album;
     if (message.type !== "image" || !Array.isArray(album)) return null;
-    const photos = album.filter((item) => item && typeof item.url === "string" && item.url).slice(0, 10);
+    const photos = album.filter((item) => item && typeof item.url === "string" && safeMediaUrl(item.url)).slice(0, 10);
     return photos.length > 1 ? photos : null;
+}
+
+// Фото не загрузилось (файл удалён: истёк срок, стёрли из хранилища) — вместо значка
+// «битой картинки» с именем файла показываем аккуратную плашку того же размера.
+document.getElementById("messages")?.addEventListener("error", (event) => {
+    const img = event.target;
+    if (!(img instanceof HTMLImageElement) || !img.classList.contains("message-image")) return;
+    const stub = document.createElement("div");
+    stub.className = img.className.replace("message-image", "message-image-missing");
+    stub.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m20.5 15-4.5-4.5L5 19.5M3 3l18 18"/></svg><span>Фото недоступно</span>`;
+    img.replaceWith(stub);
+}, true);
+
+// Только безопасные схемы ссылок для src/href вложений (см. buildAttachmentHTML).
+function safeMediaUrl(raw) {
+    const url = typeof raw === "string" ? raw.trim() : "";
+    return /^(https?:\/\/|blob:|data:image\/)/i.test(url) ? url : "";
 }
 
 function buildAlbumHTML(photos) {
@@ -694,7 +711,10 @@ function buildAlbumHTML(photos) {
 
 function buildAttachmentHTML(message) {
 
-    const url = message.attachment_url;
+    // Ссылку на вложение задаёт клиент отправителя: подделанный клиент мог вписать
+    // "javascript:…" — и карточка файла выполняла бы код у того, кто на неё нажал.
+    // Пропускаем только http(s)/blob/data:image, остальное — как «нет вложения».
+    const url = safeMediaUrl(message.attachment_url);
     const meta = message.attachment_meta || {};
 
     if (message.type === "call") return buildCallLogHTML(message);
@@ -741,7 +761,10 @@ function buildAttachmentHTML(message) {
     if (!url) return "📎 Вложение";
 
     if (message.type === "image") {
-        return `<img class="message-image" src="${escapeHTML(url)}" alt="${escapeHTML(meta.name || "Фото")}" loading="lazy" onclick="openImageGallery(this)">`;
+        // Размеры из метаданных — место под фото занято сразу, лента не прыгает при загрузке.
+        const w = Number(meta.w), h = Number(meta.h);
+        const ratio = w > 0 && h > 0 && w < 20000 && h < 20000 ? ` style="aspect-ratio:${Math.round(w)} / ${Math.round(h)}"` : "";
+        return `<img class="message-image" src="${escapeHTML(url)}" alt="${escapeHTML(meta.name || "Фото")}" loading="lazy"${ratio} onclick="openImageGallery(this)">`;
     }
 
     if (message.type === "video") {

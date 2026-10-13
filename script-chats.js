@@ -1688,7 +1688,7 @@ function renderCallHistory() {
         return `
             <div class="call-history-row">
                 <button class="call-history-main" type="button" onclick="openCallHistoryChat('${escapeHTML(call.remoteUserId || "")}')">
-                    <span class="call-history-avatar">${call.avatarUrl ? `<img src="${escapeHTML(call.avatarUrl)}" alt="">` : "👤"}</span>
+                    ${(() => { const a = avatarParts({ id: call.remoteUserId, name: call.name || "?", url: call.avatarUrl }); return `<span class="call-history-avatar${a.cls}"${a.style}>${a.inner}</span>`; })()}
                     <span class="call-history-copy">
                         <span class="call-history-name">${escapeHTML(call.name || "Собеседник")}</span>
                         <span class="call-history-meta${call.result === "missed" ? " missed" : ""}">${direction} · ${callKind}${outcome}${time ? ` · ${time}` : ""}</span>
@@ -3489,6 +3489,16 @@ async function openRealChat(chatId) {
 
         onTyping: (userId) => {
             if (userId === myRealUserId) return;
+            // Поток «печатает» от одного и того же (хоть сотни событий в секунду от
+            // изменённого клиента) — шапку перерисовываем не чаще раза в секунду,
+            // в остальное время только продлеваем таймер скрытия.
+            const nowTs = Date.now();
+            if (typingLastShown.userId === userId && nowTs - typingLastShown.at < 1000 && typingClearTimer) {
+                clearTimeout(typingClearTimer);
+                typingClearTimer = setTimeout(clearTypingIndicator, 3000);
+                return;
+            }
+            typingLastShown = { userId, at: nowTs };
 
             if (currentChatType === "group") {
                 if (!currentChatMembersById.has(userId)) return;
@@ -3707,6 +3717,8 @@ document.getElementById("messages")?.addEventListener("click", (event) => {
     event.stopPropagation();
     flashMessage(quote.dataset.replyTo);
 });
+
+let typingLastShown = { userId: null, at: 0 };
 
 function appendRealMessageRow(message, isMine, { prepend = false } = {}) {
 
@@ -3935,7 +3947,14 @@ async function loadOlderMessages() {
         // остаться ровно на том же месте экрана. Прежний расчёт через scrollHeight
         // не учитывал высоту удаляемого «Загружаем историю…» и новые разделители
         // дат — лента прыгала на пару десятков пикселей при каждой подгрузке.
-        const anchorRow = messagesContainer.querySelector(".message-row");
+        // Первая ВИДИМАЯ строка (не просто первая в разметке: та бывает скрытой — например,
+        // истёкшее исчезающее сообщение с display:none, — и тогда поправка выходила
+        // неверной: после подгрузки лента уезжала на экран-другой, место чтения терялось).
+        const containerTop = messagesContainer.getBoundingClientRect().top;
+        const anchorRow = [...messagesContainer.querySelectorAll(".message-row")].find((row) => {
+            const box = row.getBoundingClientRect();
+            return box.height > 0 && box.bottom > containerTop;
+        }) || null;
         const anchorTop = anchorRow ? anchorRow.getBoundingClientRect().top : 0;
 
         spinner.remove();
@@ -3962,12 +3981,42 @@ async function loadOlderMessages() {
         updateMessageGrouping();
         if (anchorRow?.isConnected) {
             messagesContainer.scrollTop += anchorRow.getBoundingClientRect().top - anchorTop;
+            holdScrollAnchor(messagesContainer, anchorRow);
         }
 
     } finally {
         isLoadingOlderMessages = false;
     }
 
+}
+
+// Удержание места чтения после подгрузки истории: в только что вставленных сообщениях
+// ещё 1–3 с догружаются картинки, превью ссылок, анимированные эмодзи — всё это растёт
+// ВЫШЕ того, что человек читает, и лента уезжала вниз на экран-другой (встроенная
+// стабилизация прокрутки браузера в этой ленте не срабатывала). Пока идёт догрузка,
+// любое изменение высоты сразу компенсируем сдвигом прокрутки — до отрисовки кадра,
+// поэтому глазом скачка не видно. Свою прокрутку человека не трогаем.
+function holdScrollAnchor(container, anchorRow, ms = 3000) {
+    if (typeof ResizeObserver !== "function") return;
+    container._anchorHold?.stop();
+    let lastTop = anchorRow.getBoundingClientRect().top;
+    let lastScroll = container.scrollTop;
+    const observer = new ResizeObserver(() => {
+        if (!anchorRow.isConnected) { stop(); return; }
+        // Человек сам прокрутил ленту — дальше не вмешиваемся.
+        if (Math.abs(container.scrollTop - lastScroll) > 2) { stop(); return; }
+        const top = anchorRow.getBoundingClientRect().top;
+        const shift = top - lastTop;
+        if (Math.abs(shift) >= 1) container.scrollTop += shift;
+        lastTop = anchorRow.getBoundingClientRect().top;
+        lastScroll = container.scrollTop;
+    });
+    const stop = () => { observer.disconnect(); clearTimeout(timer); if (container._anchorHold === hold) container._anchorHold = null; };
+    const hold = { stop };
+    container._anchorHold = hold;
+    // Следим за всеми строками выше якоря (растут именно они).
+    for (let row = anchorRow.previousElementSibling; row; row = row.previousElementSibling) observer.observe(row);
+    const timer = setTimeout(stop, ms);
 }
 
 // Быстрый переход к самому первому сообщению чата — дотягивает всю более
@@ -4007,7 +4056,25 @@ async function jumpToChatBeginning() {
 
 }
 
+// Понятная причина ошибки отправки вместо технического текста сервера: раньше, если
+// собеседник ограничил сообщения (или в группе нет права писать), человек видел
+// «new row violates row-level security policy for table "messages"».
+function sendErrorText(error) {
+    const message = String(error?.message || error || "");
+    if (error?.code === "42501" || /row-level security/i.test(message)) {
+        return currentChatType === "group" ? "в этой группе у вас нет права отправлять такие сообщения" : "собеседник ограничил вам отправку сообщений";
+    }
+    if (/Failed to fetch|NetworkError|Load failed|network/i.test(message)) return "нет связи с сервером";
+    if (error?.code === "54000" || /too many messages/i.test(message)) return "слишком много сообщений подряд — подождите несколько секунд";
+    if (/attachment metadata too large|invalid attachment url/i.test(message)) return "вложение отклонено сервером";
+    return message;
+}
+
 async function sendRealMessage(text) {
+
+    // Чат ещё не открылся (или уже закрыт) — отправлять некуда; текст остаётся в поле.
+    // Раньше сообщение уходило с пустым chat_id и сервер отвечал непонятной ошибкой.
+    if (!currentChatId) { toast("Чат ещё открывается — попробуйте через секунду"); return; }
 
     // Снимок чата на момент отправки — если пользователь успеет переключиться
     // в другой чат, пока await ниже в полёте (медленная сеть), сообщение не
@@ -4098,7 +4165,7 @@ async function sendRealMessage(text) {
             return;
         }
         if (outbox) outbox.finishSending(clientId);
-        toast("Не удалось отправить сообщение: " + (error?.message || error));
+        toast("Не удалось отправить сообщение: " + sendErrorText(error));
         if (currentChatId === targetChatId && !input.value) input.value = text;
         return;
     }
@@ -4240,6 +4307,7 @@ async function sendRealAttachment(file, type, options = {}) {
 
     // Подпись к фото/видео (из редактора): уходит в text сообщения, показывается под вложением.
     const caption = (type === "image" || type === "video") ? String(options?.caption || "").trim().slice(0, 1024) : "";
+    const dims = type === "image" ? await imageFileDims(file) : null;
 
     let message;
     try {
@@ -4247,11 +4315,11 @@ async function sendRealAttachment(file, type, options = {}) {
             type,
             ...(caption ? { text: caption } : {}),
             attachmentUrl: url,
-            attachmentMeta: { name: file.name, size: file.size, mime: file.type },
+            attachmentMeta: { name: file.name, size: file.size, mime: file.type, ...(dims || {}) },
             replyToId
         }), "файл");
     } catch (error) {
-        toast("Не удалось отправить файл: " + (error?.message || error));
+        toast("Не удалось отправить файл: " + sendErrorText(error));
         return;
     }
 
@@ -4270,6 +4338,20 @@ async function sendRealAttachment(file, type, options = {}) {
 // АЛЬБОМ: несколько фото одним сообщением с общей подписью. Одно сообщение (type "image"):
 // attachment_url — первое фото (старые клиенты увидят хотя бы его), все фото — в
 // attachment_meta.album = [{ url, name, size, mime }]. Максимум — как в редакторе (10).
+// Ширина и высота фото — в метаданные сообщения: по ним лента заранее оставляет под
+// картинку место нужной формы. Без этого при прокрутке вверх каждое догружающееся
+// фото раздвигало ленту (0 → 320 px), и переписка «прыгала» под пальцем.
+async function imageFileDims(file) {
+    try {
+        const bitmap = await createImageBitmap(file);
+        const dims = { w: bitmap.width, h: bitmap.height };
+        bitmap.close?.();
+        return dims.w > 0 && dims.h > 0 ? dims : null;
+    } catch {
+        return null;
+    }
+}
+
 async function sendRealAlbum(files, options = {}) {
 
     const targetChatId = currentChatId;
@@ -4302,6 +4384,7 @@ async function sendRealAlbum(files, options = {}) {
     }
 
     const caption = String(options?.caption || "").trim().slice(0, 1024);
+    const dimsList = await Promise.all(list.map(imageFileDims));
     toast(`Загружаем ${list.length} фото…`);
 
     let message;
@@ -4314,12 +4397,12 @@ async function sendRealAlbum(files, options = {}) {
                 name: list[0].name,
                 size: list.reduce((sum, file) => sum + file.size, 0),
                 mime: list[0].type,
-                album: urls.map((url, i) => ({ url, name: list[i].name, size: list[i].size, mime: list[i].type }))
+                album: urls.map((url, i) => ({ url, name: list[i].name, size: list[i].size, mime: list[i].type, ...(dimsList[i] || {}) }))
             },
             replyToId
         }));
     } catch (error) {
-        toast("Не удалось отправить альбом: " + (error?.message || error));
+        toast("Не удалось отправить альбом: " + sendErrorText(error));
         return;
     }
 
@@ -4468,7 +4551,7 @@ async function sendRealRecording(blob, mode, duration, targetChatId = currentCha
             replyToId
         }), type === "voice" ? "голосовое" : "запись");
     } catch (error) {
-        toast("Не удалось отправить запись: " + (error?.message || error));
+        toast("Не удалось отправить запись: " + sendErrorText(error));
         return;
     }
 

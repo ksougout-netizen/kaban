@@ -66,11 +66,46 @@ function voiceEnsureCtx() {
         if (voiceCtx.setSinkId && voiceSettings.outputId) voiceCtx.setSinkId(voiceSettings.outputId).catch(() => {});
         // Для журнала программы: звук комнаты «встал» (устройство вывода пропало и т. п.).
         const ctx = voiceCtx;
-        ctx.addEventListener?.("statechange", () => { if (ctx.state !== "running") console.error("[sfx] звуковой контекст: " + ctx.state); });
+        ctx.addEventListener?.("statechange", () => {
+            if (ctx.state === "running" || ctx.state === "closed") return;
+            console.error("[sfx] звуковой контекст: " + ctx.state);
+            // Windows остановил звук (смена устройства, Bluetooth, другое приложение взяло
+            // звук монопольно) — раньше комната молча замолкала до перезахода. Поднимаем сами.
+            voiceResumeCtxSoon(ctx);
+        });
     }
     if (voiceCtx.state === "suspended") voiceCtx.resume().catch(() => {});
     return voiceCtx;
 }
+
+function voiceResumeCtxSoon(ctx, attempt = 0) {
+    if (ctx.state === "running" || ctx.state === "closed" || attempt > 20) return;
+    const inUse = (typeof voiceCall !== "undefined" && voiceCall) || (typeof activeCall !== "undefined" && activeCall);
+    if (!inUse) return;
+    ctx.resume().catch(() => {}).finally(() => {
+        if (ctx.state !== "running") setTimeout(() => voiceResumeCtxSoon(ctx, attempt + 1), 1000);
+    });
+}
+// Без жеста пользователя браузер может не дать возобновить звук — тогда первым же нажатием.
+document.addEventListener("pointerdown", () => { if (voiceCtx && voiceCtx.state === "suspended") voiceCtx.resume().catch(() => {}); }, true);
+
+// Устройство вывода из настроек пропало (выключили наушники) — играем в системное,
+// иначе звук комнаты шёл в никуда.
+navigator.mediaDevices?.addEventListener?.("devicechange", async () => {
+    if (!voiceSettings.outputId || !voiceCtx?.setSinkId) return;
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const present = devices.some((d) => d.kind === "audiooutput" && d.deviceId === voiceSettings.outputId);
+        if (!present && voiceCtx.sinkId !== "") {
+            await voiceCtx.setSinkId("");
+            if (typeof listenAudio !== "undefined" && listenAudio.setSinkId) listenAudio.setSinkId("").catch(() => {});
+            if (voiceCall) toast("Устройство вывода отключено — звук идёт на устройство по умолчанию");
+        } else if (present && voiceCtx.sinkId !== voiceSettings.outputId) {
+            await voiceCtx.setSinkId(voiceSettings.outputId);
+            if (typeof listenApplySink === "function") listenApplySink();
+        }
+    } catch { /* ок */ }
+});
 
 // Короткие «сигналы» как в Discord: вход, выход, mute, unmute — синтезируются, файлов нет.
 function voiceSound(kind) {
@@ -118,13 +153,18 @@ function voiceHubAcquire(chatId, roomId, { onSig, onPresence } = {}) {
         // камера, экран, музыка): приходит обычными сообщениями канала. Частые
         // обновления присутствия Supabase не выдерживает — после нескольких
         // подряд закрывает канал, и человек «пропадал» из комнаты у остальных.
-        hub = { api: null, raw: {}, states: {}, members: {}, sigListeners: new Set(), presenceListeners: new Set(), refs: 0, pending: [], identity: null, retry: 0 };
+        hub = { api: null, raw: {}, states: {}, byes: {}, members: {}, sigListeners: new Set(), presenceListeners: new Set(), refs: 0, pending: [], identity: null, retry: 0 };
         voiceHubs.set(key, hub);
 
         const emit = () => {
             Object.keys(hub.states).forEach((id) => { if (!hub.raw[id]) delete hub.states[id]; });
             const merged = {};
-            Object.entries(hub.raw).forEach(([id, meta]) => { merged[id] = { ...meta, ...(hub.states[id] || {}) }; });
+            Object.entries(hub.raw).forEach(([id, meta]) => {
+                // Попрощался (вышел из комнаты) — не показываем, пока сервер не догонит
+                // (присутствие на сервере обновляется с задержкой до нескольких секунд).
+                if (hub.byes[id] && (meta.joinedAt || 0) <= hub.byes[id]) return;
+                merged[id] = { ...meta, ...(hub.states[id] || {}) };
+            });
             hub.members = merged;
             hub.presenceListeners.forEach((fn) => fn(merged));
         };
@@ -132,6 +172,11 @@ function voiceHubAcquire(chatId, roomId, { onSig, onPresence } = {}) {
 
         const open = () => KabanAPI.openVoiceChannel(chatId, roomId, {
             onSig: (payload) => {
+                if (payload?.type === "bye" && payload.from) {
+                    hub.byes[payload.from] = Number(payload.epoch) || Date.now();
+                    if (hub.raw[payload.from]) emit();
+                    return;
+                }
                 if (payload?.type === "state" && payload.from && payload.state && typeof payload.state === "object") {
                     const s = payload.state;
                     hub.states[payload.from] = { muted: !!s.muted, deafened: !!s.deafened, cam: !!s.cam, screen: !!s.screen, music: typeof s.music === "string" ? s.music.slice(0, 120) : null };
@@ -355,8 +400,15 @@ async function voiceStartLocalAudio(call) {
     local.gate = ctx.createGain();
     local.muteGain = ctx.createGain();
     local.dest = ctx.createMediaStreamDestination();
+    // Ограничитель после усиления (как в звонках 1:1): громкость микрофона до 200% и
+    // выравнивание раньше доводили пики до 0 дБ — у остальных голос хрипел.
+    local.limiter = ctx.createDynamicsCompressor();
+    local.limiter.threshold.value = -6; local.limiter.knee.value = 0; local.limiter.ratio.value = 20;
+    local.limiter.attack.value = 0.0005; local.limiter.release.value = 0.08;
+    local.trim = ctx.createGain();
+    local.trim.gain.value = 0.675;   // снимаем встроенное усиление компрессора-ограничителя
     local.inputGain.connect(local.analyser);
-    local.inputGain.connect(local.gate).connect(local.muteGain).connect(local.dest);
+    local.inputGain.connect(local.limiter).connect(local.trim).connect(local.gate).connect(local.muteGain).connect(local.dest);
     local.sendStream = local.dest.stream;
     local.sendTrack = local.dest.stream.getAudioTracks()[0];
 
@@ -403,6 +455,14 @@ async function voiceAttachMic(local) {
     local.src?.disconnect();
     local.micStream?.getTracks().forEach((track) => track.stop());
     local.micStream = stream;
+    // Устройство пропало посреди разговора (выдернули гарнитуру, отключился Bluetooth) —
+    // раньше микрофон молча замолкал до перезахода в комнату.
+    stream.getAudioTracks()[0]?.addEventListener("ended", () => {
+        if (local.micStream !== stream || !voiceCall || voiceCall.local !== local) return;
+        voiceAttachMic(local)
+            .then(() => toast("Микрофон отключился — переключились на другой"))
+            .catch(() => { voiceCall.noMic = true; voiceCall.muted = true; voiceApplyMicState(); voicePushMeta(); voiceRefreshUi(); toast("Микрофон отключился"); });
+    });
     local.src = local.ctx.createMediaStreamSource(stream);
     // «Автогромкость» в настройках — своё выравнивание (то же, что в звонках 1:1):
     // срез гула → мягкий компрессор с компенсирующим усилением.
@@ -515,6 +575,8 @@ async function voiceLeave(silent) {
         delete call.handle.hub.states[myRealUserId];
     }
     clearTimeout(voiceMetaTimer);
+    // «Пока» — остальные сразу убирают нас из комнаты, не дожидаясь сервера.
+    voiceSend(call, { type: "bye", to: "*" });
     call.handle?.run((api) => api.untrack());
     call.handle?.release();
     voiceCall = null;
@@ -539,8 +601,17 @@ function voiceOnRoomPresence(members) {
     call.members = members;
     if (newcomer) setTimeout(() => { if (voiceCall === call) voicePushMeta(); }, 0);
 
-    // Те, кто пропал, — закрываем соединение.
-    call.peers.forEach((peer, userId) => { if (!members[userId]) voiceClosePeer(call, userId); });
+    // Те, кто пропал, — закрываем соединение. Но не сразу, если звук с ним идёт: короткий
+    // обрыв канала присутствия (переподключение к серверу, сон ноутбука на секунду) раньше
+    // рвал рабочий голос — человек «выпадал» и заново соединялся несколько секунд.
+    // Даём 10 с; если он правда вышел, его соединение и так затухнет (см. voiceWatchPeers).
+    const now = Date.now();
+    call.peers.forEach((peer, userId) => {
+        if (members[userId]) { peer.goneSince = 0; return; }
+        const saidBye = (call.handle?.hub.byes[userId] || 0) >= (peer.epoch || 0) && !!call.handle?.hub.byes[userId];
+        if (saidBye || peer.pc.connectionState !== "connected") { voiceClosePeer(call, userId); return; }
+        if (!peer.goneSince) peer.goneSince = now;
+    });
 
     // Для вошедших раньше нас инициатор — мы (кто позже, тот и звонит).
     Object.entries(members).forEach(([userId, meta]) => {
@@ -654,7 +725,7 @@ function voiceSfxDuckMusic(ms) {
     voiceSfxDuckMusic.timer = setTimeout(() => {
         voiceSfxDuckMusic.timer = null;
         const othersSpeaking = !!voiceCall && [...(voiceCall.speaking || [])].some((id) => id !== myRealUserId);
-        if (!othersSpeaking) listenDuck(false);
+        if (!othersSpeaking) { listenDuck(false); if (voiceCall) voiceCall.musicDucked = false; }
     }, Math.min(Math.max(ms, 600), 20000));
 }
 
@@ -1144,6 +1215,11 @@ function voiceRebuildPeer(call, peer) {
 function voiceWatchPeers(call) {
     const now = Date.now();
     for (const peer of [...call.peers.values()]) {
+        // Пропал из присутствия больше 10 с назад (или соединение уже не живое) — закрываем.
+        if (peer.goneSince && !call.members[peer.userId] && (now - peer.goneSince > 10000 || peer.pc.connectionState !== "connected")) {
+            voiceClosePeer(call, peer.userId);
+            continue;
+        }
         const st = peer.pc.connectionState;
         if (st === "connected" || st === "closed") { peer.stuckRestarts = 0; continue; }
         // Отсчёт — от последнего согласования или от момента, когда связь пропала
@@ -1191,8 +1267,11 @@ async function voiceHandleSig(payload) {
 
     if (payload.type === "offer") {
         if (!voiceOnlyMembers(call.chatId, { [from]: 1 })[from]) return;   // не участник группы
-        // Новый вход того же человека (другая эпоха) — старое соединение заменяем.
-        if (peer && payload.epoch !== peer.epoch && !peer.initiator) { voiceClosePeer(call, from); peer = null; }
+        // Новый вход того же человека (другая эпоха) — старое соединение заменяем. Раньше —
+        // только если инициатором были не мы: если человек быстро перезашёл (и теперь звонит
+        // он), его предложение попадало в наше старое соединение, ломалось, и голоса не было,
+        // пока сторож не пересоздавал всё через 8+ с.
+        if (peer && payload.epoch && peer.epoch && payload.epoch !== peer.epoch) { voiceClosePeer(call, from); peer = null; }
         // Собеседник пересоздал соединение (обрыв канала, переподключение) — новое
         // предложение к старому соединению не подойдёт (другие ключи), заводим новое.
         if (peer && !peer.initiator && payload.sid && peer.remoteSid && payload.sid !== peer.remoteSid) { voiceClosePeer(call, from); peer = null; }
@@ -1414,11 +1493,19 @@ function voiceTick() {
     call.speaking = speaking;
     if (changed) {
         voiceApplySpeakingClasses();
-        // Кто-то (кроме меня) говорит — музыка комнаты плавно тише, замолчали — громче.
-        if (typeof listenDuck === "function" && voiceSettings.musicDuck !== false && listenRoom?.voiceRoomId === call.roomId) {
-            // Пока играет звук саундборда, приглушение не снимаем (см. voiceSfxDuckMusic).
-            const someoneSpeaks = [...speaking].some((id) => id !== myRealUserId);
-            if (someoneSpeaks || !voiceSfxDuckMusic.timer) listenDuck(someoneSpeaks);
+    }
+
+    // Кто-то (кроме меня) говорит — музыка комнаты плавно тише. Возвращается она не сразу,
+    // а через 1,2 с тишины: раньше громкость прыгала вверх в каждой паузе между словами
+    // («качели»), и речь было трудно разобрать.
+    if (typeof listenDuck === "function" && voiceSettings.musicDuck !== false && listenRoom?.voiceRoomId === call.roomId) {
+        const someoneSpeaks = [...speaking].some((id) => id !== myRealUserId);
+        if (someoneSpeaks) call.lastOthersSpeechAt = now;
+        const ducked = someoneSpeaks || now - (call.lastOthersSpeechAt || -1e9) < 1200;
+        // Пока играет звук саундборда, приглушение не снимаем (см. voiceSfxDuckMusic).
+        if (ducked !== call.musicDucked && (ducked || !voiceSfxDuckMusic.timer)) {
+            call.musicDucked = ducked;
+            listenDuck(ducked);
         }
     }
 
@@ -1509,6 +1596,7 @@ function voiceChangeOutputDevice(deviceId) {
     saveVoiceSettings();
     if (voiceCtx?.setSinkId) voiceCtx.setSinkId(deviceId || "").catch(() => toast("Не удалось переключить устройство вывода"));
     else toast("Этот браузер не умеет выбирать устройство вывода — звук идёт на устройство по умолчанию");
+    if (typeof listenApplySink === "function") listenApplySink();
 }
 
 function voiceSetInputVolume(value) {
@@ -1963,6 +2051,9 @@ async function openVoiceSettings() {
     backdrop.classList.add("open");
     backdrop.setAttribute("aria-hidden", "false");
 
+    // Переключатели и режим — сразу: раньше окно ждало список устройств и всё это
+    // время показывало эхо- и шумоподавление «выключенными», хотя они включены.
+    voiceRenderSettings();
     await voiceFillDevices();
     voiceRenderSettings();
 
@@ -1970,7 +2061,7 @@ async function openVoiceSettings() {
     if (!voiceCall) {
         try {
             const ctx = voiceEnsureCtx();
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: voiceSettings.inputId ? { exact: voiceSettings.inputId } : undefined, echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noise, autoGainControl: voiceSettings.agc } });
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: voiceSettings.inputId ? { exact: voiceSettings.inputId } : undefined, echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noise, autoGainControl: false } });
             const analyser = ctx.createAnalyser();
             analyser.fftSize = 1024;
             const src = ctx.createMediaStreamSource(stream);

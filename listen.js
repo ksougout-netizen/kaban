@@ -64,6 +64,7 @@ let listenSeeking = false;
 
 const listenAudio = new Audio();
 listenAudio.preload = "auto";
+listenAudio.preservesPitch = true;   // подгонка скоростью (listenTick) не меняет тон
 let listenYt = null;
 let listenYtReady = null;
 
@@ -200,6 +201,7 @@ async function listenReconcile(force) {
         } else {
             listenYt?.pauseVideo?.();
             document.getElementById("listen-yt-wrap").hidden = true;
+            room.alignedTrackId = null;
             listenAudio.src = track.src;
             listenAudio.currentTime = target;
         }
@@ -215,10 +217,22 @@ async function listenReconcile(force) {
 function listenOnTrackEnded() {
     const room = listenRoom;
     if (!room) return;
-    room.handle.run((api) => api.send({ type: "ended", index: room.state.index, at: Date.now(), sentAt: Date.now() }));
+    room.handle.run((api) => api.send({ type: "ended", index: room.state.index, at: Date.now(), sentAt: Date.now(), from: myRealUserId }));
 }
 
 listenAudio.addEventListener("ended", () => listenOnTrackEnded());
+// Трек начал звучать после загрузки — он уже отстаёт на время загрузки (обычно ~1 с).
+// Один раз сразу догоняем перемоткой (в первые мгновения её не слышно), дальше
+// мелкие расхождения выравнивает скорость (listenTick).
+listenAudio.addEventListener("playing", () => {
+    const room = listenRoom;
+    const track = listenCurrentTrack();
+    if (!room || !track || track.kind === "youtube" || room.alignedTrackId === track.id || room.loadedTrackId !== track.id) return;
+    room.alignedTrackId = track.id;
+    if (!room.state.playing) return;
+    const drift = listenAudio.currentTime - listenTargetTime();
+    if (Math.abs(drift) > 0.25) { try { listenAudio.currentTime = Math.max(0, listenTargetTime() + 0.05); } catch { /* ок */ } }
+});
 listenAudio.addEventListener("error", () => { if (listenRoom && listenCurrentTrack()?.kind === "audio") toast("Не удалось воспроизвести этот трек"); });
 
 /* ---- события канала ------------------------------------------------------------------------------ */
@@ -229,24 +243,64 @@ listenAudio.addEventListener("error", () => { if (listenRoom && listenCurrentTra
 // расхождения часов, подгонка этого не исправляла. Теперь каждое сообщение несёт
 // sentAt — время отправки по часам отправителя, и все отметки переводятся в свои
 // часы: остаётся только задержка сети (~0,1 с). У старых версий sentAt нет — как раньше.
-function listenLocalTime(remoteTime, sentAt) {
-    if (typeof remoteTime !== "number" || typeof sentAt !== "number") return remoteTime;
-    return remoteTime + (Date.now() - sentAt);
+//
+// Но «сейчас минус sentAt» — это расхождение часов ПЛЮС время доставки (0,05–0,3 с,
+// каждый раз разное): получивший команду звучал позже нажавшего на эту величину.
+// Поэтому — как в NTP: для каждого собеседника помним самую быструю доставку в обе
+// стороны (свою — по его сообщениям, его — он присылает в «пингах» раз в 4 с).
+// Расхождение часов = (моя − его) / 2: время доставки в этой разнице сокращается.
+const listenClockOffset = new Map();   // userId → min(моё «сейчас» − его sentAt), мс
+const listenPeerSeen = new Map();      // userId → то же, но измеренное им по моим сообщениям
+
+function listenEffectiveOffset(from) {
+    const mine = listenClockOffset.get(from);
+    if (mine === undefined) return undefined;
+    const his = listenPeerSeen.get(from);
+    return his === undefined ? mine : (mine - his) / 2;
 }
 
-function listenLocalizeState(state, sentAt) {
+function listenNoteClock(payload) {
+    if (!payload || typeof payload.sentAt !== "number" || !payload.from || payload.from === myRealUserId) return;
+    const before = listenEffectiveOffset(payload.from);
+    const offset = Date.now() - payload.sentAt;
+    const known = listenClockOffset.get(payload.from);
+    if (known === undefined || offset < known) listenClockOffset.set(payload.from, offset);
+    const seen = payload.seen && typeof payload.seen[myRealUserId] === "number" ? payload.seen[myRealUserId] : undefined;
+    if (seen !== undefined) listenPeerSeen.set(payload.from, seen);
+    const after = listenEffectiveOffset(payload.from);
+    // Текущее состояние пришло от него с худшей оценкой — уточняем (плеер догонит скоростью).
+    const room = listenRoom;
+    if (room && room.stateFrom === payload.from && typeof room.stateOffsetUsed === "number" && after !== undefined && after !== before && Math.abs(after - room.stateOffsetUsed) > 15) {
+        room.state = { ...room.state, at: room.state.at + (after - room.stateOffsetUsed) };
+        room.stateOffsetUsed = after;
+    }
+}
+
+function listenLocalTime(remoteTime, sentAt, from) {
+    if (typeof remoteTime !== "number" || typeof sentAt !== "number") return remoteTime;
+    const offset = from ? listenEffectiveOffset(from) : undefined;
+    return remoteTime + (offset !== undefined ? offset : Date.now() - sentAt);
+}
+
+function listenPing(room) {
+    room.handle.run((api) => api.send({ type: "lping", from: myRealUserId, sentAt: Date.now(), seen: Object.fromEntries(listenClockOffset) }));
+}
+function listenLocalizeState(state, sentAt, from) {
     if (typeof sentAt !== "number" || typeof state.at !== "number") return state;
-    return { ...state, at: listenLocalTime(state.at, sentAt) };
+    return { ...state, at: listenLocalTime(state.at, sentAt, from) };
 }
 
 function listenHandleEvent(payload) {
 
     const room = listenRoom;
     if (!room || !payload) return;
+    listenNoteClock(payload);
 
     if (payload.type === "state" && payload.state) {
-        const next = listenLocalizeState(payload.state, payload.sentAt);
+        const next = listenLocalizeState(payload.state, payload.sentAt, payload.from);
         if (next.rev <= room.state.rev) return;
+        room.stateFrom = payload.from || null;
+        room.stateOffsetUsed = typeof payload.sentAt === "number" && typeof payload.state.at === "number" ? next.at - payload.state.at : null;
         const previousTrack = listenCurrentTrack();
         room.state = next;
         const track = listenCurrentTrack();
@@ -255,10 +309,12 @@ function listenHandleEvent(payload) {
         return;
     }
 
+    if (payload.type === "lping") return;   // только для listenNoteClock
+
     if (payload.type === "hello") {
         if (payload.from === myRealUserId || !room.state.queue.length) return;
         // Отвечают все, у кого есть состояние; у кого оно свежее, тот и «выигрывает» по rev.
-        setTimeout(() => room.handle.run((api) => api.send({ type: "state", state: room.state, sentAt: Date.now() })), Math.random() * 250);
+        setTimeout(() => room.handle.run((api) => api.send({ type: "state", state: room.state, sentAt: Date.now(), from: myRealUserId })), Math.random() * 250);
         return;
     }
 
@@ -272,7 +328,7 @@ function listenHandleEvent(payload) {
             index: hasNext ? nextIndex : payload.index,
             playing: hasNext,
             position: 0,
-            at: listenLocalTime(payload.at, payload.sentAt),
+            at: listenLocalTime(payload.at, payload.sentAt, payload.from),
             rev: room.state.rev + 1
         };
         room.loadedTrackId = null;
@@ -293,10 +349,12 @@ function listenCommit(mutator) {
     draft.rev = Math.max(Date.now(), room.state.rev + 1);
 
     room.state = draft;
+    room.stateFrom = myRealUserId;
+    room.stateOffsetUsed = null;
     const track = listenCurrentTrack();
     if (!previousTrack || !track || previousTrack.id !== track.id) room.loadedTrackId = null;
 
-    room.handle.run((api) => api.send({ type: "state", state: draft, sentAt: Date.now() }));
+    room.handle.run((api) => api.send({ type: "state", state: draft, sentAt: Date.now(), from: myRealUserId }));
     listenReconcile(true);
 
 }
@@ -359,15 +417,24 @@ function listenApplyVolume() {
     listenYt?.setVolume?.(Math.round(volume * 100));
 }
 
+// Музыка играет туда же, куда голоса комнаты (устройство вывода из настроек голоса):
+// раньше голоса шли, например, в наушники, а музыка — в колонки по умолчанию, и микрофон
+// подхватывал её и отправлял остальным.
+function listenApplySink() {
+    const id = typeof voiceSettings !== "undefined" ? (voiceSettings.outputId || "") : "";
+    if (typeof listenAudio.setSinkId === "function" && listenAudio.sinkId !== id) listenAudio.setSinkId(id).catch(() => {});
+}
+
 function listenSetVolume(value) {
     listenBaseVolume = Number(value) / 100;
     listenApplyVolume();
     try { localStorage.setItem("kaban-listen-volume", String(value)); } catch { /* не критично */ }
 }
 
-// Плавное приглушение музыки: on — кто-то говорит (до 30%), off — возврат к 100%.
+// Плавное приглушение музыки: on — кто-то говорит (до 40%: голос хорошо слышно, а музыка
+// не пропадает совсем — при 30% её почти не было слышно), off — возврат к 100%.
 function listenDuck(on) {
-    listenDuckTarget = on ? 0.3 : 1;
+    listenDuckTarget = on ? 0.4 : 1;
     if (listenDuckTimer) return;
     listenDuckTimer = setInterval(() => {
         const step = listenDuckTarget < listenDuckCurrent ? 0.14 : 0.05; // вниз быстро, вверх мягко
@@ -531,10 +598,15 @@ function listenJoin(chatId, openAdd, { voiceRoomId = null, quiet = false } = {})
 
     // Войти в presence и спросить у уже слушающих текущее состояние.
     room.handle.run((api) => { api.join(); api.send({ type: "hello", from: myRealUserId }); });
+    // Лёгкие «пинги» для сверки часов (listenNoteClock): сразу и раз в 4 с.
+    listenPing(room);
+    room.pingTimer = setInterval(() => { if (listenRoom === room) listenPing(room); else clearInterval(room.pingTimer); }, 4000);
 
     try { document.getElementById("listen-volume").value = localStorage.getItem("kaban-listen-volume") || "80"; } catch { /* по умолчанию */ }
     listenDuckTarget = listenDuckCurrent = 1;
     listenSetVolume(document.getElementById("listen-volume").value);
+    listenApplySink();
+    if (typeof voiceCall !== "undefined" && voiceCall) voiceCall.musicDucked = false;
 
     document.getElementById("listen-panel").classList.remove("mini");
     updateListenBanner();
@@ -553,6 +625,7 @@ function listenLeave() {
     if (!room) return;
 
     clearInterval(listenTimer);
+    clearInterval(room.pingTimer);
     listenTimer = null;
     listenAudio.pause();
     listenAudio.removeAttribute("src");
@@ -563,6 +636,7 @@ function listenLeave() {
     room.handle.release();
     listenRoom = null;
     listenDuckTarget = listenDuckCurrent = 1;
+    if (typeof voiceCall !== "undefined" && voiceCall) voiceCall.musicDucked = false;
     if (room.voiceRoomId && typeof voicePushMeta === "function") voicePushMeta();
 
     const panelEl = document.getElementById("listen-panel");
@@ -604,7 +678,24 @@ function listenTick() {
         const target = listenTargetTime();
         // Подгоняем только когда трек реально играет: пока он грузится, «время плеера» —
         // ноль или чужое, и раньше это вызывало перемотку каждые полсекунды (трек заикался).
-        if (listenRoom.loadedTrackId === track.id && listenEngineReady(track) && Math.abs(listenEngineTime() - target) > LISTEN_DRIFT_LIMIT) listenEngineSeek(target);
+        if (listenRoom.loadedTrackId === track.id && listenEngineReady(track)) {
+            const drift = listenEngineTime() - target;          // > 0 — мы впереди
+            if (track.kind === "youtube") {
+                if (Math.abs(drift) > 1.0) listenEngineSeek(target);
+            } else if (Math.abs(drift) > LISTEN_DRIFT_LIMIT) {
+                listenAudio.playbackRate = 1;
+                listenEngineSeek(target);
+            } else {
+                // Небольшое расхождение (раньше до 1,8 с оставалось навсегда: трек грузился
+                // секунду — и у этого человека всё звучало на секунду позже остальных)
+                // выравниваем незаметно: чуть быстрее или медленнее, без перемотки и без
+                // смены тона, пока не сойдёмся до ~0,1 с.
+                const rate = Math.abs(drift) < 0.08 ? 1 : (drift > 0 ? 0.95 : 1.05);
+                if (listenAudio.playbackRate !== rate) listenAudio.playbackRate = rate;
+            }
+        }
+    } else if (listenAudio.playbackRate !== 1) {
+        listenAudio.playbackRate = 1;
     }
 
     if (!listenSeeking) {

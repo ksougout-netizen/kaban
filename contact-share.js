@@ -48,8 +48,9 @@
             .filter((row) => !row.chats?.is_secret)
             .map((row) => {
                 const chat = row.chats || {};
-                const other = row.otherUser;
                 const isGroup = chat.type === "group";
+                // У групп в строке списка тоже бывает otherUser (последний автор) — не путаем с личным чатом.
+                const other = isGroup ? null : row.otherUser;
                 const isSaved = !isGroup && !other;
                 if (other && shared && other.id === shared.id) return null;     // себе же его не шлём
                 const name = isGroup ? (chat.title || "Группа")
@@ -133,7 +134,7 @@
                 }
             });
         } catch (error) {
-            toast("Не удалось отправить контакт: " + (error?.message || error));
+            toast("Не удалось отправить контакт: " + sendErrorText(error));
             return;
         }
         realMessagesById.set(message.id, message);

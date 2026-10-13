@@ -6818,7 +6818,8 @@ body.reduce-motion .call-mini-avatar::after, html.app-inactive .call-mini-avatar
 
 /* На компьютере окно одной высоты на всех страницах — не прыгает при переходе. */
 @media (min-width: 651px) {
-    .settings-dialog { height: min(640px, calc(100dvh - 32px)); }
+    /* Высота — по содержимому страницы, переход между страницами плавный (animateSettingsHeight). */
+    .settings-dialog { height: auto; }
 }
 
 .settings-group-label {
@@ -13352,3 +13353,49 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
 .ac-ok { background: var(--accent); color: var(--accent-text, #fff); }
 .ac-ok:hover:not(:disabled) { filter: brightness(1.08); }
 .ac-ok:disabled { opacity: .5; }
+/* Шапка чата на узком экране: блок с именем раньше не сжимался (min-width:auto у
+   внутреннего блока), и длинное имя уезжало под кнопки звонка — иконка рисовалась
+   поверх имени. Теперь имя сокращается многоточием, кнопки не сжимаются. */
+.person > div:not(.person-avatar) { min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.header-tools { flex: 0 0 auto; }
+@media (max-width: 420px) {
+    .header-tools { gap: 0; margin-left: 4px; }
+    .header-tools-divider { display: none; }
+    .person { gap: 10px; padding: 4px 4px; }
+}
+
+/* Контекстное меню: подпись пункта не переносится по словам («В / закладки») */
+.context-menu-item { white-space: nowrap; }/* На телефоне показать экран всё равно нельзя — кнопка только отнимала место у имени. */
+@media (max-width: 480px) { #header-screen-button { display: none !important; } }
+/* Журнал звонков: аватар как в списке чатов (фото или инициалы), а не значок 👤 */
+.call-history-avatar { color: #fff; font-size: 15px; font-weight: 700; }
+.call-history-avatar .avatar-initials { font-size: 15px; font-weight: 700; }
+
+/* Нижнее меню на узком телефоне: шесть подписей помещаются целиком («Настройки» не обрезается) */
+@media (max-width: 420px) {
+    .bottom-nav-item { padding-left: 0; padding-right: 0; }
+    .bottom-nav-label { font-size: 9.5px; letter-spacing: -.01em; }
+}
+/* Панель эмодзи: ~1500 цветных эмодзи раньше рисовались все сразу при первом
+   открытии — интерфейс замирал на ~0,4 с. Невидимые разделы теперь не рисуются,
+   пока до них не докрутили (место под них зарезервировано). */
+.emoji-grid { content-visibility: auto; contain-intrinsic-size: auto 300px; }
+/* Ленивая отрисовка строк (content-visibility) убрана: строки, созданные, пока лента
+   была скрыта (переключение чатов), «запоминали» высоту 0 и при появлении на экране
+   резко вырастали — переписка прыгала, место чтения терялось (до экрана и больше).
+   Выигрыш был ~7 мс на тысячу строк, а лента грузится страницами по 50. */
+#messages .message-row { content-visibility: visible; contain-intrinsic-size: none; }
+/* Фото, файл которого больше недоступен */
+.message-image-missing {
+    display: grid; place-items: center; align-content: center; gap: 6px;
+    width: min(280px, 65vw); height: 150px;
+    border-radius: 12px;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    color: inherit; opacity: .75; font-size: 12.5px;
+}
+.message.has-media > .message-image-missing { width: min(340px, 72vw); border-radius: 0; }
+.message-image-missing svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+/* Закладки: окно по высоте содержимого — пустой список не растягивает его на пол-экрана. */
+.saved-messages-modal { min-height: 0; }
+.saved-messages-modal .shared-media-list:empty,
+.saved-messages-modal .shared-media-empty { min-height: 120px; }

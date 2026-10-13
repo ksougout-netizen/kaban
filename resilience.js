@@ -245,7 +245,7 @@ const KabanOutbox = (() => {
                         break;                      // порядок важен — дальше не идём
                     } else {
                         item.state = "failed";
-                        item.error = text.slice(0, 80);
+                        item.error = (typeof sendErrorText === "function" ? sendErrorText(error) : text).slice(0, 80);
                         save();
                         renderRow(item);
                     }

@@ -286,6 +286,15 @@ function switchEmojiTab(tab) {
 
 }
 
+// Эмодзи — блоками по 7 рядов: каждый блок дорисовывается, только когда до него
+// докрутили, и это быстро (раньше целый раздел в сотни цветных эмодзи давал рывок
+// до 0,2 с прямо посреди прокрутки).
+function emojiChunks(list, size = 49) {
+    const out = [];
+    for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+    return out;
+}
+
 function renderEmojiPopover() {
 
     emojiPopoverRendered = true;
@@ -299,9 +308,7 @@ function renderEmojiPopover() {
     body.innerHTML = EMOJI_CATEGORIES.map((cat) => `
         <div class="emoji-section" id="emoji-section-${cat.id}">
             <div class="emoji-section-label">${cat.label}</div>
-            <div class="emoji-grid">
-                ${cat.emojis.map((e) => `<button type="button" data-e="${e}" onclick="insertEmojiIntoComposer(this.dataset.e)">${e}</button>`).join("")}
-            </div>
+            ${emojiChunks(cat.emojis).map((chunk) => `<div class="emoji-grid">${chunk.map((e) => `<button type="button" data-e="${e}" onclick="insertEmojiIntoComposer(this.dataset.e)">${e}</button>`).join("")}</div>`).join("")}
         </div>
     `).join("");
 
@@ -386,6 +393,12 @@ function selectStickerPack(packId) {
     // Старая сетка вынимается из DOM — её анимации освобождаются наблюдателем.
     fillStickerGrid();
 }
+
+// Разметку панели эмодзи готовим заранее, в свободную минуту после запуска, —
+// первое нажатие на 😊 открывает уже готовую панель без задержки.
+(window.requestIdleCallback || ((fn) => setTimeout(fn, 1500)))(() => {
+    try { if (!emojiPopoverRendered) renderEmojiPopover(); } catch { /* построим при открытии */ }
+}, { timeout: 6000 });
 
 function jumpToEmojiCategory(catId) {
     document.getElementById(`emoji-section-${catId}`)?.scrollIntoView({ block: "start" });
@@ -668,7 +681,7 @@ async function sendRealLocation(lat, lon) {
             replyToId
         });
     } catch (error) {
-        toast("Не удалось отправить геопозицию: " + (error?.message || error));
+        toast("Не удалось отправить геопозицию: " + sendErrorText(error));
         return;
     }
 
@@ -932,7 +945,7 @@ async function sendRealContactShare(user) {
             replyToId
         });
     } catch (error) {
-        toast("Не удалось отправить контакт: " + (error?.message || error));
+        toast("Не удалось отправить контакт: " + sendErrorText(error));
         return;
     }
 

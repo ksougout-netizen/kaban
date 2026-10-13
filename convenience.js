@@ -293,6 +293,31 @@
         };
     }
 
+
+    /* ---------- 6. Esc закрывает любое верхнее окно ---------- */
+    // Раньше часть окон (QR-код, устройства, напоминания, папки, цвет темы, новая группа,
+    // чёрный список, TURN) закрывалась только крестиком или кликом мимо.
+    const ESC_SKIP = new Set(["app-lock-screen", "auth-screen"]);
+    function openLayers() {
+        return [...document.querySelectorAll('[id$="-backdrop"].open, .cs-backdrop.open, .dp-backdrop.open')]
+            .filter((el) => !ESC_SKIP.has(el.id));
+    }
+    document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape" || event.repeat) return;
+        const before = openLayers().length;
+        if (!before) return;
+        // Сначала даём отработать собственным обработчикам окон; если никто не закрылся — закрываем сами.
+        setTimeout(() => {
+            const layers = openLayers();
+            if (!layers.length || layers.length < before) return;
+            const z = (el) => Number(getComputedStyle(el).zIndex) || 0;
+            const top = layers.reduce((a, b) => (z(b) >= z(a) ? b : a));
+            top.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+            if (top.classList.contains("open")) {
+                top.querySelector('[aria-label="Закрыть"], .modal-close, .forward-close, .cs-close')?.click();
+            }
+        }, 0);
+    }, true);
     installBookmarkButton();
     installDateJump();
 })();

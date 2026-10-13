@@ -1070,6 +1070,8 @@ function showSettingsPage(id, { instant = false } = {}) {
     const isMain = id === "main";
     const previous = settingsPage;
     settingsPage = id;
+    // Высота окна до смены страницы — от неё плавно перейдём к высоте новой.
+    const fromHeight = dialog.getBoundingClientRect().height;
 
     dialog.querySelectorAll("[data-settings-page]").forEach((page) => {
         const active = page === target;
@@ -1086,6 +1088,7 @@ function showSettingsPage(id, { instant = false } = {}) {
     document.getElementById("settings-back").hidden = isMain;
     dialog.classList.toggle("is-subpage", !isMain);
     dialog.scrollTop = 0;
+    animateSettingsHeight(dialog, fromHeight, instant || previous === id);
 
     if (instant) return;
     const focusTarget = isMain
@@ -1093,6 +1096,22 @@ function showSettingsPage(id, { instant = false } = {}) {
         : document.getElementById("settings-back");
     focusTarget?.focus({ preventScroll: true });
 
+}
+
+// Окно настроек — по высоте содержимого страницы (как в Telegram), а не одной
+// большой высоты с пустотой на коротких страницах. Чтобы при переходе окно не
+// прыгало, высота меняется плавно: от прежней к новой.
+function animateSettingsHeight(dialog, fromHeight, instant) {
+    clearTimeout(dialog._heightTimer);
+    dialog.style.transition = "none";
+    dialog.style.height = "";
+    const toHeight = dialog.getBoundingClientRect().height;   // естественная высота новой страницы
+    if (instant || !fromHeight || Math.abs(toHeight - fromHeight) < 2 || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    dialog.style.height = fromHeight + "px";
+    void dialog.offsetHeight;
+    dialog.style.transition = "height .24s cubic-bezier(.2,.85,.25,1)";
+    dialog.style.height = toHeight + "px";
+    dialog._heightTimer = setTimeout(() => { dialog.style.transition = ""; dialog.style.height = ""; }, 280);
 }
 
 function fillSettingsProfileCard() {
@@ -1691,12 +1710,23 @@ async function openCallMic() {
         }
         mic.raw.getTracks().forEach((t) => t.stop());
         mic.raw = next;
+        watchRaw(next);
         mic.deviceId = nextTrack?.getSettings?.().deviceId || deviceId;
         mic.lastSoundAt = Date.now(); mic.warned = false;
         return mic.track;
     };
 
+    // Микрофон пропал посреди звонка (выдернули гарнитуру) — переключаемся на системный,
+    // а не молчим до конца разговора. Отправляемая дорожка та же — собеседнику ничего не меняется.
+    const watchRaw = (stream) => stream.getAudioTracks()[0]?.addEventListener("ended", async () => {
+        if (mic.raw !== stream || mic.stopped || !mic.processed) return;
+        try { await mic.setDevice(""); toast("Микрофон отключился — переключились на другой"); }
+        catch { toast("Микрофон отключился"); }
+    });
+    watchRaw(raw);
+
     mic.stop = () => {
+        mic.stopped = true;
         clearInterval(mic.aliveTimer);
         try { mic.nodes?.src.disconnect(); mic.nodes?.trim.disconnect(); } catch { /* ок */ }
         mic.raw.getTracks().forEach((t) => t.stop());
@@ -3163,11 +3193,19 @@ function startCallVoiceMeter(call) {
             raf = requestAnimationFrame(tick);
             if (now - last < 66) return;
             last = now;
-            // Аватар скрыт (видео собеседника на весь экран) — анализ и перерисовка не нужны.
-            if (dialog?.classList.contains("has-remote-video")) return;
             analyser.getFloatTimeDomainData(buffer);
             let sum = 0;
             for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+            // Совместное прослушивание в этом чате во время звонка: пока собеседник говорит
+            // (и ещё 1,2 с после), музыка тише — как в голосовых комнатах. Раньше в звонке
+            // музыка не приглушалась вовсе и заглушала голос.
+            if (typeof listenDuck === "function" && typeof listenRoom !== "undefined" && listenRoom && !listenRoom.voiceRoomId) {
+                if (20 * Math.log10(Math.sqrt(sum / buffer.length) + 1e-9) > -52 && !call.remote?.muted) call.lastRemoteSpeechAt = now;
+                const ducked = now - (call.lastRemoteSpeechAt || -1e9) < 1200;
+                if (ducked !== !!call.musicDucked) { call.musicDucked = ducked; listenDuck(ducked); }
+            }
+            // Аватар скрыт (видео собеседника на весь экран) — перерисовка не нужна.
+            if (dialog?.classList.contains("has-remote-video")) return;
             const target = call.remote.muted ? 0 : Math.min(1, Math.sqrt(sum / buffer.length) * 7);
             level = level * 0.55 + target * 0.45;
             // Пишем только изменившееся значение: в тишине — ни одной перерисовки.
@@ -3175,7 +3213,7 @@ function startCallVoiceMeter(call) {
             if (value !== shown) { shown = value; wrap?.style.setProperty("--level", value); }
         };
         raf = requestAnimationFrame(tick);
-        call.voiceMeter = { stop: () => { cancelAnimationFrame(raf); try { source.disconnect(); } catch {} wrap?.style.setProperty("--level", "0"); } };
+        call.voiceMeter = { stop: () => { cancelAnimationFrame(raf); try { source.disconnect(); } catch {} wrap?.style.setProperty("--level", "0"); if (call.musicDucked && typeof listenDuck === "function") { call.musicDucked = false; listenDuck(false); } } };
     } catch { /* без анимации голоса */ }
 }
 
@@ -3600,7 +3638,7 @@ async function startScreenShare() {
         }
         stream = await navigator.mediaDevices.getDisplayMedia({
             video,
-            audio: wantAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 } : false,
+            audio: wantAudio ? (typeof voiceScreenAudioConstraints === "function" ? voiceScreenAudioConstraints() : { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 }) : false,
             systemAudio: "include",
             surfaceSwitching: "include",
             selfBrowserSurface: "exclude"
