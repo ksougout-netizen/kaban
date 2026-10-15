@@ -50,8 +50,12 @@ function ensureFxCanvas() {
 function resizeFxCanvas() {
     if (!fxCanvas) return;
     fxScale = Math.min(window.devicePixelRatio || 1, 2);
-    fxCanvas.width = Math.round(window.innerWidth * fxScale);
-    fxCanvas.height = Math.round(window.innerHeight * fxScale);
+    const width = Math.round(window.innerWidth * fxScale), height = Math.round(window.innerHeight * fxScale);
+    // Присвоение width/height пересоздаёт буфер холста даже при том же размере —
+    // а это делалось при каждом эффекте, в том числе посреди уже идущего.
+    if (fxCanvas.width === width && fxCanvas.height === height) return;
+    fxCanvas.width = width;
+    fxCanvas.height = height;
     fxCanvas.style.width = window.innerWidth + "px";
     fxCanvas.style.height = window.innerHeight + "px";
 }
@@ -547,12 +551,24 @@ function sendWithEffect(effectId) {
 })();
 
 /* ---- ПЛАВНЫЙ ВХОД В ЧАТ ---------------------------------------------------- */
+// Перезапуск анимации раньше шёл через void area.offsetWidth — это синхронная раскладка
+// ВСЕЙ ленты с только что вставленной историей (замерено ~90 мс на слабом телефоне при
+// каждом открытии чата). Теперь: класса нет (обычный случай) — просто ставим; есть
+// (быстро переключают чаты) — снимаем и возвращаем через кадр, без принудительной
+// раскладки. Таймер прежнего чата отменяется: раньше он мог снять класс посреди
+// анимации следующего чата.
+let chatEnterTimer = 0;
+
 function playChatEnterAnimation() {
     if (appSettings.reduceMotion) return;
     const area = document.querySelector(".chat-area");
     if (!area) return;
+    clearTimeout(chatEnterTimer);
+    const start = () => {
+        area.classList.add("chat-enter");
+        chatEnterTimer = setTimeout(() => area.classList.remove("chat-enter"), 420);
+    };
+    if (!area.classList.contains("chat-enter")) { start(); return; }
     area.classList.remove("chat-enter");
-    void area.offsetWidth; // перезапуск анимации
-    area.classList.add("chat-enter");
-    setTimeout(() => area.classList.remove("chat-enter"), 420);
+    requestAnimationFrame(() => requestAnimationFrame(start));
 }

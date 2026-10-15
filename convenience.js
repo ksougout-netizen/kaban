@@ -258,9 +258,10 @@
         docDialog.querySelector(".dp-cancel").addEventListener("click", closeDocPreview);
         docDialog.querySelector(".dp-send").addEventListener("click", async () => {
             const files = docFiles.slice();
+            const chatId = currentChatId;
             closeDocPreview();
             for (const file of files) {                  // по одному — у каждого свой прогресс и сообщение
-                await sendRealAttachment(file, "document");
+                await sendRealAttachment(file, "document", { chatId });
             }
         });
         document.addEventListener("keydown", (e) => {

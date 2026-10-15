@@ -1817,7 +1817,10 @@
         const applyStoryPhoto = async (file) => {
             storyCreateFile = await resizeImageForStory(file);
             const preview = document.getElementById("story-photo-preview");
-            preview.style.backgroundImage = `url(${URL.createObjectURL(storyCreateFile)})`;
+            // Прежнее превью освобождаем (то же, что в stories.js → pickStoryPhoto).
+            if (preview._blobUrl) URL.revokeObjectURL(preview._blobUrl);
+            preview._blobUrl = URL.createObjectURL(storyCreateFile);
+            preview.style.backgroundImage = `url(${preview._blobUrl})`;
             preview.classList.add("has-image");
             ensureStoryEditChip(preview);
         };

@@ -145,10 +145,17 @@ function renderReactionsInto(container, reactions, myId) {
                 chip.appendChild(countEl);
             }
             if (countEl.textContent !== String(group.count)) {
+                // «Подпрыгивает» только число, которое изменилось на глазах. Раньше и новый
+                // (пустой) счётчик при первой отрисовке: при открытии чата с реакциями —
+                // анимация и принудительная раскладка страницы (void offsetWidth) на КАЖДОЕ
+                // такое сообщение подряд.
+                const changedOnScreen = countEl.textContent !== "";
                 countEl.textContent = String(group.count);
-                countEl.classList.remove("bump");
-                void countEl.offsetWidth;
-                countEl.classList.add("bump");
+                if (changedOnScreen) {
+                    countEl.classList.remove("bump");
+                    void countEl.offsetWidth;
+                    countEl.classList.add("bump");
+                }
             }
         } else if (countEl) {
             countEl.remove();

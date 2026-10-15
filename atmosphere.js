@@ -403,9 +403,17 @@
 
     function chatArea() { return document.querySelector(".chat-area"); }
 
+    // Системная настройка «уменьшить движение» (Windows/Android/iOS) — раньше учитывалась
+    // только своя настройка приложения, и фон крутился у тех, кому анимация мешает.
+    const osReduceMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+
     function active() {
         const area = chatArea();
-        return !!(S.kind && appSettings.seasonalAtmosphere !== false && !appSettings.reduceMotion && !document.hidden && area && area.clientWidth > 0 && area.clientHeight > 0);
+        // Окно звонка открыто на весь экран — фон под ним не виден, рисовать его незачем
+        // (в звонке процессор и батарея нужнее видео и звуку).
+        const callCovers = document.body.classList.contains("in-call-ui");
+        return !!(S.kind && appSettings.seasonalAtmosphere !== false && !appSettings.reduceMotion && !osReduceMotion?.matches
+            && !callCovers && !document.hidden && area && area.clientWidth > 0 && area.clientHeight > 0);
     }
 
     function ensureCanvas() {
@@ -817,8 +825,15 @@
 
     /* ---- цикл ---- */
 
+    // Фон — медленные частицы, ~30 кадров в секунду глазу достаточно. Раньше он рисовался
+    // на полной частоте экрана: на мониторе 144 Гц — 144 раза в секунду, на телефоне
+    // 120 Гц — 120 (в простое это была главная нагрузка на процессор, см. замер).
+    // Движение считается по времени (dt), поэтому скорость частиц не меняется.
+    const ATMO_MIN_FRAME_MS = 30;
+
     function frame(now) {
         S.raf = requestAnimationFrame(frame);
+        if (now - S.last < ATMO_MIN_FRAME_MS) return;
         const dt = Math.min(0.05, (now - S.last) / 1000 || 0.016);
         S.last = now;
         S.t += dt;
@@ -877,11 +892,15 @@
     const soon = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => refresh(), 150); };
     window.addEventListener("resize", soon);
     if (window.ResizeObserver && chatArea()) new ResizeObserver(soon).observe(chatArea());
-    // смена темы (светлая/тёмная) — перерисовать спрайты в нужных цветах
+    // смена темы (светлая/тёмная) — перерисовать спрайты в нужных цветах;
+    // открыли/свернули окно звонка — остановить/продолжить фон
+    let wasInCall = document.body.classList.contains("in-call-ui");
     new MutationObserver(() => {
         const dark = document.body.classList.contains("dark");
-        if (dark !== S.dark) refresh();
+        const inCall = document.body.classList.contains("in-call-ui");
+        if (dark !== S.dark || inCall !== wasInCall) { wasInCall = inCall; refresh(); }
     }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+    osReduceMotion?.addEventListener?.("change", () => refresh());
 
     /* ---- выбор в настройках ---- */
 

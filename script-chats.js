@@ -1706,14 +1706,14 @@ function renderCallHistory() {
         const callKind = call.kind === "video" ? "Видеозвонок" : "Аудиозвонок";
         return `
             <div class="call-history-row">
-                <button class="call-history-main" type="button" onclick="openCallHistoryChat('${escapeHTML(call.remoteUserId || "")}')">
+                <button class="call-history-main" type="button" onclick="openCallHistoryChat(${jsAttr(call.remoteUserId || "")})">
                     ${(() => { const a = avatarParts({ id: call.remoteUserId, name: call.name || "?", url: call.avatarUrl }); return `<span class="call-history-avatar${a.cls}"${a.style}>${a.inner}</span>`; })()}
                     <span class="call-history-copy">
                         <span class="call-history-name">${escapeHTML(call.name || "Собеседник")}</span>
                         <span class="call-history-meta${call.result === "missed" ? " missed" : ""}">${direction} · ${callKind}${outcome}${time ? ` · ${time}` : ""}</span>
                     </span>
                 </button>
-                <button class="call-history-redial" type="button" onclick="redialFromHistory('${escapeHTML(call.id)}')" aria-label="${callKind} ${escapeHTML(call.name || "Собеседник")}" title="${callKind}">
+                <button class="call-history-redial" type="button" onclick="redialFromHistory(${jsAttr(call.id)})" aria-label="${callKind} ${escapeHTML(call.name || "Собеседник")}" title="${callKind}">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         ${call.kind === "video" ? '<rect x="3" y="6" width="13" height="12" rx="2.5"/><path d="m16 10 5-3v10l-5-3z"/>' : '<path d="M7.2 3.8 9.8 3.3l2 4.8-2.2 1.7a14 14 0 0 0 4.6 4.6l1.7-2.2 4.8 2-.5 2.6a2 2 0 0 1-2.2 1.6A15.8 15.8 0 0 1 3.6 6a2 2 0 0 1 1.6-2.2Z"/>'}
                     </svg>
@@ -2252,10 +2252,10 @@ async function exportChatHistory(chatId) {
         let before = null;
         for (let page = 0; page < 200; page++) {
             const batch = await KabanAPI.getMessages(chatId, { limit: 100, before });
-            if (!batch.length) break;
+            if (!serverPageLength(batch)) break;
             allMessages = batch.concat(allMessages);
-            before = batch[0].created_at;
-            if (batch.length < 100) break;
+            before = serverPageOldest(batch);
+            if (serverPageLength(batch) < 100) break;
         }
 
         if (!allMessages.length) {
@@ -2723,6 +2723,12 @@ const CHAT_CACHE_LIMIT = 30;
 const CHAT_CACHE_MAX_MESSAGES = 120;
 const CHAT_PAGE_SIZE = 50;
 
+// Сколько сообщений реально отдал сервер и самое старое из них: просроченные
+// исчезающие отсеиваются ещё до ленты (disappearing.js), и по длине отфильтрованного
+// списка «полная страница» выглядела последней — подгрузка истории обрывалась.
+function serverPageLength(list) { return list?.pageLength ?? list?.length ?? 0; }
+function serverPageOldest(list) { return list?.pageOldest ?? list?.[0]?.created_at ?? null; }
+
 function rememberChatMessages(chatId, messages, hasMore) {
     if (!chatId || !Array.isArray(messages)) return;
     chatMessageCache.delete(chatId);
@@ -2852,8 +2858,10 @@ async function reconcileOpenChatMessages(chatId, fresh, me, cachedIds) {
     }
 
     // Пагинация: самая старая загруженная точка и признак «есть ещё».
-    hasMoreMessages = fresh.length === CHAT_PAGE_SIZE || [...realMessagesById.values()].some((m) => m.chat_id === chatId && String(m.created_at || "") < oldest);
-    const allLoaded = [...realMessagesById.values()].filter((m) => m.chat_id === chatId).map((m) => String(m.created_at || "")).sort();
+    hasMoreMessages = serverPageLength(fresh) === CHAT_PAGE_SIZE || [...realMessagesById.values()].some((m) => m.chat_id === chatId && String(m.created_at || "") < oldest);
+    const allLoaded = [...realMessagesById.values()].filter((m) => m.chat_id === chatId).map((m) => String(m.created_at || ""));
+    if (fresh.pageOldest) allLoaded.push(String(fresh.pageOldest));
+    allLoaded.sort();
     oldestLoadedMessageCreatedAt = allLoaded[0] || null;
     if (!hasMoreMessages && !container.querySelector(".date:not(.date-auto)") && realMessagesById.size) {
         const label = document.createElement("div");
@@ -2865,7 +2873,7 @@ async function reconcileOpenChatMessages(chatId, fresh, me, cachedIds) {
     if (changed) {
         updateMessageGrouping();
         renderPinnedBar();
-        renderSharedMediaDataForCurrentChat();
+        scheduleSharedMediaRender();
         refreshAfterMessageRemoval();
         if (wasAtBottom) scrollMessagesToBottom({ instant: true });
     }
@@ -3263,12 +3271,12 @@ async function openRealChat(chatId) {
 
     const renderInitialMessages = (messages, { hasMore }) => {
         messages.forEach((message) => realMessagesById.set(message.id, message));
-        renderSharedMediaDataForCurrentChat();
+        scheduleSharedMediaRender();
 
         // Полная страница — скорее всего, есть ещё более старые сообщения; подгрузятся
         // по скроллу вверх (см. loadOlderMessages). Меньше — это и есть вся история.
         hasMoreMessages = hasMore;
-        oldestLoadedMessageCreatedAt = messages[0]?.created_at ?? null;
+        oldestLoadedMessageCreatedAt = serverPageOldest(messages);
 
         if (messages.length) {
             if (!hasMoreMessages) {
@@ -3465,7 +3473,7 @@ async function openRealChat(chatId) {
                 }
             }
             if (myRequestToken !== chatOpenRequestToken) return; // уже открыт другой чат
-            renderInitialMessages(messages, { hasMore: messages.length === CHAT_PAGE_SIZE });
+            renderInitialMessages(messages, { hasMore: serverPageLength(messages) === CHAT_PAGE_SIZE });
         }
         if (myRequestToken !== chatOpenRequestToken) return;
 
@@ -3930,7 +3938,8 @@ async function loadOlderMessages() {
         toast("Не удалось загрузить историю — проверьте соединение");
         return;
     }
-    const pageSize = older.length;
+    const pageSize = serverPageLength(older);
+    const pageOldest = serverPageOldest(older);
 
     if (requestedChatId !== currentChatId) {
         // Чат сменился, пока грузили — просто выходим, ничего не трогая.
@@ -3960,7 +3969,7 @@ async function loadOlderMessages() {
         // Уже показанные (могли прийти и иначе) — не дублируем.
         older = older.filter((message) => !realMessagesById.has(message.id));
         older.forEach((message) => realMessagesById.set(message.id, message));
-        renderSharedMediaDataForCurrentChat();
+        scheduleSharedMediaRender();
 
         // Якорь — первое видимое сообщение: после вставки истории сверху оно должно
         // остаться ровно на том же месте экрана. Прежний расчёт через scrollHeight
@@ -3985,8 +3994,10 @@ async function loadOlderMessages() {
             appendRealMessageRow(older[i], older[i].sender_id === myRealUserId, { prepend: true });
         }
 
-        if (older.length) {
-            oldestLoadedMessageCreatedAt = older[0].created_at;
+        // Курсор — по самому старому, что вернул сервер (даже если вся страница
+        // оказалась просроченной или уже показанной, следующий запрос идёт дальше).
+        if (pageOldest) {
+            oldestLoadedMessageCreatedAt = pageOldest;
         }
 
         hasMoreMessages = pageSize === CHAT_PAGE_SIZE;
@@ -4203,7 +4214,13 @@ async function sendRealMessage(text) {
     realMessagesById.set(message.id, message);
     if (outbox) outbox.finishSending(clientId);
     if (currentChatId === targetChatId) {
-        appendRealMessageRow(message, true);
+        // Эхо этой же отправки (realtime) часто приходит РАНЬШЕ ответа сервера. В секретном
+        // чате временной строки нет, и эхо рисовалось как «🔒 Отправлено с другого
+        // устройства» (своё эхо расшифровать нечем); appendRealMessageRow потом видел, что
+        // строка уже есть, и настоящий текст своего сообщения так и не появлялся до
+        // переоткрытия чата. Теперь такая строка перерисовывается с открытым текстом.
+        if (document.querySelector(`#messages .message-row[data-message-id="${message.id}"]`)) updateRealMessageRow(message.id, { force: true });
+        else appendRealMessageRow(message, true);
         updateMessageGrouping();
         if (typeof maybePlayEffectForMessage === "function") maybePlayEffectForMessage(message);
     }
@@ -4296,7 +4313,9 @@ async function sendRealAttachment(file, type, options = {}) {
     // Снимок на момент вызова — та же причина, что и в sendRealMessage:
     // загрузка файла может занять заметное время, пользователь может
     // успеть переключиться в другой чат до того, как она завершится.
-    const targetChatId = currentChatId;
+    // options.chatId — пачка файлов (предпросмотр документов): все идут в тот чат,
+    // где их выбрали, даже если за время загрузки первого открыли другой.
+    const targetChatId = options.chatId || currentChatId;
 
     if (isSecretChatId(targetChatId)) {
         toast("Вложения в секретных чатах пока не поддерживаются");
@@ -4316,7 +4335,8 @@ async function sendRealAttachment(file, type, options = {}) {
         return;
     }
 
-    const replyToId = pendingReply?.messageId || null;
+    // Пока сжималось, могли открыть другой чат: его «ответ на…» сюда не относится.
+    const replyToId = currentChatId === targetChatId ? (pendingReply?.messageId || null) : null;
     if (currentChatId === targetChatId) {
         pendingReply = null;
         document.getElementById("reply-preview").classList.remove("visible");
@@ -4666,6 +4686,14 @@ async function handleSignOut() {
     }
 
     try {
+        // Пока сессия ещё жива: отклонить входящий звонок (иначе он оставался «висеть»
+        // в памяти, и после следующего входа на все звонки уходило «занято») и отменить
+        // передачи файлов — статусы в сообщениях сохраняются только с авторизацией.
+        try {
+            if (pendingIncomingCall) declineIncomingCall();
+            else cancelAcceptingCall();
+            stopAllFileTransfers();
+        } catch (error) { console.warn("Выход: не удалось закрыть звонок/передачи", error); }
         await KabanAPI.updateMyPresence(false); // до signOut — после него запрос уйдёт неавторизованным
         await KabanAuth.signOut();
         // Явный выход: черновики и расшифровки голосовых — личный текст этого

@@ -496,8 +496,12 @@ async function voiceJoin(chatId, roomId, roomName, groupName) {
         await voiceLeave(true);
     }
     // Во время обычного звонка в комнату не заходим: микрофон ушёл бы в оба места сразу.
+    // В том числе пока звонок ещё набирается или принимается (запрос микрофона — секунды):
+    // раньше в этот момент можно было зайти в комнату, и голос шёл и туда, и в звонок.
     if ((typeof activeCall !== "undefined" && activeCall) || (typeof pendingIncomingCall !== "undefined" && pendingIncomingCall)
-        || (typeof activeGroupCall !== "undefined" && activeGroupCall)) {
+        || (typeof activeGroupCall !== "undefined" && activeGroupCall)
+        || (typeof startingCall !== "undefined" && startingCall) || (typeof acceptingCall !== "undefined" && acceptingCall)
+        || (typeof startingGroupCall !== "undefined" && startingGroupCall)) {
         toast("Сначала завершите звонок");
         return;
     }
@@ -514,7 +518,8 @@ async function voiceJoin(chatId, roomId, roomName, groupName) {
     voiceCall = call;
     voiceRefreshUi();
 
-    if (typeof ensureTurnServers === "function") await ensureTurnServers(); // ретранслятор для мобильных сетей
+    if (typeof ensureTurnServers === "function") await ensureTurnServers(800); // ретранслятор для мобильных сетей (не дольше 0,8 с — дальше в фоне)
+    if (voiceCall !== call) return;   // вышли, пока ждали ретранслятор, — микрофон даже не просим
 
     try {
         await voiceStartLocalAudio(call);
@@ -524,7 +529,14 @@ async function voiceJoin(chatId, roomId, roomName, groupName) {
         call.muted = true;
     }
 
-    if (voiceCall !== call) return; // успели выйти, пока ждали разрешение
+    if (voiceCall !== call) {
+        // Успели выйти, пока ждали разрешение. voiceLeave к тому моменту уже отработал, а
+        // микрофон открылся ПОСЛЕ него — раньше он так и оставался захваченным (индикатор
+        // микрофона горел до перезагрузки страницы). Закрываем его здесь.
+        call.local?.micStream?.getTracks().forEach((track) => track.stop());
+        try { call.local?.src?.disconnect(); } catch { /* уже отключён */ }
+        return;
+    }
 
     call.master = call.local.ctx.createGain();
     call.master.gain.value = voiceSettings.outputVolume / 100;
@@ -557,6 +569,9 @@ async function voiceLeave(silent) {
 
     const call = voiceCall;
     if (!call) return;
+    // С этого момента новые соединения для этого входа не заводим: присутствие, пришедшее
+    // посреди выхода, иначе создавало бы их заново — и они оставались открытыми.
+    call.leaving = true;
 
     voiceToggleSfxPanel(false);
     clearInterval(voiceTickTimer);
@@ -594,7 +609,7 @@ async function voiceLeave(silent) {
 function voiceOnRoomPresence(members) {
 
     const call = voiceCall;
-    if (!call) return;
+    if (!call || call.leaving) return;
     members = voiceOnlyMembers(call.chatId, members);
     // Кто-то новый вошёл — сразу сообщаем ему своё состояние (камера, микрофон…).
     const newcomer = Object.keys(members).some((id) => id !== myRealUserId && !call.members[id]);
@@ -1145,7 +1160,8 @@ async function voiceConnectTo(call, userId, meta) {
         const offer = await peer.pc.createOffer();
         offer.sdp = voiceTuneSdp(offer.sdp);
         await peer.pc.setLocalDescription(offer);
-        await voiceSendDescription(call, peer, "offer", { sid: peer.sid });
+        peer.offerSeq = (peer.offerSeq || 0) + 1;
+        await voiceSendDescription(call, peer, "offer", { sid: peer.sid, oseq: peer.offerSeq });
     } catch (error) {
         console.warn("Не удалось начать соединение", error);
         voiceClosePeer(call, userId);
@@ -1167,6 +1183,20 @@ async function voiceSendDescription(call, peer, type, extra) {
     voiceSend(call, { type, to: peer.userId, sdp: desc.sdp, ...extra });
     peer.sdpSent = true;
     peer.negotiatedAt = Date.now();
+    // Предложение или ответ на него потерялись (канал переподключался) — повторяем то же
+    // предложение через 2,5 с. Раньше ждали сторожа: пересоздание соединения через 8–12 с,
+    // всё это время человека не было слышно. Повтор безопасен: отвечающий на то же
+    // предложение просто ответит ещё раз (тот же номер oseq).
+    if (type === "offer") {
+        clearTimeout(peer.offerRetryTimer);
+        const oseq = peer.offerSeq;
+        peer.offerRetryTimer = setTimeout(() => {
+            if (voiceCall !== call || call.peers.get(peer.userId) !== peer || peer.descSeq !== seq || peer.offerSeq !== oseq) return;
+            if (peer.pc.signalingState !== "have-local-offer") return;
+            // Текущее описание — в нём уже все собранные адреса.
+            voiceSend(call, { type, to: peer.userId, sdp: peer.pc.localDescription?.sdp || desc.sdp, ...extra });
+        }, 2500);
+    }
 }
 
 async function voiceRestartPeer(call, peer) {
@@ -1178,7 +1208,8 @@ async function voiceRestartPeer(call, peer) {
         const offer = await peer.pc.createOffer({ iceRestart: true });
         offer.sdp = voiceTuneSdp(offer.sdp);
         await peer.pc.setLocalDescription(offer);
-        await voiceSendDescription(call, peer, "offer", { sid: peer.sid });
+        peer.offerSeq = (peer.offerSeq || 0) + 1;
+        await voiceSendDescription(call, peer, "offer", { sid: peer.sid, oseq: peer.offerSeq });
     } catch (error) {
         console.warn("Не удалось восстановить соединение", error);
         peer.sdpSent = true;
@@ -1194,6 +1225,8 @@ async function voiceRestartPeer(call, peer) {
 // Теперь отвечающий просит инициатора переподключиться.
 function voiceRecoverPeer(call, peer) {
     if (voiceCall !== call || call.peers.get(peer.userId) !== peer) return;
+    // Сигналы восстановления идут через сокет Realtime — он мог «умереть молча» (см. script-core.js).
+    if (typeof probeRealtimeSocket === "function") probeRealtimeSocket();
     if (peer.initiator) { voiceRestartPeer(call, peer); return; }
     if (Date.now() - (peer.restartAskedAt || 0) < 6000) return;
     peer.restartAskedAt = Date.now();
@@ -1277,6 +1310,10 @@ async function voiceHandleSig(payload) {
         if (peer && !peer.initiator && payload.sid && peer.remoteSid && payload.sid !== peer.remoteSid) { voiceClosePeer(call, from); peer = null; }
         if (!peer) peer = voiceCreatePeer(call, from, payload.epoch);
         if (payload.sid) peer.remoteSid = payload.sid;
+        // Повтор того же предложения (см. voiceSendDescription), пока первое ещё
+        // обрабатывается: два параллельных ответа сломали бы соединение.
+        if (peer.answeringOseq !== undefined && peer.answeringOseq === payload.oseq) return;
+        peer.answeringOseq = payload.oseq;
         try {
             await peer.pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
             // Отвечающий отдаёт свой голос по уже созданному приёмнику (иначе слышно только в одну сторону).
@@ -1293,10 +1330,13 @@ async function voiceHandleSig(payload) {
             peer.sdpSent = false;
             await peer.pc.setLocalDescription(answer);
             await voiceFlushIce(peer);
-            await voiceSendDescription(call, peer, "answer", {});
+            // Номер предложения возвращаем — по нему инициатор отличит ответ на устаревшее.
+            await voiceSendDescription(call, peer, "answer", payload.oseq !== undefined ? { oseq: payload.oseq } : {});
         } catch (error) {
             console.warn("Не удалось ответить на предложение", error);
             voiceClosePeer(call, from);
+        } finally {
+            peer.answeringOseq = undefined;
         }
         return;
     }
@@ -1312,6 +1352,12 @@ async function voiceHandleSig(payload) {
     }
 
     if (payload.type === "answer") {
+        // Ответ на ПРЕДЫДУЩЕЕ предложение (пока он шёл, при переподключении ушло новое):
+        // раньше он применялся к новому предложению с другими ключами ICE — соединение
+        // падало, и голос пропадал ещё на 8–12 с до пересоздания сторожем. Теперь такой
+        // ответ пропускаем и ждём ответ на свежее (как в звонках 1:1, см. restartSeq).
+        if (peer.pc.signalingState !== "have-local-offer") return;
+        if (payload.oseq !== undefined && peer.offerSeq !== undefined && payload.oseq !== peer.offerSeq) return;
         try {
             await peer.pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
             await voiceFlushIce(peer);
@@ -1332,6 +1378,7 @@ function voiceClosePeer(call, userId) {
     if (!peer) return;
     call.peers.delete(userId);
     clearTimeout(peer.disconnectTimer);
+    clearTimeout(peer.offerRetryTimer);
     peer.pc.onconnectionstatechange = null;
     peer.pc.ontrack = null;
     peer.pc.onicecandidate = null;
@@ -1862,13 +1909,13 @@ function voicePersonRow(userId, meta, roomId) {
 
     const strip = voiceOpenStrip === userId && !mine && inThisCall ? `
         <div class="vp-strip" onclick="event.stopPropagation()">
-            <label class="vp-vol"><span>Громкость</span><input type="range" min="0" max="200" value="${pref.vol}" oninput="voiceSetUserVolume('${escapeHTML(userId)}', this.value)"><b>${pref.vol}%</b></label>
-            <button type="button" class="vp-btn" onclick="voiceToggleUserMute('${escapeHTML(userId)}')">${pref.muted ? "Включить для меня" : "Заглушить для меня"}</button>
-            ${voiceIsGroupAdmin(call.chatId, myRealUserId) ? `<button type="button" class="vp-btn danger" onclick="voiceKickUser('${escapeHTML(userId)}')">Отключить от комнаты</button>` : ""}
+            <label class="vp-vol"><span>Громкость</span><input type="range" min="0" max="200" value="${pref.vol}" oninput="voiceSetUserVolume(${jsAttr(userId)}, this.value)"><b>${pref.vol}%</b></label>
+            <button type="button" class="vp-btn" onclick="voiceToggleUserMute(${jsAttr(userId)})">${pref.muted ? "Включить для меня" : "Заглушить для меня"}</button>
+            ${voiceIsGroupAdmin(call.chatId, myRealUserId) ? `<button type="button" class="vp-btn danger" onclick="voiceKickUser(${jsAttr(userId)})">Отключить от комнаты</button>` : ""}
         </div>` : "";
 
     return `
-        <div class="vroom-person${inThisCall && !mine ? " clickable" : ""}${connecting ? " connecting" : ""}" ${inThisCall && !mine ? `onclick="voiceToggleStrip('${escapeHTML(userId)}')"` : ""}>
+        <div class="vroom-person${inThisCall && !mine ? " clickable" : ""}${connecting ? " connecting" : ""}" ${inThisCall && !mine ? `onclick="voiceToggleStrip(${jsAttr(userId)})"` : ""}>
             ${voiceAvatarHTML(userId, meta, true)}
             <span class="vp-name">${escapeHTML(voiceMemberName(userId, meta))}</span>
             ${connecting ? '<span class="vp-connecting">соединение…</span>' : ""}
@@ -1909,8 +1956,8 @@ function voiceRenderRooms() {
                 <div class="vroom-title">${escapeHTML(room.name)}<small>${ids.length}/${VOICE_MAX_PARTICIPANTS}${musicTitle ? ` · <span class="vroom-music">🎵 ${escapeHTML(musicTitle)}</span>` : ""}</small></div>
                 ${joinedHere
                     ? `<button type="button" class="vroom-join leave" onclick="voiceLeave()">Выйти</button>`
-                    : `<button type="button" class="vroom-join" ${full ? "disabled" : ""} onclick="voiceJoinRoom('${escapeHTML(room.id)}')">${full ? "Заполнена" : "Войти"}</button>`}
-                ${manage && !room.virtual ? `<button type="button" class="vroom-more" onclick="voiceRoomMenu('${escapeHTML(room.id)}')" aria-label="Управление комнатой">${voiceSvg("more")}</button>` : ""}
+                    : `<button type="button" class="vroom-join" ${full ? "disabled" : ""} onclick="voiceJoinRoom(${jsAttr(room.id)})">${full ? "Заполнена" : "Войти"}</button>`}
+                ${manage && !room.virtual ? `<button type="button" class="vroom-more" onclick="voiceRoomMenu(${jsAttr(room.id)})" aria-label="Управление комнатой">${voiceSvg("more")}</button>` : ""}
             </div>
             ${ids.length ? `<div class="vroom-people">${people}</div>` : '<div class="vroom-empty">Пока никого — зайдите первым</div>'}
         </div>`;

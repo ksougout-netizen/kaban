@@ -82,16 +82,18 @@
         stage.addEventListener("dblclick", (e) => { if (items[index]?.video) return; e.preventDefault(); toggleZoom(e.clientX, e.clientY); });
         imgEl.addEventListener("dragstart", (e) => e.preventDefault());
 
+        // capture + остановка: Escape закрывает только просмотр, а не заодно то, что под ним
+        // (например, режим выделения сообщений — selection.js тоже слушает Escape).
         document.addEventListener("keydown", (e) => {
             if (!root.classList.contains("open")) return;
-            if (e.key === "Escape") closeViewer();
+            if (e.key === "Escape") { e.stopImmediatePropagation(); closeViewer(); }
             else if (e.key === " " && items[index]?.video) { e.preventDefault(); videoEl.paused ? videoEl.play() : videoEl.pause(); }
             else if (e.key === "ArrowLeft") go(-1);
             else if (e.key === "ArrowRight") go(1);
             else if (e.key === "+" || e.key === "=") zoomAround(innerWidth / 2, innerHeight / 2, scale * 1.4);
             else if (e.key === "-") zoomAround(innerWidth / 2, innerHeight / 2, scale / 1.4);
             else if (e.key === "0") resetTransform(true);
-        });
+        }, true);
     }
 
     /* ---------- данные ---------- */

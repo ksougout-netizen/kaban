@@ -513,6 +513,7 @@ function applyThemeTokens() {
 
 function applySettings() {
 
+    composerEmptyHeight = 0;   // размер текста мог смениться — высоту пустого поля меряем заново
     document.body.classList.toggle("dark", appSettings.darkMode);
     document.body.classList.toggle("reduce-motion", appSettings.reduceMotion);
     document.body.classList.toggle("compact-messages", appSettings.compactMessages);
@@ -1059,7 +1060,12 @@ function openSettings() {
     fillSettingsProfileCard();
     backdrop.classList.add("open");
     backdrop.setAttribute("aria-hidden", "false");
-    document.getElementById("settings-close").focus();
+    // Фокус — в следующем кадре: пока окно ещё «спит» (content-visibility: hidden,
+    // см. .cv-sleep), focus() заставлял браузер синхронно отрисовать скрытое
+    // содержимое (предупреждение в консоли и лишний фриз при открытии настроек).
+    requestAnimationFrame(() => {
+        if (backdrop.classList.contains("open")) document.getElementById("settings-close")?.focus({ preventScroll: true });
+    });
 
 }
 
@@ -1217,18 +1223,24 @@ let managedIcePromise = null;
 const USE_MANAGED_TURN = true;
 let managedIceUnavailableUntil = 0;
 
+let managedIceFailed = false;   // функция уже не отвечала в этом сеансе
+
 function ensureTurnServers(timeoutMs = 3000) {
     if (!USE_MANAGED_TURN || Date.now() < managedIceUnavailableUntil) return Promise.resolve();
     if (managedIceServers && Date.now() < managedIceExpiresAt) return Promise.resolve();
     if (typeof getSupabaseClient !== "function" || typeof myRealUserId === "undefined" || !myRealUserId) return Promise.resolve();
+    // Функция уже не отвечала — звонок её почти не ждёт (запрос идёт в фоне): иначе
+    // раз в полчаса очередной звонок стоял на месте, пока она снова не ответит ошибкой.
+    if (managedIceFailed) timeoutMs = Math.min(timeoutMs, 150);
     if (!managedIcePromise) {
         managedIcePromise = getSupabaseClient().functions.invoke("turn-credentials")
             .then(({ data, error }) => {
-                if (error || !Array.isArray(data?.iceServers) || !data.iceServers.length) { managedIceUnavailableUntil = Date.now() + 30 * 60 * 1000; return; }
+                if (error || !Array.isArray(data?.iceServers) || !data.iceServers.length) { managedIceFailed = true; managedIceUnavailableUntil = Date.now() + 30 * 60 * 1000; return; }
+                managedIceFailed = false;
                 managedIceServers = data.iceServers;
                 managedIceExpiresAt = Date.now() + Math.max(600, (Number(data.ttl) || 86400) - 3600) * 1000;
             })
-            .catch(() => { managedIceUnavailableUntil = Date.now() + 30 * 60 * 1000; })
+            .catch(() => { managedIceFailed = true; managedIceUnavailableUntil = Date.now() + 30 * 60 * 1000; })
             .finally(() => { managedIcePromise = null; });
     }
     // Звонок не должен ждать дольше пары секунд, даже если сервер не отвечает.
@@ -1237,9 +1249,12 @@ function ensureTurnServers(timeoutMs = 3000) {
 
 const RTC_CONFIG = {
     get iceServers() {
+        // STUN Cloudflare — первым: у многих в России трафик к Google идёт через VPN, и STUN
+        // Google тогда отдаёт адрес VPN-сервера за границей (с ним прямой звонок не
+        // соединяется, звук уходил в ретранслятор), а Cloudflare отвечает напрямую.
         const servers = [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" }
+            { urls: "stun:stun.cloudflare.com:3478" },
+            { urls: "stun:stun.l.google.com:19302" }
         ];
         if (managedIceServers && Date.now() < managedIceExpiresAt + 3600 * 1000) servers.push(...managedIceServers);
         if (DEFAULT_TURN.urls.length) servers.push({ urls: DEFAULT_TURN.urls, username: DEFAULT_TURN.username, credential: DEFAULT_TURN.credential });
@@ -1356,6 +1371,7 @@ const CALL_RING_TIMEOUT_MS = 30000;
 let callInboxUnsubscribe = null;
 let activeCall = null;       // { callId, pc, localStream, isVideo, isCaller, remoteUserId, remoteName, remoteAvatarUrl, state, channel, timeoutTimer }
 let pendingIncomingCall = null; // { callId, sdp, callerId, callerName, callerAvatarUrl, isVideo } — ждёт accept/decline
+let acceptingCall = null;       // { offer, watchClosed, cancelled } — «Принять» нажато, звонок готовится (см. acceptIncomingCall)
 
 const CALL_HISTORY_STORAGE_PREFIX = "kaban-call-history:";
 
@@ -1447,6 +1463,41 @@ const CALL_TAB_ID = (crypto.randomUUID ? crypto.randomUUID() : String(Math.rando
 
 const handledCallIds = new Set();   // уже полученные приглашения (повторы — см. scheduleCallOfferResend)
 
+// Наш вызов этому человеку, на который ещё не ответили (готовится или звонит).
+// committed — его устройство уже взяло наш вызов (заявка/ответ): тогда он главнее в любом случае.
+function ownUnansweredCallTo(userId) {
+    const call = activeCall && activeCall.isCaller && activeCall.remoteUserId === userId && !activeCall.connectedAt ? activeCall : null;
+    const start = startingCallInfo && !startingCallInfo.cancelled && startingCallInfo.remoteUserId === userId ? startingCallInfo : null;
+    if (!call && !start) return null;
+    return {
+        callId: call?.callId || start.callId,
+        committed: !!call && (call.answeredBy !== undefined || !!call.claimedBy),
+        call, start
+    };
+}
+
+// Свой вызов уступает встречному: сворачиваем без следа (ни «отменённого» в истории,
+// ни записи в чат) — разговор всё равно сейчас начнётся.
+function abandonOwnCallForGlare(own) {
+    if (own.start) { own.start.cancelled = true; if (startingCallInfo === own.start) setStartingCall(null); }
+    const call = own.call;
+    if (call && activeCall === call) {
+        call.logged = true;
+        removeCallHistoryEntry(call.callId);
+        if (call.sdpSent) sendCallEndReliably(call, { reason: "glare" });
+        teardownActiveCall("cancelled");
+        removeCallHistoryEntry(call.callId);
+    }
+}
+
+function removeCallHistoryEntry(callId) {
+    const history = getCallHistory();
+    const next = history.filter((call) => call.id !== callId);
+    if (next.length === history.length) return;
+    try { localStorage.setItem(callHistoryStorageKey(), JSON.stringify(next)); } catch { /* не критично */ }
+    if (typeof updateCallHistoryBadge === "function") updateCallHistoryBadge();
+}
+
 function handleIncomingCallOffer(payload) {
 
     if (!payload?.callId) return;
@@ -1460,6 +1511,23 @@ function handleIncomingCallOffer(payload) {
     }
     handledCallIds.add(payload.callId);
     if (handledCallIds.size > 200) handledCallIds.delete(handledCallIds.values().next().value);
+
+    // Встречный вызов: мы звоним тому же человеку, который сейчас звонит нам (оба нажали
+    // «Позвонить» почти одновременно — обычно перезванивая после обрыва). Раньше каждая
+    // сторона гасила свой вызов, никого об этом не предупредив, и показывала чужой — тоже
+    // уже погашенный: оба видели «Звонит вам…», а ответить было некому. Теперь остаётся
+    // один вызов — с меньшим номером (обе стороны выбирают одинаково), а уступившая
+    // сторона сразу отвечает на него: человек ведь сам хотел поговорить.
+    const own = ownUnansweredCallTo(payload.callerId);
+    let autoAnswer = false;
+    if (own) {
+        if (own.committed || own.callId < payload.callId) {
+            glareDeferredOffer = { ...payload, _deferredAt: Date.now() };
+            return;   // наш главнее: собеседник получит наше приглашение и ответит на него
+        }
+        abandonOwnCallForGlare(own);
+        autoAnswer = true;
+    }
 
     // Звонит тот же человек, с которым у нас «висит» прежний звонок (он обновил
     // страницу, у него упала программа или пропала сеть): его старый звонок уже
@@ -1491,10 +1559,22 @@ function handleIncomingCallOffer(payload) {
 
     // Уже говорю с кем-то (или уже звонят) — автоматически "занято", как у
     // любого настоящего телефона, вместо того чтобы молча проигнорировать.
-    if (activeCall || pendingIncomingCall || activeGroupCall || startingGroupCall) {
+    // В том числе пока свой вызов ещё готовится (запрос микрофона — секунды): раньше
+    // входящий в этот момент показывался, потом его закрывало окно своего вызова, и
+    // «Завершить» сбрасывало не свой вызов, а этот, спрятанный.
+    if (activeCall || pendingIncomingCall || acceptingCall || activeGroupCall || startingGroupCall || startingCallInfo) {
         updateCallHistoryEntry(payload.callId, { result: "missed", seen: false });
         const busy = KabanAPI.joinCallChannel(payload.callId, {});
         busy.ready.then(() => busy.sendEnd({ reason: "busy" })).catch(() => {}).finally(() => { try { busy.leave(); } catch {} });
+        return;
+    }
+
+    if (autoAnswer) {
+        // Встречный вызов: сразу «Соединение…», без мелодии и кнопок «Принять/Отклонить».
+        pendingIncomingCall = payload;
+        setCallPersonInfo(payload.callerName, payload.callerAvatarUrl);
+        openCallBackdrop("connecting");
+        acceptIncomingCall();
         return;
     }
 
@@ -1584,7 +1664,8 @@ function dismissIncomingCall(offer, reason) {
     if (pendingIncomingCall !== offer) return;
     pendingIncomingCall = null;
     stopCallTone();
-    const handledElsewhere = reason === "elsewhere" || reason === "declined";
+    // glare — звонящий сам ответил на наш встречный вызов (на другом нашем устройстве): не пропущенный.
+    const handledElsewhere = reason === "elsewhere" || reason === "declined" || reason === "glare";
     updateCallHistoryEntry(offer.callId, { result: "missed", seen: handledElsewhere });
     if (typeof updateCallHistoryBadge === "function") updateCallHistoryBadge();
     hideCallUI();
@@ -1746,19 +1827,23 @@ async function openCallMic() {
 }
 
 // Собрать поток звонка: обработанный микрофон + камера (для видеозвонка).
+// Камеры нет или она запрещена — звонок не срывается, а идёт со звуком (videoOk:
+// false), как групповой: раньше видеозвонок без камеры не начинался и не принимался
+// вовсе. Камеру можно включить позже кнопкой в окне звонка.
 async function openCallMedia(isVideo) {
     const mic = await openCallMic();
     const stream = new MediaStream([mic.track]);
+    let videoOk = false;
     if (isVideo) {
         try {
             const cam = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } });
             cam.getVideoTracks().forEach((t) => stream.addTrack(t));
+            videoOk = true;
         } catch (error) {
-            mic.stop();
-            throw error;
+            console.warn("Камера недоступна — звонок со звуком", error);
         }
     }
-    return { stream, mic };
+    return { stream, mic, videoOk };
 }
 
 // Голос в Opus: 64 кбит/с вместо ~32 по умолчанию, защита от потерь (FEC) и без
@@ -1789,6 +1874,87 @@ async function setCallLocalDescription(pc, description) {
 // звонит СОБЕСЕДНИКУ уже открытого 1:1 чата (currentOtherUserId уже
 // отслеживается для реальных личных чатов, см. openRealChat).
 let startingCall = false;
+// Вызов, который ещё готовится (микрофон, ретранслятор, сбор сетевых адресов — до
+// отправки приглашения): { callId, remoteUserId, cancelled }. startingCall — то же, для
+// старых проверок «занят ли я» (voice.js и т. п.).
+let startingCallInfo = null;
+// Чужое приглашение, которое мы пропустили при встречном вызове (наш главнее). Если наш
+// вызов так и не ушёл (нет микрофона, отменили) — показываем это приглашение как обычное.
+let glareDeferredOffer = null;
+
+function setStartingCall(info) {
+    startingCallInfo = info;
+    startingCall = !!info;
+}
+
+// «Завершить», пока вызов ещё готовится: раньше кнопки в это время не было вовсе (окно
+// звонка появлялось только через 1,5–3 с), а теперь оно открыто сразу — и отменяет вызов.
+function cancelStartingCall() {
+    const start = startingCallInfo;
+    if (!start) return false;
+    start.cancelled = true;
+    setStartingCall(null);
+    if (activeCall?.callId === start.callId) {
+        const call = activeCall;
+        // Приглашение могло уже уйти (отмена в последний момент) — отбой с повтором.
+        if (call.sdpSent) sendCallEndReliably(call, { reason: "hangup" });
+        else call.logged = true;   // приглашение даже не ушло — запись о звонке в чат не нужна
+        teardownActiveCall("cancelled");
+    } else {
+        stopCallTone();
+        hideCallUI();
+    }
+    replayGlareDeferredOffer(start.remoteUserId);
+    return true;
+}
+
+function replayGlareDeferredOffer(userId) {
+    const offer = glareDeferredOffer;
+    glareDeferredOffer = null;
+    if (!offer || offer.callerId !== userId || Date.now() - offer._deferredAt > CALL_RING_TIMEOUT_MS) return;
+    handledCallIds.delete(offer.callId);
+    handleIncomingCallOffer(offer);
+}
+
+// Окно исходящего звонка — сразу по нажатию, ещё до того, как готов микрофон и ушло приглашение.
+function showStartingCallUI({ name, avatarUrl, isVideo }) {
+    document.getElementById("call-kind").textContent = isVideo ? "Видеозвонок" : "Аудиозвонок";
+    document.getElementById("call-state").textContent = "Вызов…";
+    setCallPersonInfo(name, avatarUrl);
+    document.getElementById("call-controls-incoming").hidden = true;
+    document.getElementById("call-controls-incall").hidden = false;
+    document.getElementById("call-remote-muted").hidden = true;
+    document.getElementById("call-key").hidden = true;
+    document.getElementById("call-signal").hidden = true;
+    document.getElementById("call-video-area").hidden = true;
+    document.querySelectorAll("#call-controls-incall [data-call-action]").forEach((button) => button.setAttribute("aria-pressed", "false"));
+    document.querySelector("#call-backdrop .call-dialog")?.classList.remove("has-remote-video", "has-local-video", "is-connected");
+    openCallBackdrop("ringing-out");
+}
+
+// Сбор сетевых адресов перед отправкой приглашения/ответа. Ждать полного сбора — это почти
+// всегда весь таймаут (ретранслятор во Франции отвечает за 0,8–1,6 с), и на столько же
+// позже звонил телефон у собеседника. Для начала хватает своего адреса и внешнего (STUN);
+// остальные дойдут следом: звонящего — по заявке собеседника, отвечающего — по одному.
+function waitForUsefulCandidates(pc, maxMs, settleMs = 150) {
+    if (pc.iceGatheringState === "complete") return Promise.resolve();
+    return new Promise((resolve) => {
+        let settle = null;
+        const useful = (text) => / typ (srflx|relay)/.test(text || "");
+        const done = () => {
+            clearTimeout(timer); clearTimeout(settle);
+            pc.removeEventListener("icegatheringstatechange", check);
+            pc.removeEventListener("icecandidate", onCandidate);
+            resolve();
+        };
+        const check = () => { if (pc.iceGatheringState === "complete") done(); };
+        const onCandidate = (event) => { if (!settle && useful(event.candidate?.candidate)) settle = setTimeout(done, settleMs); };
+        const timer = setTimeout(done, maxMs);
+        pc.addEventListener("icegatheringstatechange", check);
+        pc.addEventListener("icecandidate", onCandidate);
+        if (useful(pc.localDescription?.sdp)) settle = setTimeout(done, settleMs);
+    });
+}
 
 async function startCall(kind) {
 
@@ -1829,14 +1995,10 @@ async function startCall(kind) {
         acceptIncomingCall();
         return;
     }
-    if (activeCall || pendingIncomingCall || startingCall) {
+    if (activeCall || pendingIncomingCall || acceptingCall || startingCall) {
         toast("У вас уже есть активный звонок");
         return;
     }
-    startingCall = true;
-    // Звоним — выходим из голосовой комнаты (как в Discord): иначе микрофон шёл бы
-    // и в звонок, и в комнату, а собеседник слышал бы всю комнату.
-    if (typeof voiceCall !== "undefined" && voiceCall) { await voiceLeave(); toast("Вы вышли из голосовой комнаты"); }
 
     // Снимок на момент нажатия — getUserMedia может висеть на запросе
     // разрешения сколь угодно долго, и если за это время пользователь
@@ -1847,27 +2009,63 @@ async function startCall(kind) {
     const remoteAvatarUrl = cachedChatRows.find((r) => r.chat_id === currentChatId)?.otherUser?.avatar_url || null;
     const callChatId = currentChatId;   // запись о звонке пойдёт именно в этот чат
 
-    const isVideo = kind === "video";
+    let isVideo = kind === "video";
+    // Номер вызова — сразу: по нему решается встречный вызов (см. handleIncomingCallOffer).
+    const callId = crypto.randomUUID();
+    const start = { callId, remoteUserId, cancelled: false };
+    setStartingCall(start);
+    // Отменили («Завершить»), уступили встречному вызову или уже идёт другой — тихо выходим.
+    const aborted = () => start.cancelled || startingCallInfo !== start;
+    const finishStart = () => { if (startingCallInfo === start) setStartingCall(null); };
 
-    let localStream, callMic;
+    showStartingCallUI({ name: remoteName, avatarUrl: remoteAvatarUrl, isVideo });
+    // Ретранслятор запрашиваем параллельно с микрофоном, а не после него.
+    // Не дольше 0,8 с: запрос продолжится в фоне, а звонок пойдёт через запасной ретранслятор.
+    const turnReady = ensureTurnServers(800);
+
+    // Звоним — выходим из голосовой комнаты (как в Discord): иначе микрофон шёл бы
+    // и в звонок, и в комнату, а собеседник слышал бы всю комнату.
+    if (typeof voiceCall !== "undefined" && voiceCall) { await voiceLeave(); toast("Вы вышли из голосовой комнаты"); }
+
+    let localStream, callMic, videoOk;
     try {
-        ({ stream: localStream, mic: callMic } = await openCallMedia(isVideo));
+        ({ stream: localStream, mic: callMic, videoOk } = await openCallMedia(isVideo));
     } catch (error) {
-        startingCall = false;
-        toast("Не удалось получить доступ к " + (isVideo ? "камере/микрофону" : "микрофону"));
+        if (aborted()) return;
+        finishStart();
+        hideCallUI();
+        toast("Не удалось получить доступ к микрофону");
+        replayGlareDeferredOffer(remoteUserId);
         return;
     }
+    if (aborted()) {
+        localStream.getTracks().forEach((track) => track.stop());
+        callMic?.stop();
+        return;
+    }
+    if (isVideo && !videoOk) {
+        isVideo = false;
+        toast("Камера недоступна — звоним со звуком");
+    }
+    const callKind = isVideo ? "video" : "audio";
 
-    const callId = crypto.randomUUID();
     let pc = null;
     let channelHandle = null;
+    // Ушёл ли вызов к собеседнику (дальше отмена — уже обычное «Завершить»).
+    const releaseUnsent = () => {
+        localStream.getTracks().forEach((track) => track.stop());
+        callMic?.stop();
+        try { pc?.close(); } catch {}
+        try { channelHandle?.leave(); } catch {}
+    };
 
     try {
 
         const me = await KabanAuth.getCurrentUser();
         if (!me) throw new Error("Нужно войти в аккаунт");
 
-        await ensureTurnServers(); // ретранслятор для мобильных сетей
+        await turnReady; // ретранслятор для мобильных сетей
+        if (aborted()) { releaseUnsent(); return; }
         pc = new RTCPeerConnection(RTC_CONFIG);
         localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
         // В аудиозвонке заранее открываем «пустой» видеоканал: тогда камеру или показ
@@ -1920,7 +2118,19 @@ async function startCall(kind) {
                     // Таймер "не ответил" снимаем ТОЛЬКО после успешного
                     // применения ответа — иначе при битом SDP звонок навсегда
                     // оставался бы в "calling" без единого предохранителя.
-                    if (activeCall?.callId === callId) clearTimeout(activeCall.timeoutTimer);
+                    if (activeCall?.callId === callId) {
+                        clearTimeout(activeCall.timeoutTimer);
+                        // Ответили — гудки и «Звонит…» больше не к месту (раньше они шли,
+                        // пока не установится связь, а через ретранслятор это секунды).
+                        if (!activeCall.connectedAt) {
+                            activeCall.state = "connecting";
+                            stopCallTone();
+                            const stateEl = document.getElementById("call-state");
+                            if (stateEl) stateEl.textContent = "Соединение…";
+                            const dialog = document.querySelector("#call-backdrop .call-dialog");
+                            if (dialog && dialog.dataset.phase === "ringing-out") dialog.dataset.phase = "connecting";
+                        }
+                    }
                 } catch (error) {
                     console.warn("Не удалось применить answer", error);
                     if (activeCall?.callId === callId) {
@@ -1979,15 +2189,17 @@ async function startCall(kind) {
         });
         activeCall.channel = channelHandle;
         await channelHandle.ready;
+        if (aborted()) { if (activeCall?.callId === callId) teardownActiveCall("cancelled"); else releaseUnsent(); return; }
 
         const offer = await pc.createOffer();
         await setCallLocalDescription(pc, offer);
 
         // Собеседник подключается к каналу звонка только после того, как
         // нажмёт «Принять», — кандидаты, разосланные до этого по одному, уходили
-        // в пустоту. Ждём сбора кандидатов (до 1,2 с; запоздавшие дошлём по заявке собеседника) и отправляем их прямо
-        // внутри предложения: так они гарантированно дойдут.
-        await waitForIceGathering(pc, 1200);
+        // в пустоту. В предложение кладём то, что собралось за первые доли секунды
+        // (свой и внешний адрес), остальные дошлём по заявке собеседника (lateCandidates).
+        await waitForUsefulCandidates(pc, 1000);
+        if (aborted()) { if (activeCall?.callId === callId) teardownActiveCall("cancelled"); else releaseUnsent(); return; }
 
         const offerPayload = {
             callId,
@@ -1997,39 +2209,42 @@ async function startCall(kind) {
             callerAvatarUrl: cachedMyProfile?.avatar_url || null,
             isVideo
         };
-        await KabanAPI.sendCallOffer(remoteUserId, offerPayload);
+        // «Отправлено» — ДО ожидания отправки: адреса, собранные за это время, раньше не
+        // попадали ни в предложение (снимок уже сделан), ни в досылку (флаг ещё не стоял).
         if (activeCall?.callId === callId) {
             activeCall.sdpSent = true;
             activeCall.offerPayload = offerPayload;
-            activeCall.offerSentAt = Date.now();
         }
+        await KabanAPI.sendCallOffer(remoteUserId, offerPayload);
+        if (activeCall?.callId === callId) activeCall.offerSentAt = Date.now();
+        if (aborted()) return;   // отменили, пока уходило приглашение — отбой уже отправлен (endCall)
 
     } catch (error) {
         // Любой сбой настройки/сигнализации до showOutgoingCallUI — без этого
         // камера/микрофон оставались открытыми, activeCall навсегда не null
         // (блокирует все будущие звонки), а интерфейса звонка при этом нет.
+        if (aborted()) { if (activeCall?.callId === callId) teardownActiveCall("cancelled"); else releaseUnsent(); return; }
         console.warn("Не удалось начать звонок", error);
         toast("Не удалось начать звонок");
         if (activeCall?.callId === callId) {
             teardownActiveCall("missed");
         } else {
-            localStream.getTracks().forEach((track) => track.stop());
-            callMic?.stop();
-            try { pc?.close(); } catch {}
-            try { channelHandle?.leave(); } catch {}
+            releaseUnsent();
+            hideCallUI();
         }
-        startingCall = false;
+        finishStart();
+        replayGlareDeferredOffer(remoteUserId);
         return;
     }
 
-    startingCall = false;
+    finishStart();
 
     saveCallHistoryEntry({
         id: callId,
         remoteUserId,
         name: remoteName,
         avatarUrl: remoteAvatarUrl,
-        kind,
+        kind: callKind,
         direction: "outgoing",
         result: "missed",
         startedAt: new Date().toISOString(),
@@ -2039,7 +2254,10 @@ async function startCall(kind) {
     showOutgoingCallUI();
     startCallTone("ringback");
     scheduleCallOfferResend(callId, remoteUserId, 0);
-    sendCallRingPush(currentChatId, remoteUserId, kind);
+    // Чат — тот, откуда звонили (снимок), а не открытый сейчас: пока шла подготовка
+    // (разрешение на микрофон, ретранслятор, сбор кандидатов — это секунды), человек
+    // мог переключиться на другой чат, и уведомление уходило с чужим чатом и не доходило.
+    sendCallRingPush(callChatId, remoteUserId, callKind);
 
     activeCall.timeoutTimer = setTimeout(() => {
         if (activeCall?.callId === callId && activeCall.state === "calling") {
@@ -2070,7 +2288,9 @@ function scheduleCallOfferResend(callId, calleeId, attempt) {
     call.resendTimer = setTimeout(async () => {
         if (activeCall !== call || call.ringing || call.state !== "calling" || call.answeredBy !== undefined || call.claimedBy) return;
         call.offerResends = (call.offerResends || 0) + 1;
-        try { await KabanAPI.sendCallOffer(calleeId, { ...call.offerPayload, resend: call.offerResends }); } catch { /* следующая попытка */ }
+        // В повторе — свежее описание: в нём уже все собранные адреса (первое уходит раньше).
+        const sdp = call.pc.localDescription?.toJSON ? call.pc.localDescription.toJSON() : call.offerPayload.sdp;
+        try { await KabanAPI.sendCallOffer(calleeId, { ...call.offerPayload, sdp, resend: call.offerResends }); } catch { /* следующая попытка */ }
         scheduleCallOfferResend(callId, calleeId, attempt + 1);
     }, CALL_OFFER_RESEND_DELAYS[attempt] ?? 4000);
 }
@@ -2084,6 +2304,42 @@ function sendCallRingPush(chatId, calleeId, kind) {
         .then(() => {}, () => {});
 }
 
+// Звонок уже принят, но ещё готовится: разрешение на микрофон, ретранслятор, заявка
+// звонящему — до нескольких секунд. Раньше всё это время на экране оставались
+// «Принять / Отклонить», а «Отклонить» уже ничего не делало: звонок всё равно
+// соединялся, и окно всплывало снова. Теперь сразу «Соединение…», а «Завершить»
+// (или «Отклонить» во всплывающем окне программы) отменяет подготовку.
+// Состояние — acceptingCall (объявлено рядом с activeCall).
+
+function showAcceptingCallUI(offer) {
+    document.getElementById("call-kind").textContent = offer.isVideo ? "Видеозвонок" : "Аудиозвонок";
+    document.getElementById("call-state").textContent = "Соединение…";
+    document.getElementById("call-controls-incoming").hidden = true;
+    document.getElementById("call-controls-incall").hidden = false;
+    // Состояние кнопок от прошлого звонка (например, «микрофон выключен») не показываем.
+    document.querySelectorAll("#call-controls-incall [data-call-action]").forEach((button) => button.setAttribute("aria-pressed", "false"));
+    const dialog = document.querySelector("#call-backdrop .call-dialog");
+    if (dialog) dialog.dataset.phase = "connecting";
+}
+
+function cancelAcceptingCall() {
+    const accepting = acceptingCall;
+    if (!accepting) return false;
+    accepting.cancelled = true;
+    acceptingCall = null;
+    updateCallHistoryEntry(accepting.offer.callId, { result: "missed", seen: true });
+    // Канал «наблюдения» за вызовом закрывается — новый открываем только после него.
+    Promise.resolve(accepting.watchClosed).then(() => {
+        const channelHandle = KabanAPI.joinCallChannel(accepting.offer.callId, {});
+        channelHandle.ready
+            .then(() => channelHandle.sendEnd({ reason: "declined" }))
+            .catch(() => {})
+            .finally(() => { try { channelHandle.leave(); } catch {} });
+    });
+    hideCallUI();
+    return true;
+}
+
 async function acceptIncomingCall() {
 
     if (!pendingIncomingCall) return;
@@ -2091,13 +2347,18 @@ async function acceptIncomingCall() {
     pendingIncomingCall = null;
     stopCallTone();
     const watchClosed = closeIncomingWatch(offer);
+    const accepting = { offer, watchClosed, cancelled: false };
+    acceptingCall = accepting;
+    showAcceptingCallUI(offer);
     if (typeof voiceCall !== "undefined" && voiceCall) { await voiceLeave(); toast("Вы вышли из голосовой комнаты"); }
 
-    let localStream, callMic;
+    let localStream, callMic, videoOk;
     try {
-        ({ stream: localStream, mic: callMic } = await openCallMedia(offer.isVideo));
+        ({ stream: localStream, mic: callMic, videoOk } = await openCallMedia(offer.isVideo));
     } catch (error) {
-        toast("Не удалось получить доступ к " + (offer.isVideo ? "камере/микрофону" : "микрофону"));
+        if (accepting.cancelled) return;   // уже отменили сами — собеседнику сказано
+        acceptingCall = null;
+        toast("Не удалось получить доступ к микрофону");
         updateCallHistoryEntry(offer.callId, { result: "missed", seen: false });
         await watchClosed;
         // pendingIncomingCall уже обнулён выше — если уведомление собеседника
@@ -2117,8 +2378,20 @@ async function acceptIncomingCall() {
         return;
     }
 
-    await ensureTurnServers(); // ретранслятор для мобильных сетей
+    // Пока ждали разрешения на микрофон (или ретранслятор ниже) — нажали «Завершить»:
+    // отказ уже отправлен, микрофон закрываем сразу, а не после ожидания ретранслятора.
+    const stopIfCancelled = () => {
+        if (!accepting.cancelled) return false;
+        localStream.getTracks().forEach((track) => track.stop());
+        callMic?.stop();
+        return true;
+    };
+    if (stopIfCancelled()) return;
+    await ensureTurnServers(800); // ретранслятор для мобильных сетей (не дольше 0,8 с — дальше в фоне)
     await watchClosed;         // канал «наблюдения» за этим звонком закрыт — открываем рабочий
+    if (stopIfCancelled()) return;
+    acceptingCall = null;
+    if (offer.isVideo && !videoOk) toast("Камера недоступна — отвечаем со звуком");
     const pc = new RTCPeerConnection(RTC_CONFIG);
     localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
@@ -2130,7 +2403,7 @@ async function acceptIncomingCall() {
         remoteAvatarUrl: offer.callerAvatarUrl,
         state: "connecting",
         connectedAt: null,
-        local: { muted: false, video: !!offer.isVideo, screen: false },
+        local: { muted: false, video: !!offer.isVideo && !!videoOk, screen: false },
         remote: { muted: false, video: !!offer.isVideo, screen: false }
     };
     updateCallHistoryEntry(offer.callId, { result: "connecting", seen: true });
@@ -2192,11 +2465,16 @@ async function acceptIncomingCall() {
         });
         const answer = await pc.createAnswer();
         await setCallLocalDescription(pc, answer);
-        // Свои кандидаты — внутри ответа (как и у звонящего): не зависят от
-        // того, успел ли он их принять по одному.
-        await waitForIceGathering(pc, 800);
-        await channelHandle.sendAnswer({ sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : answer, tab: CALL_TAB_ID });
-        if (activeCall === myCall) myCall.sdpSent = true;
+        // Свои кандидаты — внутри ответа (как и у звонящего); собранные позже звонящий
+        // получит по одному — он уже слушает канал звонка.
+        await waitForUsefulCandidates(pc, 800);
+        if (activeCall !== myCall) return;
+        const answerPayload = { sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : answer, tab: CALL_TAB_ID };
+        // Флаг — до ожидания отправки (см. то же у звонящего): иначе адреса, собранные
+        // за время отправки, терялись.
+        myCall.sdpSent = true;
+        await channelHandle.sendAnswer(answerPayload);
+        scheduleAnswerResend(myCall, answerPayload);
     } catch (error) {
         toast("Не удалось установить соединение");
         teardownActiveCall("missed");
@@ -2218,8 +2496,27 @@ async function acceptIncomingCall() {
 
 }
 
+// Ответ звонящему — одно сообщение канала без гарантии доставки. Потерялся (канал
+// звонящего как раз переподключался) — он так и не узнавал, что мы ответили: у нас
+// 25 секунд висело «Соединение…», и звонок обрывался. Пока связь не установилась,
+// повторяем ответ; звонящий узнаёт повтор (answeredBy) и второй раз его не применяет.
+function scheduleAnswerResend(call, payload, attempt = 0) {
+    const delays = [1800, 2500, 3500, 5000];
+    if (attempt >= delays.length) return;
+    clearTimeout(call.answerResendTimer);
+    call.answerResendTimer = setTimeout(() => {
+        // Проверяем соединение целиком, а не только ICE: проверки связи проходят и тогда,
+        // когда звонящий ответа ещё не получил (он умеет отвечать на них без него), а
+        // шифрованный канал без ответа так и не поднимется.
+        if (activeCall !== call || call.connectedAt || call.pc.connectionState === "connected") return;
+        Promise.resolve(call.channel?.sendAnswer?.(payload)).catch(() => {});
+        scheduleAnswerResend(call, payload, attempt + 1);
+    }, delays[attempt]);
+}
+
 function declineIncomingCall() {
-    if (!pendingIncomingCall) return;
+    // «Отклонить» во всплывающем окне программы, когда звонок уже принят и готовится.
+    if (!pendingIncomingCall) { cancelAcceptingCall(); return; }
     const offer = pendingIncomingCall;
     pendingIncomingCall = null;
     stopCallTone();
@@ -2369,6 +2666,7 @@ function beginCallRecovery(callId, delayMs) {
         call.reconnectStartedAt = Date.now();
         const el = document.getElementById("call-state");
         if (el) el.textContent = "Переподключаемся…";
+        probeRealtimeSocket();
     }
     clearTimeout(call.recoveryTimer);
     call.recoveryTimer = setTimeout(() => attemptCallRecovery(callId), delayMs);
@@ -2414,7 +2712,15 @@ async function restartCallIce(callId) {
         await waitForIceGathering(call.pc, 1500);
         if (activeCall !== call) return;
         call.restartSeq = (call.restartSeq || 0) + 1;
-        await call.channel?.sendRenegotiate?.({ kind: "offer", sdp: call.pc.localDescription.toJSON(), seq: call.restartSeq });
+        const seq = call.restartSeq;
+        await call.channel?.sendRenegotiate?.({ kind: "offer", sdp: call.pc.localDescription.toJSON(), seq });
+        // Ответ на перезапуск не пришёл (потерялся при той же смене сети) — повторяем то же
+        // предложение через 2,5 с, а не ждём следующей попытки через 6.
+        clearTimeout(call.restartResendTimer);
+        call.restartResendTimer = setTimeout(() => {
+            if (activeCall !== call || call.restartSeq !== seq || call.pc.signalingState !== "have-local-offer") return;
+            Promise.resolve(call.channel?.sendRenegotiate?.({ kind: "offer", sdp: call.pc.localDescription.toJSON(), seq })).catch(() => {});
+        }, 2500);
     } catch (error) {
         console.warn("Не удалось переподключить звонок", error);
     } finally {
@@ -2459,8 +2765,30 @@ async function applyCallRenegotiate(call, payload) {
     }
 }
 
+// Канал сигнализации (сокет Realtime) после смены сети может «умереть молча»: библиотека
+// замечает это только по пропущенному heartbeat — через 30–60 с, а всё это время сигналы
+// переподключения звонка и голосовой комнаты уходили в никуда (звонок обрывался по
+// таймауту в 30 с). Проверяем сами: heartbeat сейчас и ещё раз через 2,5 с — если на
+// первый не ответили, библиотека на втором рвёт соединение и открывает новое.
+let realtimeProbeAt = 0;
+function probeRealtimeSocket() {
+    if (Date.now() - realtimeProbeAt < 8000) return;
+    let rt = null;
+    try { rt = getSupabaseClient()?.realtime; } catch { return; }
+    if (typeof rt?.sendHeartbeat !== "function") return;
+    realtimeProbeAt = Date.now();
+    try { rt.sendHeartbeat(); } catch { /* сокета нет — поднимет сторож */ }
+    setTimeout(() => {
+        try { rt.sendHeartbeat(); } catch { /* ок */ }
+        // Библиотека не переподключается, пока страница «скрыта» (окно программы в трее
+        // считается скрытым) — поднимаем сокет сами.
+        setTimeout(() => { try { if (!rt.isConnected()) rt.connect(); } catch { /* ок */ } }, 700);
+    }, 2500);
+}
+
 // Сеть сменилась (Wi-Fi ↔ мобильный) — не ждём, пока браузер сам заметит обрыв.
 function nudgeCallOnNetworkChange() {
+    probeRealtimeSocket();
     const call = activeCall;
     if (!call || !call.connectedAt) return;
     setTimeout(() => {
@@ -2512,6 +2840,10 @@ function startCallQualityMonitor(callId) {
         if (activeCall !== call) { clearInterval(call.qualityTimer); return; }
         if (call.reconnecting) { call.signal = 1; renderCallSignal(); return; }
         checkCallMicAlive(call);
+        // Своё состояние (микрофон/камера/экран) — повтором раз в 3 с: оно уходит одним
+        // сообщением, и если оно терялось, собеседник до конца звонка не видел включённую
+        // камеру (кадры шли, а окно показывало аватар) или не видел значок «без звука».
+        sendCallState();
         let rtt = 0, lost = null, sent = null, inLost = null, inRecv = null;
         try {
             const stats = await call.pc.getStats();
@@ -2617,10 +2949,27 @@ function startCallDurationTicker(startedAt = Date.now()) {
     }, 1000);
 }
 
+// «Отбой» звонка, на который ещё не ответили. Собеседник подключается к каналу звонка
+// не сразу, а через долю секунды после того, как получит приглашение: отбой, отправленный
+// в этот промежуток (сбросили сразу после нажатия), до него не доходил, и у него ещё
+// 35 секунд звонил уже несуществующий вызов. Канал держим ещё 3 с и повторяем отбой.
+function sendCallEndReliably(call, payload) {
+    const channel = call?.channel;
+    if (!channel) return;
+    call.channel = null;   // teardownActiveCall не закроет канал раньше времени
+    const send = () => Promise.resolve(channel.sendEnd(payload)).catch(() => {});
+    send();
+    setTimeout(send, 1200);
+    setTimeout(() => { send(); setTimeout(() => { try { channel.leave(); } catch {} }, 300); }, 3000);
+}
+
 function endCall() {
     if (pendingIncomingCall) { declineIncomingCall(); return; }
+    if (cancelAcceptingCall()) return;
+    if (cancelStartingCall()) return;
     if (!activeCall) { hideCallUI(); return; }
-    Promise.resolve(activeCall.channel?.sendEnd({ reason: "hangup" })).catch(() => {});
+    if (activeCall.isCaller && !activeCall.connectedAt && activeCall.answeredBy === undefined) sendCallEndReliably(activeCall, { reason: "hangup" });
+    else Promise.resolve(activeCall.channel?.sendEnd({ reason: "hangup" })).catch(() => {});
     teardownActiveCall(activeCall.state === "connected" ? "completed" : "cancelled");
 }
 
@@ -2679,6 +3028,9 @@ function teardownActiveCall(result, unseenMissedCall = false) {
         logCallToChat(activeCall, result, durationSeconds);
         clearTimeout(activeCall.timeoutTimer);
         clearTimeout(activeCall.recoveryTimer);
+        clearTimeout(activeCall.answerResendTimer);
+        clearTimeout(activeCall.restartResendTimer);
+        clearTimeout(activeCall.resendTimer);
         clearInterval(activeCall.qualityTimer);
         activeCall.voiceMeter?.stop();
         activeCall.localStream?.getTracks().forEach((track) => track.stop());
@@ -4246,7 +4598,7 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
         toast("Вы уже в групповом звонке");
         return;
     }
-    if (activeCall || pendingIncomingCall) {
+    if (activeCall || pendingIncomingCall || acceptingCall) {
         toast("У вас уже есть активный звонок");
         return;
     }
@@ -4412,7 +4764,7 @@ function handleIncomingGroupCallInvite(payload) {
 
     if (!payload?.chatId || payload.fromId === myRealUserId) return;
     if (payload.sentAt && Date.now() - payload.sentAt > 60000) return; // устарело
-    if (activeGroupCall || startingGroupCall || pendingGroupCallInvite || activeCall || pendingIncomingCall) return;
+    if (activeGroupCall || startingGroupCall || pendingGroupCallInvite || activeCall || pendingIncomingCall || acceptingCall) return;
 
     pendingGroupCallInvite = payload;
     document.getElementById("gcall-incoming-text").textContent =
@@ -4543,6 +4895,8 @@ function createGroupCallPeer(call, userId, meta, asInitiator) {
     pc.ontrack = (event) => {
         remoteStream.addTrack(event.track);
         try { event.receiver.jitterBufferTarget = 100; } catch {}
+        const video = peer.tile?.querySelector("video");
+        if (video) playOrUnlock(video);   // новая дорожка (звук/камера) — запустить, если браузер остановил
         updateGroupCallTile(call, peer);
     };
     // Собранные до отправки offer/answer кандидаты уже внутри SDP — поштучно только запоздавшие.
@@ -4989,7 +5343,12 @@ function addGroupCallTile(call, peer) {
     peer.tile = tile;
     call.tiles.set(peer.userId, tile);
     document.getElementById("gcall-grid").appendChild(tile);
-    tile.querySelector("video").srcObject = peer.remoteStream;
+    const video = tile.querySelector("video");
+    video.srcObject = peer.remoteStream;
+    // Как в звонке 1:1 (playOrUnlock): плитка появляется, когда участник подключился, —
+    // уже без жеста пользователя, и мобильный браузер мог не запустить звук (autoplay),
+    // а групповой звонок шёл в тишине. Отказ запоминается и снимается первым касанием.
+    playOrUnlock(video);
     refreshGroupCallGrid();
 }
 
@@ -5233,6 +5592,16 @@ function stopFileInbox() {
     if (fileInboxUnsubscribe) { fileInboxUnsubscribe(); fileInboxUnsubscribe = null; }
 }
 
+// Выход из аккаунта: идущие P2P-передачи раньше продолжали слать/писать файл уже без
+// аккаунта, а очередь отправки запускала следующий файл. Собеседнику — «отменено».
+function stopAllFileTransfers() {
+    fileSendQueue.length = 0;
+    [...activeFileTransfers.values()].forEach((transfer) => {
+        try { Promise.resolve(transfer.channel?.sendEnd?.({ reason: "cancelled" })).catch(() => {}); } catch {}
+        finishFileTransfer(transfer, "cancelled");
+    });
+}
+
 function bufferToHex(buffer) {
     return [...new Uint8Array(buffer)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -5245,8 +5614,16 @@ async function hashFileStreaming(file) {
 
     const reader = file.stream().getReader({ mode: "byob" });
     const chunkHashes = [];
-    let buffer = new ArrayBuffer(FILE_TRANSFER_CHUNK_SIZE);
+    const size = FILE_TRANSFER_CHUNK_SIZE;
+    let buffer = new ArrayBuffer(size);
+    let filled = 0;
 
+    // Хеш — от хешей кусков РОВНО по 64 КБ (последний — сколько осталось). Раньше
+    // хешировался каждый кусок в том размере, в каком его вернуло чтение, а поток
+    // имеет право отдавать меньше запрошенного: если у отправителя и получателя файл
+    // «порезался» по-разному (разные диски, разные источники), одинаковые файлы давали
+    // разный хеш, и целый файл помечался повреждённым. Когда все чтения полные (обычный
+    // случай), результат тот же, что и прежде, — со старыми версиями совместимо.
     try {
         while (true) {
             // BYOB: передаваемый буфер "забирается" ридером и возвращается
@@ -5254,13 +5631,15 @@ async function hashFileStreaming(file) {
             // следующая итерация переиспользовала ТУ ЖЕ память, а не
             // аллоцировала новый Uint8Array на каждый чанк (на файле в
             // десятки ГБ это сотни тысяч мусорных объектов и GC-фризы).
-            const { value, done } = await reader.read(new Uint8Array(buffer));
+            const { value, done } = await reader.read(new Uint8Array(buffer, filled, size - filled));
+            if (value) buffer = value.buffer;
             if (done) break;
-            buffer = value.buffer;
-            if (value.byteLength === 0) continue;
-            const chunkDigest = await crypto.subtle.digest("SHA-256", value);
-            chunkHashes.push(new Uint8Array(chunkDigest));
+            filled += value.byteLength;
+            if (filled < size) continue;
+            chunkHashes.push(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(buffer, 0, size))));
+            filled = 0;
         }
+        if (filled > 0) chunkHashes.push(new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(buffer, 0, filled))));
     } finally {
         reader.releaseLock();
     }
@@ -5748,6 +6127,7 @@ async function pumpFileBytes(transfer) {
     if (!file || !byteChannel || byteChannel.readyState !== "open" || transfer.finished || transfer.reconnecting || transfer.paused) return;
     if (transfer.pumping) return; // уже качает в другом вызове (onopen + onbufferedamountlow могли наложиться)
     transfer.pumping = true;
+    transfer.repump = false;
 
     try {
 
@@ -5755,10 +6135,16 @@ async function pumpFileBytes(transfer) {
             transfer.reader = file.slice(transfer.bytesSent).stream().getReader({ mode: "byob" });
             transfer.readBuffer = new ArrayBuffer(FILE_TRANSFER_CHUNK_SIZE);
         }
+        // Позицию могут сменить посреди прохода («resume-from» после переподключения
+        // заводит новый ридер) — тогда этот проход молча заканчивается, а новый
+        // запускается из finally (см. repump). Раньше прошлый проход падал на
+        // transfer.reader === null, а новый не стартовал — передача вставала навсегда.
+        const reader = transfer.reader;
 
         while (true) {
 
             if (transfer.paused) return; // проверяем и внутри цикла — пауза могла прийти посреди передачи
+            if (transfer.reader !== reader) return;
 
             if (byteChannel.bufferedAmount > FILE_TRANSFER_BUFFERED_HIGH) return;
 
@@ -5766,7 +6152,7 @@ async function pumpFileBytes(transfer) {
             // комментарий в hashFileStreaming) — byteChannel.send() копирует
             // байты синхронно до возврата, так что сразу после send() этот
             // же буфер безопасно отдавать на следующее BYOB-чтение.
-            const { value, done } = await transfer.reader.read(new Uint8Array(transfer.readBuffer));
+            const { value, done } = await reader.read(new Uint8Array(transfer.readBuffer));
             // read() «забирает» переданный буфер и возвращает его же в value — запоминаем
             // СРАЗУ: раньше при раннем выходе ниже (канал порвался, пока читали) в
             // transfer.readBuffer оставался уже отданный буфер, и следующая попытка
@@ -5774,11 +6160,15 @@ async function pumpFileBytes(transfer) {
             if (value) transfer.readBuffer = value.buffer;
             else if (!done) transfer.readBuffer = new ArrayBuffer(FILE_TRANSFER_CHUNK_SIZE);
 
+            // Прочитанное старым ридером (позицию сменили, пока читали; отменённый
+            // ридер к тому же отвечает done) — выбрасываем, это не конец файла.
+            if (transfer.reader !== reader) return;
             if (byteChannel.readyState !== "open" || transfer.finished) return; // порвалось, пока читали чанк
 
             if (done) {
                 const sha256 = await transfer.hashPromise;
-                transfer.controlChannel.send(JSON.stringify({ type: "sender-done", sha256 }));
+                // Хеш большого файла считается долго — канал за это время мог закрыться.
+                try { transfer.controlChannel.send(JSON.stringify({ type: "sender-done", sha256 })); } catch { /* получатель сверит без хеша */ }
                 return;
             }
             if (value.byteLength === 0) { transfer.readBuffer = value.buffer; continue; }
@@ -5792,6 +6182,8 @@ async function pumpFileBytes(transfer) {
 
     } finally {
         transfer.pumping = false;
+        // Пока шёл этот проход, позицию сменили («resume-from») — продолжаем с новой.
+        if (transfer.repump) { transfer.repump = false; pumpFileBytes(transfer); }
     }
 
 }
@@ -5819,8 +6211,10 @@ function handleFileControlMessage(transfer, event) {
         // Получатель после переподключения сообщает, сколько байт у него
         // реально уже записано — источник истины для возобновления, а не
         // наш собственный (возможно, оптимистичный) bytesSent.
+        try { Promise.resolve(transfer.reader?.cancel()).catch(() => {}); } catch { /* уже закрыт */ }
         transfer.reader = null;
         transfer.bytesSent = msg.offset;
+        transfer.repump = true;   // если сейчас идёт прошлый проход — он закончится и запустит новый
         pumpFileBytes(transfer);
     } else if (msg.type === "sender-done") {
         // Прилетает ТОЛЬКО получателю (отправитель сам его шлёт, не получает).
@@ -5917,14 +6311,20 @@ function wireReceiverDataChannels(transfer, pc) {
         } else if (event.channel.label === "file-control") {
             transfer.controlChannel = event.channel;
             event.channel.onmessage = (e) => handleFileControlMessage(transfer, e);
-            event.channel.onopen = () => {
+            event.channel.onopen = async () => {
                 transfer.reconnecting = false;
+                // Сначала дописываем то, что уже пришло по прежнему соединению: раньше
+                // позиция бралась сразу, пока куски ещё стояли в очереди записи, — они
+                // дописывались ПОСЛЕ, а отправитель продолжал с более ранней позиции,
+                // и часть файла записывалась дважды (файл «повреждён при передаче»).
+                try { await transfer.writeChain; } catch { /* ошибка записи уже обработана */ }
+                if (transfer.finished || transfer.controlChannel !== event.channel || event.channel.readyState !== "open") return;
                 if (transfer.bytesReceived > 0) {
                     // Это переподключение, а не первый accept — сообщаем
                     // отправителю реальную позицию, с которой продолжать.
-                    transfer.controlChannel.send(JSON.stringify({ type: "resume-from", offset: transfer.bytesReceived }));
+                    event.channel.send(JSON.stringify({ type: "resume-from", offset: transfer.bytesReceived }));
                 } else {
-                    transfer.controlChannel.send(JSON.stringify({ type: "accepted" }));
+                    event.channel.send(JSON.stringify({ type: "accepted" }));
                 }
                 setP2PStatus(transfer, "transferring", "Передаётся…");
                 startHeartbeat(transfer);
@@ -6100,23 +6500,31 @@ async function declineFileTransfer(transferId) {
 
 }
 
+// Записи на диск идут строго по цепочке (transfer.writeChain): по ней при переподключении
+// дожидаемся, пока всё полученное реально ляжет на диск, и только потом сообщаем
+// отправителю позицию для продолжения (см. wireReceiverDataChannels → resume-from).
 async function handleFileByteChunk(transfer, data) {
 
     if (transfer.finished) return;
 
-    try {
-        await transfer.writable.write(data);
-    } catch (error) {
-        finishFileTransfer(transfer, "failed");
-        return;
-    }
+    const run = async () => {
+        if (transfer.finished) return;
+        try {
+            await transfer.writable.write(data);
+        } catch (error) {
+            finishFileTransfer(transfer, "failed");
+            return;
+        }
 
-    transfer.bytesReceived += data.byteLength;
-    updateP2PProgress(transfer, transfer.bytesReceived, transfer.fileSize);
+        transfer.bytesReceived += data.byteLength;
+        updateP2PProgress(transfer, transfer.bytesReceived, transfer.fileSize);
 
-    if (transfer.bytesReceived >= transfer.fileSize) {
-        await finalizeReceivedFile(transfer);
-    }
+        if (transfer.bytesReceived >= transfer.fileSize) {
+            await finalizeReceivedFile(transfer);
+        }
+    };
+    transfer.writeChain = (transfer.writeChain || Promise.resolve()).then(run);
+    return transfer.writeChain;
 
 }
 
@@ -6284,15 +6692,16 @@ function setP2PStatus(transfer, status, text) {
     // отправителя, чей первый рендер идёт без accept/decline.
     if (actionsEl) {
         if (status === "transferring" || status === "paused") {
+            // transferId приходит от собеседника (приглашение, сообщение) — только через jsAttr.
             actionsEl.innerHTML = status === "paused"
-                ? `<button type="button" class="p2p-file-pause" onclick="resumeFileTransferManual('${transfer.transferId}')">Продолжить</button>`
-                : `<button type="button" class="p2p-file-pause" onclick="pauseFileTransfer('${transfer.transferId}')">Пауза</button>`;
+                ? `<button type="button" class="p2p-file-pause" onclick="resumeFileTransferManual(${jsAttr(transfer.transferId)})">Продолжить</button>`
+                : `<button type="button" class="p2p-file-pause" onclick="pauseFileTransfer(${jsAttr(transfer.transferId)})">Пауза</button>`;
         } else if (status !== "pending") {
             actionsEl.innerHTML = "";
         } else if (transfer.role === "receiver" && !actionsEl.querySelector(".p2p-file-accept")) {
             // Вернулись к ожиданию (отправитель не ответил) — кнопки снова нужны.
-            actionsEl.innerHTML = `<button type="button" class="p2p-file-accept" onclick="acceptFileTransfer('${transfer.transferId}')">Принять</button>
-           <button type="button" class="p2p-file-decline" onclick="declineFileTransfer('${transfer.transferId}')">Отклонить</button>`;
+            actionsEl.innerHTML = `<button type="button" class="p2p-file-accept" onclick="acceptFileTransfer(${jsAttr(transfer.transferId)})">Принять</button>
+           <button type="button" class="p2p-file-decline" onclick="declineFileTransfer(${jsAttr(transfer.transferId)})">Отклонить</button>`;
         }
         // status === "pending" у отправителя — не трогаем.
     }
@@ -6497,18 +6906,46 @@ function playSendSound() {
 function playReceiveSound() {
     playUiTone(460, 0.12);
 }
+// Высота пустого поля ввода (одна строка) — меряется один раз, сбрасывается в applySettings.
+var composerEmptyHeight = 0;
+
 function resizeComposer() {
 
     const input =
         document.getElementById("input");
 
-    // scrollHeight читаем ОДИН раз после сброса высоты: прежний вариант читал
-    // его повторно уже после записи style.height, и браузер вынужден был
-    // делать второй синхронный пересчёт layout на каждое нажатие клавиши.
-    input.style.height = "auto";
-    const contentHeight = input.scrollHeight;
-    input.style.height = `${Math.min(contentHeight, 120)}px`;
-    input.style.overflowY = contentHeight > 120 ? "auto" : "hidden";
+    // Пустое поле (открыли чат без черновика, отправили сообщение) — высота заведомо
+    // в одну строку, ставим её без замера. Замер (height:auto + scrollHeight) заставлял
+    // браузер синхронно разложить ВСЮ страницу: при открытии чата это была вторая
+    // полная раскладка только что вставленной истории в той же задаче (на слабом
+    // телефоне ~180 мс фриза — см. замер с замедлением CPU).
+    if (!input.value && composerEmptyHeight) {
+        input.style.height = `${composerEmptyHeight}px`;
+        input.style.overflowY = "hidden";
+    } else if (!input.value) {
+        // Высота пустого поля ещё неизвестна (при запуске поле скрыто и мерить нечего) —
+        // своя высота поля (rows=1) и есть одна строка; замер — в следующем кадре, вместе
+        // с обычной раскладкой кадра, а не отдельной синхронной посреди открытия чата.
+        input.style.height = "";
+        input.style.overflowY = "hidden";
+        if (!resizeComposer._measureQueued) {
+            resizeComposer._measureQueued = true;
+            requestAnimationFrame(() => {
+                resizeComposer._measureQueued = false;
+                if (input.value || composerEmptyHeight) return;
+                const contentHeight = input.scrollHeight;
+                if (contentHeight > 0) { composerEmptyHeight = contentHeight; input.style.height = `${contentHeight}px`; }
+            });
+        }
+    } else {
+        // scrollHeight читаем ОДИН раз после сброса высоты: прежний вариант читал
+        // его повторно уже после записи style.height, и браузер вынужден был
+        // делать второй синхронный пересчёт layout на каждое нажатие клавиши.
+        input.style.height = "auto";
+        const contentHeight = input.scrollHeight;
+        input.style.height = `${Math.min(contentHeight, 120)}px`;
+        input.style.overflowY = contentHeight > 120 ? "auto" : "hidden";
+    }
 
     // resizeComposer вызывается после каждой реальной смены состояния поля
     // ввода (набор текста, отправка, очистка) — заодно синхронизируем и

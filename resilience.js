@@ -97,10 +97,14 @@ const KabanOutbox = (() => {
     let items = [];
     let loadedFor = null;
     let running = false;
+    let sendingNow = null;     // clientId сообщения, запрос которого сейчас идёт на сервер
     let nextTryAt = 0;
     let failures = 0;
 
-    function storageKey() { return KEY_PREFIX + (typeof myRealUserId !== "undefined" ? myRealUserId : ""); }
+    // Ключ — по аккаунту, для которого очередь загружена, а не по текущему: отправка,
+    // закончившаяся уже после выхода (или входа другого человека), иначе записывала
+    // остаток чужой очереди под ключ нового аккаунта.
+    function storageKey() { return KEY_PREFIX + (loadedFor || ""); }
 
     function load() {
         const uid = typeof myRealUserId !== "undefined" ? myRealUserId : null;
@@ -218,10 +222,17 @@ const KabanOutbox = (() => {
         load();
         if (running || !items.length || !navigator.onLine) return;
         running = true;
+        const owner = loadedFor;
 
         try {
             for (const item of [...items]) {
+                // Вышли из аккаунта посреди отправки — остаток очереди не должен уйти
+                // с сессией следующего человека.
+                if (loadedFor !== owner || myRealUserId !== owner) break;
                 if (item.state === "failed") continue;
+                // Отменили, пока отправлялось предыдущее, — пропускаем.
+                if (!items.some((x) => x.clientId === item.clientId)) continue;
+                sendingNow = item.clientId;
                 try {
                     const message = await KabanAPI.sendMessage(item.chatId, {
                         type: "text",
@@ -253,6 +264,7 @@ const KabanOutbox = (() => {
             }
         } finally {
             running = false;
+            sendingNow = null;
             if (typeof KabanConn !== "undefined") KabanConn.update();
         }
 
@@ -297,6 +309,10 @@ const KabanOutbox = (() => {
     function cancel(clientId) {
         const item = items.find((x) => x.clientId === clientId);
         if (!item) return;
+        // Запрос этого сообщения уже ушёл на сервер: раньше «Отмена» убирала его из очереди
+        // и возвращала текст в поле ввода, а оно всё равно приходило в чат — и текст легко
+        // было отправить второй раз.
+        if (sendingNow === clientId) { toast("Сообщение уже отправляется"); return; }
         drop(item);
         const input = document.getElementById("input");
         if (input && currentChatId === item.chatId && !input.value) {
@@ -616,8 +632,10 @@ const KabanConn = (() => {
                 const batch = await KabanAPI.getMessages(chatId, before ? { limit: 50, before } : { limit: 50 });
                 if (currentChatId !== chatId) return;
                 fetched = batch.concat(fetched);
-                if (batch.length < 50 || batch.some((m) => realMessagesById.has(m.id))) break;
-                before = batch[0].created_at;
+                // Размер и курсор — по ответу сервера, а не по списку без просроченных
+                // исчезающих (см. serverPageLength в script-chats.js).
+                if (serverPageLength(batch) < 50 || batch.some((m) => realMessagesById.has(m.id))) break;
+                before = serverPageOldest(batch);
             }
         } catch { return; }
         if (currentChatId !== chatId || !fetched.length) return;
@@ -625,10 +643,25 @@ const KabanConn = (() => {
         const me = myRealUserId;
         const fetchedIds = new Set(fetched.map((m) => m.id));
         const oldest = fetched[0].created_at;
+        const newest = fetched[fetched.length - 1].created_at;
         const container = document.getElementById("messages");
         const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
         const unread = [];
         let appended = false;
+
+        // Самое новое из уже показанного: realtime после переподключения мог успеть принести
+        // свежее сообщение раньше, чем мы догрузили «дыру». Раньше сообщения из дыры просто
+        // дописывались в конец — и вставали ПОСЛЕ более нового. Теперь — на своё место.
+        let latestShown = "";
+        realMessagesById.forEach((m) => { if (m.chat_id === chatId && m.created_at > latestShown) latestShown = m.created_at; });
+        const placeChronologically = (id, createdAt) => {
+            const row = container.querySelector(`.message-row[data-message-id="${CSS.escape(id)}"]`);
+            if (!row) return;
+            for (const other of container.querySelectorAll(".message-row[data-message-id]")) {
+                if (other === row) return;
+                if ((realMessagesById.get(other.dataset.messageId)?.created_at || "") > createdAt) { other.before(row); return; }
+            }
+        };
 
         for (const message of fetched) {
 
@@ -641,6 +674,7 @@ const KabanConn = (() => {
                 if (currentChatId !== chatId) return;
                 realMessagesById.set(message.id, message);
                 appendRealMessageRow(message, message.sender_id === me);
+                if (message.created_at < latestShown) placeChronologically(message.id, message.created_at);
                 appended = true;
                 if (message.sender_id !== me) unread.push(message.id);
             } else if (known.edited_at !== message.edited_at || known.deleted_at !== message.deleted_at || known.text !== message.text) {
@@ -650,9 +684,12 @@ const KabanConn = (() => {
 
         }
 
-        // Удалённые «у всех» за время обрыва — убираем из ленты.
+        // Удалённые «у всех» за время обрыва — убираем из ленты. Только в пределах
+        // загруженного окна [oldest, newest]: раньше верхней границы не было, и сообщение,
+        // пришедшее (или отправленное мной) уже ПОСЛЕ запроса — пока догружались следующие
+        // страницы или расшифровывалось, — считалось удалённым и пропадало из ленты.
         for (const [id, message] of [...realMessagesById]) {
-            if (message.chat_id === chatId && message.created_at >= oldest && !fetchedIds.has(id)) removeMessageRowCompletely(id);
+            if (message.chat_id === chatId && message.created_at >= oldest && message.created_at <= newest && !fetchedIds.has(id)) removeMessageRowCompletely(id);
         }
 
         if (appended) {

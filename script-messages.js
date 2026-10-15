@@ -749,10 +749,10 @@ function buildAttachmentHTML(message) {
 
     if (message.type === "contact") {
         const name = escapeHTML(meta.display_name || "Контакт");
-        const userId = escapeHTML(meta.user_id || "");
         const avatar = avatarParts({ id: meta.user_id, name: meta.display_name || meta.username, url: meta.avatar_url });
+        // user_id пишет отправитель сообщения — в обработчик только через jsAttr (см. script-ui.js).
         return `
-            <button type="button" class="message-contact" onclick="openContactFromMessage('${userId}', this)">
+            <button type="button" class="message-contact" onclick="openContactFromMessage(${jsAttr(meta.user_id || "")}, this)">
                 <span class="message-contact-avatar${avatar.cls}"${avatar.style}>${avatar.inner}</span>
                 <div class="message-contact-copy">
                     <div class="message-contact-title">${name}</div>
@@ -960,15 +960,19 @@ function buildP2PFileHTML(message) {
     // сообщения. Без этого у отправителя (isMine — для него тут изначально
     // ничего не рендерилось, только у получателя на шаге accept/decline)
     // просто не было бы DOM-узла, куда вставить кнопку "Пауза".
+    // transferId лежит в attachment_meta сообщения — его пишет отправитель. Раньше он шёл
+    // в onclick как есть: сообщение с transferId вида «x');…;('» выполняло чужой код у
+    // каждого, кто откроет чат. Теперь — только как строка JS (jsAttr).
+    const tid = jsAttr(transferId || "");
     const actionsInner = !transferId
         ? ""
         : (status === "pending" && !isMine)
-        ? `<button type="button" class="p2p-file-accept" onclick="acceptFileTransfer('${transferId}')">Принять</button>
-           <button type="button" class="p2p-file-decline" onclick="declineFileTransfer('${transferId}')">Отклонить</button>`
+        ? `<button type="button" class="p2p-file-accept" onclick="acceptFileTransfer(${tid})">Принять</button>
+           <button type="button" class="p2p-file-decline" onclick="declineFileTransfer(${tid})">Отклонить</button>`
         : (status === "transferring" || status === "paused")
             ? (status === "paused"
-                ? `<button type="button" class="p2p-file-pause" onclick="resumeFileTransferManual('${transferId}')">Продолжить</button>`
-                : `<button type="button" class="p2p-file-pause" onclick="pauseFileTransfer('${transferId}')">Пауза</button>`)
+                ? `<button type="button" class="p2p-file-pause" onclick="resumeFileTransferManual(${tid})">Продолжить</button>`
+                : `<button type="button" class="p2p-file-pause" onclick="pauseFileTransfer(${tid})">Пауза</button>`)
             : "";
     const actionsHTML = `<div class="p2p-file-actions">${actionsInner}</div>`;
 

@@ -16,7 +16,9 @@
 (function () {
     "use strict";
 
-    const motionOff = () => !!appSettings.reduceMotion || document.hidden;
+    // + системная настройка «уменьшить движение», раньше учитывалась только своя.
+    const osReduceMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+    const motionOff = () => !!appSettings.reduceMotion || !!osReduceMotion?.matches || document.hidden;
     const messagesEl = document.getElementById("messages");
 
     /* ---- 1. ПОЛЁТ СООБЩЕНИЯ ------------------------------------------------------- */
@@ -543,6 +545,8 @@
         // (фоторедактор, просмотрщик…) показывается атрибутом hidden — у них .open нет
         // никогда, и правило спрятало бы их содержимое навсегда. Поэтому: проверенный
         // список сразу, остальные — только после того, как хоть раз открылись через .open.
+        // Панель эмодзи тоже «спит», но на широком экране прогрев её будит (.emoji-awake,
+        // см. prewarm ниже и style.css): спящую панель браузер при каждом открытии строил заново.
         const KNOWN = ["emoji-popover", "attach-menu", "settings-backdrop", "theme-color-backdrop", "info-modal-backdrop", "group-info-backdrop", "contact-modal-backdrop", "profile-screen-backdrop", "voice-settings-backdrop"];
         const watch = (el) => {
             if (!el || el._cvWatched || el.id === "call-backdrop") return;
@@ -578,29 +582,57 @@
        первую делаем заранее, пока приложение простаивает, по одному куску (49 эмодзи)
        за раз — без заметных пауз. Так же заранее грузим движок анимированных эмодзи. */
 
+    // Прежний прогрев не работал по двум причинам (выяснено трассировкой): ждал разметку
+    // панели, которая создаётся только при первом открытии, — и сдавался; а «спящая» панель
+    // (content-visibility: hidden) при каждом открытии строилась заново, так что прогретое
+    // всё равно выбрасывалось. Теперь на широком экране прогрев панель «будит» (.emoji-awake)
+    // и раскладывает по одному блоку (21 эмодзи) за раз — только когда чат открыт (иначе
+    // зона чата скрыта и раскладывать нечего). На телефоне зона чата скрывается при каждом
+    // возврате к списку, и бодрствующая панель раскладывалась бы при каждом открытии чата, —
+    // там она по-прежнему спит до открытия.
     (function prewarm() {
         const idle = window.requestIdleCallback || ((fn) => setTimeout(() => fn({ timeRemaining: () => 10 }), 200));
         const pop = document.getElementById("emoji-popover");
-        let tries = 0;
+        if (!pop) return;
+        const wide = window.matchMedia("(min-width: 651px)");
+        let warming = false;
+        const sleepAgain = () => { pop.classList.remove("emoji-awake"); delete pop.dataset.warmed; };
         const warmEmoji = () => {
-            if (!pop || pop.classList.contains("open") || pop.dataset.warmed) return;
+            if (warming || pop.dataset.warmed || pop.classList.contains("open")) return;
+            if (!wide.matches || !document.body.classList.contains("chat-selected")) return;   // позовут снова при открытии чата
+            if (!pop.querySelector(".emoji-grid") && typeof renderEmojiPopover === "function"
+                && typeof emojiPopoverRendered !== "undefined" && !emojiPopoverRendered) {
+                try { renderEmojiPopover(); } catch { /* откроется и прорисуется как раньше */ }
+            }
             const grids = [...pop.querySelectorAll(".emoji-grid")];
-            if (!grids.length) { if (++tries < 40) setTimeout(warmEmoji, 1500); return; }
+            if (!grids.length) return;
+            warming = true;
             pop.dataset.warmed = "1";
-            const first = grids.slice(0, 6);
-            pop.classList.add("cv-warm");
             grids.forEach((g) => g.classList.add("cv-cold"));
+            pop.classList.add("emoji-awake");
+            // Первые 10 блоков — это видимая часть с запасом, который браузер всё равно
+            // разложил бы при открытии (остальные дорисуются при прокрутке, см. .emoji-grid).
+            const first = grids.slice(0, 10);
             let i = 0;
-            const finish = () => { grids.forEach((g) => g.classList.remove("cv-cold")); pop.classList.remove("cv-warm"); };
+            const finish = () => { warming = false; grids.forEach((g) => g.classList.remove("cv-cold")); };
             const step = () => {
-                if (pop.classList.contains("open")) { finish(); return; }
+                if (pop.classList.contains("open") || !pop.classList.contains("emoji-awake")) { finish(); return; }
                 const grid = first[i++];
-                if (grid) { grid.classList.remove("cv-cold"); void pop.offsetHeight; }
+                if (grid) { grid.classList.remove("cv-cold"); void grid.offsetHeight; }
                 if (i < first.length) idle(step, { timeout: 3000 }); else finish();
             };
             idle(step, { timeout: 3000 });
         };
-        setTimeout(() => idle(warmEmoji, { timeout: 5000 }), 3000);
+        const schedule = () => setTimeout(() => idle(warmEmoji, { timeout: 5000 }), 1500);
+        let wasSelected = document.body.classList.contains("chat-selected");
+        new MutationObserver(() => {
+            const selected = document.body.classList.contains("chat-selected");
+            if (selected === wasSelected) return;
+            wasSelected = selected;
+            if (selected) schedule(); else sleepAgain();
+        }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+        wide.addEventListener?.("change", () => { if (wide.matches) schedule(); else sleepAgain(); });
+        schedule();
         setTimeout(() => idle(() => {
             if (typeof loadLottie === "function" && typeof animatedEmojiEnabled === "function" && animatedEmojiEnabled()) loadLottie().catch(() => {});
         }, { timeout: 8000 }), 5000);

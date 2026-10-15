@@ -254,11 +254,41 @@ function openEmojiPopover() {
     closeAttachMenu();
 
     const popover = document.getElementById("emoji-popover");
+    // Широкий экран: открытая хоть раз панель больше не «засыпает» — иначе браузер при
+    // каждом открытии строил её заново (см. delight.js → prewarm, .emoji-awake в style.css).
+    if (window.matchMedia?.("(min-width: 651px)").matches) {
+        popover.classList.add("emoji-awake");
+        popover.dataset.warmed = "1";
+    } else {
+        // Телефон: панель спит (там зона чата прячется при выходе к списку) и при открытии
+        // браузер раскладывал сразу все блоки в зоне видимости с запасом — ~170 цветных
+        // эмодзи одним куском (замерено ~0,7 с на слабом телефоне). Сначала — только 3
+        // видимых блока, остальные — следом по одному в простое, при прокрутке — сразу все.
+        thawEmojiGridsAfterOpen(popover);
+    }
     popover.classList.add("open");
     popover.setAttribute("aria-hidden", "false");
     document.getElementById("emoji-button").classList.add("is-open");
     document.getElementById("emoji-button").setAttribute("aria-expanded", "true");
 
+}
+
+function thawEmojiGridsAfterOpen(popover) {
+    const rest = [...popover.querySelectorAll(".emoji-grid")].slice(3);
+    if (!rest.length) return;
+    rest.forEach((grid) => grid.classList.add("cv-cold"));   // .cv-cold — content-visibility: hidden
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 60));
+    const body = document.getElementById("emoji-popover-body");
+    let index = 0;
+    const thawAll = () => { rest.forEach((grid) => grid.classList.remove("cv-cold")); index = rest.length; };
+    body?.addEventListener("scroll", thawAll, { once: true, passive: true });
+    const step = () => {
+        if (index >= rest.length) return;
+        if (!popover.classList.contains("open")) { thawAll(); return; }   // закрыли — как было
+        rest[index++].classList.remove("cv-cold");
+        idle(step, { timeout: 400 });
+    };
+    idle(step, { timeout: 400 });
 }
 
 function closeEmojiPopover() {
@@ -286,10 +316,13 @@ function switchEmojiTab(tab) {
 
 }
 
-// Эмодзи — блоками по 7 рядов: каждый блок дорисовывается, только когда до него
+// Эмодзи — блоками по 3 ряда: каждый блок дорисовывается, только когда до него
 // докрутили, и это быстро (раньше целый раздел в сотни цветных эмодзи давал рывок
-// до 0,2 с прямо посреди прокрутки).
-function emojiChunks(list, size = 49) {
+// до 0,2 с прямо посреди прокрутки). Было по 7 рядов — блок из 49 цветных эмодзи
+// раскладывался ~28 мс на ПК (~170 мс на слабом телефоне) одним куском, и такой же
+// кусок получал прогрев панели в простое (delight.js); по 3 ряда — втрое мельче.
+// Высота ещё не нарисованного блока — contain-intrinsic-size у .emoji-grid в style.css.
+function emojiChunks(list, size = 21) {
     const out = [];
     for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
     return out;
@@ -1476,6 +1509,7 @@ function updateGroupMediaStats() {
 
 function updateContactModalStats() {
 
+    flushSharedMediaRender();
     ["media", "files", "links", "voice", "gifs"].forEach((kind) => {
 
         const count = document.querySelectorAll(`.shared-item[data-kind="${kind}"]`).length;
@@ -3589,22 +3623,33 @@ const SHARED_MEDIA_KIND_ICON_SVG = {
 // document/audio-файл → "files", voice → "voice", текст со ссылкой →
 // "links". GIF как отдельного реального типа сообщений в приложении нет —
 // вкладка честно остаётся пустой, а не притворяется.
-function formatSharedMediaDateLabel(createdAt) {
-
-    const date = new Date(createdAt);
+// «Сегодня/Вчера» и форматтеры — один раз на сбор, а не toLocale*String на каждое
+// сообщение: Intl-форматирование дорогое, и раньше оно шло для ВСЕХ сообщений чата
+// (даже обычных текстовых, которые в материалы не попадают) — при открытии чата это
+// было до ~60 мс на слабом телефоне, и так до трёх раз подряд.
+function sharedMediaDateContext() {
     const now = new Date();
-
-    if (date.toDateString() === now.toDateString()) return "Сегодня";
-
     const yesterday = new Date(now);
     yesterday.setDate(now.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) return "Вчера";
+    return {
+        today: now.toDateString(),
+        yesterday: yesterday.toDateString(),
+        year: now.getFullYear(),
+        time: new Intl.DateTimeFormat([], { hour: "2-digit", minute: "2-digit" }),
+        day: new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }),
+        dayYear: new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric" })
+    };
+}
 
-    return date.toLocaleDateString("ru-RU", {
-        day: "numeric",
-        month: "long",
-        year: date.getFullYear() !== now.getFullYear() ? "numeric" : undefined
-    });
+function formatSharedMediaDateLabel(createdAt, ctx = sharedMediaDateContext()) {
+
+    const date = new Date(createdAt);
+    const key = date.toDateString();
+
+    if (key === ctx.today) return "Сегодня";
+    if (key === ctx.yesterday) return "Вчера";
+
+    return (date.getFullYear() !== ctx.year ? ctx.dayYear : ctx.day).format(date);
 
 }
 
@@ -3613,14 +3658,16 @@ const SHARED_LINK_PATTERN = /(https?:\/\/[^\s<]+|www\.[^\s<]+\.[a-z]{2,}[^\s<]*)
 function collectSharedMediaFromChat() {
 
     const items = [];
+    const dateCtx = sharedMediaDateContext();
 
     realMessagesById.forEach((message) => {
 
         if (message.deleted_at) return;
 
         const meta = message.attachment_meta || {};
-        const time = new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        const dateLabel = formatSharedMediaDateLabel(message.created_at);
+        // «Сегодня, 12:05» — только для сообщений, которые попадают в материалы.
+        let stampText = null;
+        const stamp = () => stampText ??= `${formatSharedMediaDateLabel(message.created_at, dateCtx)}, ${dateCtx.time.format(new Date(message.created_at))}`;
 
         const albumList = typeof albumPhotos === "function" ? albumPhotos(message) : null;
         if (albumList) {
@@ -3628,7 +3675,7 @@ function collectSharedMediaFromChat() {
                 kind: "media",
                 messageId: message.id,
                 name: `Фото ${index + 1}`,
-                metaText: `${dateLabel}, ${time}`,
+                metaText: stamp(),
                 search: `фото photo ${photo.name || ""}`.toLowerCase(),
                 createdAt: message.created_at,
                 thumbUrl: photo.url,
@@ -3639,7 +3686,7 @@ function collectSharedMediaFromChat() {
                 kind: "media",
                 messageId: message.id,
                 name: message.type === "image" ? "Фото" : "Видео",
-                metaText: `${dateLabel}, ${time}`,
+                metaText: stamp(),
                 search: `${message.type === "image" ? "фото photo" : "видео video"} ${meta.name || ""}`.toLowerCase(),
                 createdAt: message.created_at,
                 thumbUrl: message.type === "image" ? message.attachment_url : null,
@@ -3650,7 +3697,7 @@ function collectSharedMediaFromChat() {
                 kind: "files",
                 messageId: message.id,
                 name: meta.name || "Файл",
-                metaText: `${dateLabel}, ${time}${meta.size ? " · " + formatFileSize(meta.size) : ""}`,
+                metaText: `${stamp()}${meta.size ? " · " + formatFileSize(meta.size) : ""}`,
                 search: (meta.name || "файл").toLowerCase(),
                 createdAt: message.created_at,
                 thumbLabel: "FILE"
@@ -3660,7 +3707,7 @@ function collectSharedMediaFromChat() {
                 kind: "voice",
                 messageId: message.id,
                 name: "Голосовое сообщение",
-                metaText: `${dateLabel}, ${time}${meta.duration ? " · " + formatRecordingTime(Number(meta.duration)) : ""}`,
+                metaText: `${stamp()}${meta.duration ? " · " + formatRecordingTime(Number(meta.duration)) : ""}`,
                 search: "голосовое voice",
                 createdAt: message.created_at,
                 thumbLabel: "AUDIO"
@@ -3672,7 +3719,7 @@ function collectSharedMediaFromChat() {
                     kind: "links",
                     messageId: message.id,
                     name: urlMatch[0],
-                    metaText: `${dateLabel}, ${time}`,
+                    metaText: stamp(),
                     search: urlMatch[0].toLowerCase(),
                     createdAt: message.created_at,
                     thumbLabel: "URL"
@@ -3682,7 +3729,9 @@ function collectSharedMediaFromChat() {
 
     });
 
-    items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    // Метка времени — один раз на элемент, а не два new Date() на каждое сравнение.
+    const ts = new Map(items.map((item) => [item, Date.parse(item.createdAt) || 0]));
+    items.sort((a, b) => ts.get(b) - ts.get(a));
     return items;
 
 }
@@ -3691,8 +3740,27 @@ function collectSharedMediaFromChat() {
 // реальными материалами — вызывается при каждом открытии чата (см.
 // openRealChat), а не один раз: иначе при переключении между чатами там
 // оставались бы материалы ПРЕДЫДУЩЕГО собеседника.
+// При открытии чата материалы перерисовывались до трёх раз подряд (история из кэша,
+// сверка с сервером, догрузка материалов) — каждая раз со сбором и innerHTML скрытой
+// панели. Эти вызовы теперь откладываются в простой и сливаются в один; всё, что
+// ЧИТАЕТ список (счётчики, окно «Медиа»), сначала дорисовывает его (flush).
+var sharedMediaRenderPending = false;
+
+function scheduleSharedMediaRender() {
+    if (sharedMediaRenderPending) return;
+    sharedMediaRenderPending = true;
+    const run = () => flushSharedMediaRender();
+    if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 400 });
+    else setTimeout(run, 50);
+}
+
+function flushSharedMediaRender() {
+    if (sharedMediaRenderPending) renderSharedMediaDataForCurrentChat();
+}
+
 function renderSharedMediaDataForCurrentChat() {
 
+    sharedMediaRenderPending = false;
     const list = document.getElementById("shared-list");
     if (!list) return;
 
@@ -3719,6 +3787,7 @@ function jumpToSharedMediaMessage(messageId) {
 
 function getSharedMediaItems() {
 
+    flushSharedMediaRender();
     // Берём данные из уже заполненного реальными материалами списка в
     // большой карточке (см. renderSharedMediaDataForCurrentChat) — единый
     // источник правды, компактное окно ничего не дублирует руками.
@@ -3887,6 +3956,7 @@ function selectSharedTab(button) {
 
 function filterSharedItems() {
 
+    flushSharedMediaRender();   // внутри самой перерисовки флаг уже снят — рекурсии нет
     const activeKind = document.querySelector(".shared-tab.active")?.dataset.mediaTab || "media";
     const query = document.getElementById("shared-search").value.trim().toLocaleLowerCase();
     let visibleCount = 0;
@@ -4393,6 +4463,16 @@ function escapeHTML(text) {
 
     return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
+}
+
+// Значение как СТРОКА JavaScript внутри HTML-атрибута-обработчика:
+//   onclick="f(${jsAttr(id)})"
+// escapeHTML для этого не годится: в атрибуте браузер сначала декодирует &#39; обратно
+// в апостроф и только потом выполняет код — onclick="f('${escapeHTML(x)}')" с x вида
+// «x');alert(1);('» выполнял чужой код. JSON.stringify даёт корректную строку JS
+// (со своими экранированиями), escapeHTML поверх — корректный атрибут.
+function jsAttr(value) {
+    return escapeHTML(JSON.stringify(String(value ?? "")));
 }
 
 
@@ -5938,6 +6018,9 @@ async function applyRealSessionState(user) {
         ensureTurnServers();
         if (!window.__turnRefreshTimer) window.__turnRefreshTimer = setInterval(() => ensureTurnServers(), 3600 * 1000);
     }
+    // Самое первое соединение WebRTC после запуска создаётся ~0,5 с (движок поднимается
+    // один раз) — делаем это заранее, а не в момент первого звонка.
+    setTimeout(() => { try { new RTCPeerConnection().close(); } catch { /* без WebRTC */ } }, 2500);
 
     // Список чатов из снимка — сразу, до любых запросов к серверу.
     if (typeof restoreChatListSnapshot === "function") restoreChatListSnapshot();

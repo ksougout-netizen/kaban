@@ -251,7 +251,9 @@ async function submitGameState(message, payload) {
     try {
         await KabanAPI.setGameState(message.id, payload);
     } catch (error) {
-        message.reactions = before;
+        // Откатываем только свой ход: ход соперника мог прийти, пока шёл запрос.
+        const myBefore = before.filter((r) => r.user_id === myRealUserId);
+        message.reactions = (message.reactions || []).filter((r) => r.user_id !== myRealUserId).concat(myBefore);
         updateGameRow(message.id);
         toast("Не удалось сделать ход: " + (error?.message || error));
     }

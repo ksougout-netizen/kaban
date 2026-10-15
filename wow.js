@@ -14,7 +14,9 @@
     "use strict";
 
     const rnd = (a, b) => a + Math.random() * (b - a);
-    const motionOff = () => !!appSettings.reduceMotion || document.hidden;
+    // + системная настройка «уменьшить движение», раньше учитывалась только своя.
+    const osReduceMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+    const motionOff = () => !!appSettings.reduceMotion || !!osReduceMotion?.matches || document.hidden;
 
     /* ---- общий холст частиц поверх всего приложения ---------------------------- */
 
@@ -409,14 +411,17 @@
         const chatId = currentChatId;
         if (!chatId) return;
         closeGiftComposer();
+        // Поле чистим сразу: окно уже закрыто, но фокус может остаться в нём, и второй
+        // Ctrl+Enter во время отправки слал тот же подарок ещё раз.
+        if (field) field.value = "";
         let message;
         try {
             message = await KabanAPI.sendMessage(chatId, { type: "text", text, attachmentMeta: { gift: { c: giftColor } } });
         } catch (error) {
+            if (field && !field.value) field.value = text;   // текст не теряем — можно повторить
             toast("Не удалось отправить подарок: " + (typeof sendErrorText === "function" ? sendErrorText(error) : (error?.message || error)));
             return;
         }
-        if (field) field.value = "";
         realMessagesById.set(message.id, message);
         if (currentChatId === chatId) {
             appendRealMessageRow(message, true);

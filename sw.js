@@ -38,9 +38,11 @@ self.addEventListener("push", (event) => {
     };
     // Входящий звонок: уведомление не исчезает само и вибрирует, пока его не тронут;
     // «Пропущенный звонок» с тем же tag заменяет его (renotify — звук/вибрация снова).
+    // renotify без tag браузер не принимает (TypeError — уведомление не показалось бы
+    // вовсе), поэтому только вместе с tag.
     if (payload.call) {
         options.requireInteraction = true;
-        options.renotify = true;
+        if (options.tag) options.renotify = true;
         options.vibrate = [400, 200, 400, 200, 400, 200, 400];
     } else if (payload.tag && String(payload.tag).startsWith("kaban-call-")) {
         options.renotify = true;
@@ -64,6 +66,10 @@ self.addEventListener("notificationclick", (event) => {
     event.waitUntil(
         self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
             for (const client of clientList) {
+                // Только вкладки самого приложения: на GitHub Pages под одним доменом живут
+                // все проекты аккаунта, и раньше фокус (и «открой чат») мог уйти в чужую
+                // страницу того же домена, а KABAN так и не открывался.
+                if (!String(client.url || "").startsWith(self.registration.scope)) continue;
                 if ("focus" in client) {
                     client.focus();
                     if (chatId) client.postMessage({ type: "open-chat", chatId });

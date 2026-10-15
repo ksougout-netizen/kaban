@@ -13379,7 +13379,8 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
 /* Панель эмодзи: ~1500 цветных эмодзи раньше рисовались все сразу при первом
    открытии — интерфейс замирал на ~0,4 с. Невидимые разделы теперь не рисуются,
    пока до них не докрутили (место под них зарезервировано). */
-.emoji-grid { content-visibility: auto; contain-intrinsic-size: auto 300px; }
+/* 3 ряда по ~43 px (блоки по 21 эмодзи, см. emojiChunks); auto запоминает настоящую высоту */
+.emoji-grid { content-visibility: auto; contain-intrinsic-size: auto 130px; }
 /* Ленивая отрисовка строк (content-visibility) убрана: строки, созданные, пока лента
    была скрыта (переключение чатов), «запоминали» высоту 0 и при появлении на экране
    резко вырастали — переписка прыгала, место чтения терялось (до экрана и больше).
@@ -13896,9 +13897,12 @@ body.reduce-motion .cap-icon svg, body.reduce-motion .cap-cover.ready .cap-icon 
    (размеры можно мерить сразу после открытия); на время анимации закрытия
    delight.js ставит .cv-keep, чтобы окно не опустело посреди затухания.
    Экран звонка не трогаем — в нём идёт видео. */
-.cv-sleep:not(.open):not(.cv-keep):not(.cv-warm) > * { content-visibility: hidden; }
-/* прогрев панели эмодзи в простое (delight.js): раскладываем по одному куску за раз */
-#emoji-popover.cv-warm .emoji-grid.cv-cold { content-visibility: hidden; }
+.cv-sleep:not(.open):not(.cv-keep):not(.cv-warm):not(.emoji-awake) > * { content-visibility: hidden; }
+/* Панель эмодзи на широком экране «бодрствует» (.emoji-awake, delight.js → prewarm):
+   content-visibility: hidden не хранит раскладку, и спящая панель при каждом открытии
+   строилась заново (~290 мс на слабом телефоне). Прогрев раскладывает её по одному
+   куску за раз (.cv-cold — ещё не разложенные блоки). */
+#emoji-popover .emoji-grid.cv-cold { content-visibility: hidden; }
 
 /* ============================================================================
    ИНТЕРАКТИВНЫЕ ЭМОДЗИ (interactive-emoji.js)

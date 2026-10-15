@@ -394,8 +394,10 @@ function openStoryCreate() {
     storyCreateBg = STORY_BGS[0];
     document.getElementById("story-text-input").value = "";
     document.getElementById("story-caption-input").value = "";
-    document.getElementById("story-photo-preview").style.backgroundImage = "";
-    document.getElementById("story-photo-preview").classList.remove("has-image");
+    const preview = document.getElementById("story-photo-preview");
+    if (preview._blobUrl) { URL.revokeObjectURL(preview._blobUrl); preview._blobUrl = null; }
+    preview.style.backgroundImage = "";
+    preview.classList.remove("has-image");
     selectStoryKind("image");
 
     document.getElementById("story-bg-grid").innerHTML = STORY_BGS.map((bg, i) =>
@@ -437,7 +439,13 @@ function resizeImageForStory(file) {
             const canvas = document.createElement("canvas");
             canvas.width = Math.round(img.width * scale);
             canvas.height = Math.round(img.height * scale);
-            canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+            const ctx = canvas.getContext("2d");
+            // JPEG не умеет прозрачность: без белой подложки прозрачные места PNG
+            // (скриншоты, стикеры, логотипы) становились чёрными — как было и с фото
+            // в чате до исправления в compressImageFile.
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             URL.revokeObjectURL(url);
             canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("canvas"))), "image/jpeg", 0.86);
         };
@@ -453,7 +461,10 @@ async function pickStoryPhoto(input) {
     try {
         storyCreateFile = await resizeImageForStory(file);
         const preview = document.getElementById("story-photo-preview");
-        preview.style.backgroundImage = `url(${URL.createObjectURL(storyCreateFile)})`;
+        // Прежнее превью освобождаем: раньше каждый выбор фото оставлял в памяти ещё один blob.
+        if (preview._blobUrl) URL.revokeObjectURL(preview._blobUrl);
+        preview._blobUrl = URL.createObjectURL(storyCreateFile);
+        preview.style.backgroundImage = `url(${preview._blobUrl})`;
         preview.classList.add("has-image");
     } catch (error) {
         toast("Не удалось открыть фото: " + (error?.message || error));

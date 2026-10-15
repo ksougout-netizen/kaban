@@ -1,5 +1,5 @@
 {
- "version": "20261015-153",
+ "version": "20261015-157",
  "minShell": "1.0.0",
  "files": {
   "apple-touch-icon.png": {
@@ -7,8 +7,8 @@
    "size": 917
   },
   "atmosphere.js": {
-   "sha256": "49558c255ed35491e3aafa02531c196f43400932c39784c01c1acceb6c1ca0c6",
-   "size": 46056
+   "sha256": "5eebc6ffd9885d6945e57032ccdd6ceb339d559554512b7bea6b40e3a983f0fe",
+   "size": 47881
   },
   "avatar-cropper.js": {
    "sha256": "858a9712ee53617aec033403443e6ea7804c6ca88bf9d3965f7c2ad8700296af",
@@ -19,36 +19,36 @@
    "size": 14124
   },
   "convenience.js": {
-   "sha256": "b66ec8b3b10d3050c0cd5624f9cef80e5bdc60c63b8fa3d9394e68826680f96d",
-   "size": 18807
+   "sha256": "7939cb3a7d6af022cfdf2e7f813671feb6f54da85d0e2e601ad1ea6191e4c8e3",
+   "size": 18860
   },
   "crypto.js": {
-   "sha256": "cbeeb7c88c19d5fdc9992a95ac662952e0e5a7163f22e342f9857fbc678233d5",
-   "size": 43511
+   "sha256": "561fae9636c892f34baa33cdc1f79b542af0c782e6eb1fe8c54dd5212e7f2be3",
+   "size": 45738
   },
   "delight.js": {
-   "sha256": "a48d013c369960b483cb0fe4ce15cf91b4ebd9bb76cb85a56c9a8d23c7affb40",
-   "size": 34410
+   "sha256": "a419f3f08a969858f948db4edcb5131c3da58888e63f9d7d2baca5fcd4981a86",
+   "size": 37726
   },
   "desktop-app.js": {
    "sha256": "ad2993d6931b7910ac697819691c18e4e3ba56b9d2dee9ef1694ff658c84ed60",
    "size": 30187
   },
   "disappearing.js": {
-   "sha256": "0772e827ac467118d8f294152b2f32c2f0911b1d4efaad22eff927d6f3c8520d",
-   "size": 16258
+   "sha256": "d7834a6ef2f5275b59fd0eed4e841ce96649e8949a51e277ed7d083b78f26e3c",
+   "size": 16857
   },
   "effects.js": {
-   "sha256": "a97921d73db4c6cb0c60fce7a3022ce0c15f423be2a9c0c59942bbce42e8a621",
-   "size": 22380
+   "sha256": "eedb8fbadee19ec40e5c07809929933ffa7278899d1a257b18de9b52e490c708",
+   "size": 23734
   },
   "emoji-data.js": {
    "sha256": "c046ab30fbdd33e4d7b94ff9588a4e4d8d8b81ed8f6de670e5229b32eb65cb6b",
    "size": 16188
   },
   "games.js": {
-   "sha256": "68f8d561441acbb0dbce62c56144ea2cc7e2cb2993b12876a12bcb4ebd62f28b",
-   "size": 14839
+   "sha256": "bcad6b1faf79227261089d5448269788c006f7e4f5ed418390ab14b7b90967f9",
+   "size": 15131
   },
   "icon-192.png": {
    "sha256": "0ef86d3ebc6ad4c2ecb0117c20c8ad77fbd400295368bcac261bb5f9c67f868b",
@@ -63,7 +63,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "70d1a92aab2ca9ec5e32ce79eef1d211d777b91ba8fcb5af6dabf180c379a0e3",
+   "sha256": "b8fbc3ba17895bea1f4fb8723aa2c014cf0a14f29e674f7150f44550d2f809bb",
    "size": 244912
   },
   "interactive-emoji.js": {
@@ -79,12 +79,12 @@
    "size": 778
   },
   "photo-editor.js": {
-   "sha256": "2a5fd2b88f55ad219ca40b1b64c25b8ff49c2bf483b319897046302928985c8d",
-   "size": 85267
+   "sha256": "550ace64016194d0a13c3123016ae8acfb8bf31aa1569fc2a8e577efbf4e66ce",
+   "size": 85509
   },
   "private-media.js": {
-   "sha256": "3b116c2f398a9ed26b11c41a180a39f031c70ef1f5fe78a691e7b814464844e5",
-   "size": 8499
+   "sha256": "8c308854991432abf265add537e207d20ee8df777c9b64a656719a38685b2a93",
+   "size": 9106
   },
   "productivity.js": {
    "sha256": "9743c05fc5acba5bd19b4c2d869d65e7cef9d5e30b675ee8c8b28d60061744ef",
@@ -95,36 +95,36 @@
    "size": 23704
   },
   "reactions.js": {
-   "sha256": "2b3c4b7b8d780fdb475001af74d2dd89451a220dbdf31d484bacf6bb09d467a5",
-   "size": 25829
+   "sha256": "1c3ff84ccdd5c027e087bf686dd9d1e6b2faf3c16dc7abe6659a65cceab27c17",
+   "size": 26473
   },
   "resilience.js": {
-   "sha256": "8410e975acb76ec76b61038fd87dadbd31fc07df25d163e74afa5e9493a716d6",
-   "size": 33659
+   "sha256": "0c5e3136242435aec1a975431d6fb6e17230b6057f2abe656bbc54ee32fcba07",
+   "size": 37287
   },
   "scheduled.js": {
    "sha256": "9f3d54b37f2702a156a061c9c4b13a6c07973f3678f51b3a9ed30defe28fe98c",
    "size": 15105
   },
   "screen-draw.js": {
-   "sha256": "0b520d4a0cb51fb471d0e71d41432d50c80ac3e18a2d880d3d1ae9258eab5eba",
-   "size": 19427
+   "sha256": "acc55313078f309440e95e6c94f6fd0dd6e5d77bd614cbc54c5b75726fa0a6fe",
+   "size": 19712
   },
   "script-chats.js": {
-   "sha256": "032ccb8a992965fbfe144595890d40c0cc2a95b1a5c580be99b54b92a4769e1a",
-   "size": 253342
+   "sha256": "83a28c712b572d0b2fce6985e473276e69c4526ca0f592700160042913dc3bf3",
+   "size": 256452
   },
   "script-core.js": {
-   "sha256": "1866a057673bf90dca53d0eae08135a5715b270e8a9a40461f60deb446253189",
-   "size": 380741
+   "sha256": "be652fc577a343453ac12309225112b3a4e903b081ccecc2f1617b89600beff0",
+   "size": 414141
   },
   "script-messages.js": {
-   "sha256": "75b14ed0ef5a670509a42c1212ac1d1f10e6461e9e32d263d81c285867c08810",
-   "size": 127937
+   "sha256": "e252288eaeba2361ed004cbfb9d05b836d6e19a176b6b171c4372a1b724aa3b0",
+   "size": 128445
   },
   "script-ui.js": {
-   "sha256": "96072670fba313b4efa7f92c68009e92b8a95b73ef2fd0fc5c2f9b394f2f5297",
-   "size": 290431
+   "sha256": "c2a984cd2152b8ec1a8d65b1268896c025bfc66913e4f5a8725856971b54c464",
+   "size": 296485
   },
   "selection.js": {
    "sha256": "18d7ddcb13153a4be78f17917f6f041855d3d0f65c27e2d7dae82076e7b49562",
@@ -155,24 +155,24 @@
    "size": 18344
   },
   "sticker-maker.js": {
-   "sha256": "edae475b32ea36c33338667a247ac7417670cf69257a0bb6efc687f78804418d",
-   "size": 29035
+   "sha256": "29eb62b86c7f553790916ac3eb91b2d42dfd310c2d0f508137e2a816c4016f9f",
+   "size": 29581
   },
   "stories.js": {
-   "sha256": "27e5a230ab0b3d00eb293f421b6b51b9159fb3b8d2b351fc1d29671bae7a3efa",
-   "size": 23113
+   "sha256": "eee958cb7e0836eacd79fab10907cae7427a91e552b5f959492badd18acad22c",
+   "size": 23957
   },
   "style.css": {
-   "sha256": "ba504e60e3a485bd0980aed5c09a52b0f819ce35dc72090f655e32aace422091",
-   "size": 484835
+   "sha256": "4d5644622f46b09a893bde91a7acf27b462b5ffd040fd18725a51625eafef0bd",
+   "size": 485335
   },
   "supabaseClient.js": {
    "sha256": "2a4bad87e7f2d9c4efbcf997ce16397e565ab3d1236c0029057902b930a6c4f5",
    "size": 120844
   },
   "sw.js": {
-   "sha256": "31a16a6886a539c561456fb765a7f07229b254757848d318b41eb310745a2f93",
-   "size": 4137
+   "sha256": "6dab9d7ea9c8fc29d6b66771f9ebadac2d26d3123ee3019a54d390ea3dcb511b",
+   "size": 4850
   },
   "vendor/lottie_light.min.js": {
    "sha256": "23cd2c01be3d4da8bb664645d03afaff40879c62dc5f8dfe075ab3aa35c108f3",
@@ -187,24 +187,24 @@
    "size": 217945
   },
   "viewer.js": {
-   "sha256": "cd398762d8ea7622e6738a19befc6bb6e92f92e456871d82bfa1a446c90235fc",
-   "size": 20416
+   "sha256": "c6634679a7af3fb7717d61e62f6f62ef722d87dcebf5974fe86c2b37559365ed",
+   "size": 20731
   },
   "voice-ai.js": {
-   "sha256": "e8d1f4a185a42524e6d552306c6ba4f2b439fdd3e3fc56fbfbda99a3435691df",
-   "size": 9126
+   "sha256": "04cf355c3a094a71b69032d5f12bead757de2107d3b73cc593b662a149dc80bc",
+   "size": 9626
   },
   "voice-video.js": {
-   "sha256": "6c9ab8323440d87062802c189174253de45e14acb6801b2e109e25d78bb014da",
-   "size": 19735
+   "sha256": "73d12e5d97e5db0b81de4ae4206b0484627edd3687092e5ce936b8b902ff8532",
+   "size": 20623
   },
   "voice.js": {
-   "sha256": "70bdce8d0ab1c54c8f2cb830a81885b32f25fac7c08aa698a8f6f3de9269dc04",
-   "size": 113995
+   "sha256": "b79c5f8c8e1ccdde59d767686beff048761864f727210c35a287ad5828d9e0cd",
+   "size": 118588
   },
   "wow.js": {
-   "sha256": "46221a0dc391c9e91c5d83d820df71df3c202df1b436ef78f4c5378476a75a25",
-   "size": 30988
+   "sha256": "dcb0866cd6bd3e67f8a4beb8298a76f11a20699153f7b9b903ac22e3fc3465d0",
+   "size": 31654
   }
  }
 }

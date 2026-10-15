@@ -240,6 +240,7 @@ async function computeSafetyNumber(publicKeyBase64A, publicKeyBase64B) {
 
 const ratchetStateCache = new Map(); // chatId -> {sendChainKey, sendIndex, recvChainKey, recvIndex, skipped}
 const MAX_SKIPPED_KEYS = 50; // на чат: ограничивает рост кэша "ключей для сообщений не по порядку"
+const MAX_SKIP_AHEAD = 2000; // на сколько звеньев вперёд можно догонять цепочку ради одного сообщения
 
 async function hmacSha256(keyBytes, label) {
     const key = await window.crypto.subtle.importKey(
@@ -665,7 +666,17 @@ const KabanCrypto = {
 
             const state = await getOrInitRatchetState(chatId);
             const targetIndex = message.key_index;
+            if (!Number.isInteger(targetIndex) || targetIndex < 0) {
+                throw new Error("Некорректный номер ключа сообщения");
+            }
+
+            // Новое состояние цепочки применяется и сохраняется ТОЛЬКО после того, как
+            // сообщение действительно расшифровалось. Раньше цепочка продвигалась и
+            // сохранялась заранее: одно повреждённое (или подделанное) сообщение с
+            // большим номером навсегда «перематывало» её, и нормальные сообщения с
+            // меньшими номерами становились нечитаемыми.
             let messageKeyBytes;
+            let commit;
 
             if (targetIndex < state.recvIndex) {
 
@@ -678,31 +689,43 @@ const KabanCrypto = {
                     throw new Error("Ключ этого сообщения уже продвинут дальше и удалён — расшифровать больше нельзя");
                 }
                 messageKeyBytes = skippedKey;
-                delete state.skipped[targetIndex];
-                await saveRatchetState(chatId, state);
+                commit = () => { delete state.skipped[targetIndex]; };
 
             } else {
 
+                // Номер из самого сообщения: без ограничения сообщение с номером, скажем,
+                // в миллиард заставляло крутить цепочку миллиард шагов и копить ключ на
+                // каждом (память кончалась, а замок цепочки держал расшифровку всех
+                // следующих сообщений чата). Честный разрыв в тысячи сообщений не бывает.
+                if (targetIndex - state.recvIndex > MAX_SKIP_AHEAD) {
+                    throw new Error("Номер ключа сообщения слишком далеко впереди — расшифровка невозможна");
+                }
+
                 // Догоняем цепочку до нужного индекса, откладывая по пути ключи
-                // сообщений, которые ещё не пришли (см. кэш skipped выше).
+                // сообщений, которые ещё не пришли (см. кэш skipped выше) — только
+                // последние MAX_SKIPPED_KEYS, остальные всё равно были бы обрезаны.
+                const newSkipped = {};
                 let chainKey = state.recvChainKey;
                 for (let i = state.recvIndex; i < targetIndex; i++) {
                     const step = await advanceChain(chainKey);
-                    state.skipped[i] = step.messageKeyBytes;
+                    if (targetIndex - i <= MAX_SKIPPED_KEYS) newSkipped[i] = step.messageKeyBytes;
                     chainKey = step.nextChainKeyBytes;
                 }
                 const finalStep = await advanceChain(chainKey);
                 messageKeyBytes = finalStep.messageKeyBytes;
-
-                state.recvChainKey = finalStep.nextChainKeyBytes;
-                state.recvIndex = targetIndex + 1;
-                trimSkippedKeys(state);
-                await saveRatchetState(chatId, state);
+                commit = () => {
+                    Object.assign(state.skipped, newSkipped);
+                    state.recvChainKey = finalStep.nextChainKeyBytes;
+                    state.recvIndex = targetIndex + 1;
+                    trimSkippedKeys(state);
+                };
 
             }
 
             const aesKey = await importAesKey(messageKeyBytes);
             const plaintext = await this.decryptText(aesKey, message.text, message.encryption_iv);
+            commit();
+            await saveRatchetState(chatId, state);
             await idbSet("decrypted-cache", message.id, plaintext);
             return plaintext;
 

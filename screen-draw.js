@@ -209,6 +209,9 @@
         };
         o.canvas.addEventListener("pointerup", end);
         o.canvas.addEventListener("pointercancel", end);
+        // Плитку убрали посреди линии (трансляция кончилась) — pointerup уже не придёт,
+        // а таймер отправки крутился бы вечно.
+        o.canvas.addEventListener("lostpointercapture", end);
         // Клик по холсту в режиме рисования не должен переключать фокус плитки.
         o.canvas.addEventListener("click", (event) => { if (drawingTile === tileId) event.stopPropagation(); });
         o.canvas.addEventListener("dblclick", (event) => { if (drawingTile === tileId) event.stopPropagation(); });

@@ -119,22 +119,28 @@
         });
     }
 
+    function visit(el) {
+        processAttr(el, "src");
+        processAttr(el, "href");
+        processAttr(el, "poster");
+        processStyle(el);
+    }
+
     function processTree(root) {
         if (!root || root.nodeType !== 1) return;
-        const visit = (el) => {
-            processAttr(el, "src");
-            processAttr(el, "href");
-            processAttr(el, "poster");
-            processStyle(el);
-        };
         visit(root);
-        root.querySelectorAll?.("[src*='/object/public/attachments/'], [href*='/object/public/attachments/'], [poster*='/object/public/attachments/'], [style*='/object/public/attachments/']").forEach(visit);
+        // Без потомков нечего и искать (большинство вставок — текст, иконки, мелкие узлы).
+        if (!root.firstElementChild) return;
+        root.querySelectorAll("[src*='/object/public/attachments/'], [href*='/object/public/attachments/'], [poster*='/object/public/attachments/'], [style*='/object/public/attachments/']").forEach(visit);
     }
 
     new MutationObserver((mutations) => {
         mutations.forEach((m) => {
             if (m.type === "childList") m.addedNodes.forEach(processTree);
-            else if (m.type === "attributes") processTree(m.target);
+            // Смена атрибута касается только самого элемента. Раньше каждый style-апдейт
+            // (тема, индикаторы громкости, прогресс, анимации) обходил ещё и всё его
+            // поддерево — для body или ленты это поиск по всему документу.
+            else if (m.type === "attributes" && m.target.nodeType === 1) visit(m.target);
         });
     }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["src", "href", "poster", "style"] });
 

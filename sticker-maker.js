@@ -401,9 +401,13 @@
     }
 
     async function sendFromMaker() {
-        if (!st.result) return;
-        const file = await canvasToFile(st.result);
-        if (!file) { toast("Не удалось подготовить стикер"); return; }
+        // Пока готовится файл (toBlob асинхронный), второй клик отправлял второй стикер.
+        if (!st.result || st.sending) return;
+        st.sending = true;
+        el("sm-send").disabled = true;
+        let file;
+        try { file = await canvasToFile(st.result); } finally { st.sending = false; }
+        if (!file) { toast("Не удалось подготовить стикер"); render(); return; }
         if (el("sm-save").checked) saveMySticker(file).catch(() => {});
         closeStickerMaker();
         st.work = null;
@@ -493,15 +497,20 @@
         return objectUrls.get(item.id);
     }
 
+    let fillToken = 0;
+
     async function fillMyStickers() {
         const title = el("sticker-pack-title");
         const grid = el("sticker-grid");
         if (!grid) return;
         if (title) title.textContent = "Мои стикеры";
+        const token = ++fillToken;
         grid.innerHTML = `<button type="button" class="sticker-btn sm-make-tile" title="Сделать стикер из фото"><span>＋</span><em>Из фото</em></button>`;
         grid.querySelector(".sm-make-tile").addEventListener("click", () => openStickerMaker());
         let list = [];
         try { list = await listMyStickers(); } catch { /* нет IndexedDB */ }
+        // Повторный вызов, пока читали базу, — иначе стикеры добавлялись в сетку дважды.
+        if (token !== fillToken) return;
         if (typeof activeStickerPack !== "undefined" && activeStickerPack !== "mine") return;
         list.forEach((item) => {
             const button = document.createElement("button");

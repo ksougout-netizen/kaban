@@ -36,7 +36,10 @@ self.onmessage = async (event) => {
 let asrWorker = null;
 let asrJobId = 0;
 const asrPending = new Map();
-let asrProgressListener = null;
+// Прогресс от воркера общий (без номера задачи) — получают все идущие расшифровки.
+// Раньше слушатель был один: вторая расшифровка забирала его у первой, а конец
+// первой обнулял его и у второй — её прогресс замирал на месте.
+const asrProgressListeners = new Set();
 
 // Модель Whisper держит в памяти сотни мегабайт — через 3 минуты без работы воркер
 // останавливается и освобождает её (следующая расшифровка поднимет его заново,
@@ -64,7 +67,7 @@ function getAsrWorker() {
 
     asrWorker.onmessage = (event) => {
         const data = event.data;
-        if (data.type === "progress") { asrProgressListener?.(data.info); return; }
+        if (data.type === "progress") { asrProgressListeners.forEach((listener) => listener(data.info)); return; }
         const job = asrPending.get(data.id);
         if (!job) return;
         asrPending.delete(data.id);
@@ -190,7 +193,8 @@ async function transcribeVoiceMessage(button) {
     box.dataset.state = "loading";
     box.textContent = "Готовим распознавание…";
 
-    asrProgressListener = (info) => { box.textContent = describeAsrProgress(info); };
+    const onProgress = (info) => { box.textContent = describeAsrProgress(info); };
+    asrProgressListeners.add(onProgress);
 
     try {
         const text = await transcribeAudioUrl(audio.src);
@@ -208,7 +212,7 @@ async function transcribeVoiceMessage(button) {
         box.dataset.state = "";
         box.textContent = "Не удалось расшифровать: " + (error?.message || error);
     } finally {
-        asrProgressListener = null;
+        asrProgressListeners.delete(onProgress);
         button.dataset.busy = "";
         button.classList.remove("loading");
     }

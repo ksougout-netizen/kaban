@@ -287,7 +287,14 @@
         KabanAPI.getMessages = async function (...args) {
             const rows = await originalGetMessages(...args);
             const now = Date.now();
-            return rows.filter((m) => !m.expires_at || Date.parse(m.expires_at) > now);
+            const kept = rows.filter((m) => !m.expires_at || Date.parse(m.expires_at) > now);
+            // Страница стала короче — лента приняла бы её за последнюю («больше истории нет»),
+            // и подгрузка старых сообщений останавливалась. Отдаём настоящий размер и курсор.
+            if (kept.length !== rows.length) {
+                Object.defineProperty(kept, "pageLength", { value: rows.length });
+                Object.defineProperty(kept, "pageOldest", { value: rows[0]?.created_at ?? null });
+            }
+            return kept;
         };
     }
 

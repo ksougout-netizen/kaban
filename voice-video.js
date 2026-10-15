@@ -28,11 +28,15 @@ async function voiceToggleCamera() {
     if (!call) return;
     call.media = call.media || {};
     if (call.media.camTrack) { voiceStopCamera(call); return; }
+    // Пока ждём разрешение на камеру (это секунды), повторное нажатие открывало вторую:
+    // первая перезаписывалась, но так и оставалась включённой (горел индикатор камеры).
+    if (call.camBusy) return;
+    call.camBusy = true;
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24, max: 30 }, facingMode: "user" }
         });
-        if (voiceCall !== call) { stream.getTracks().forEach((t) => t.stop()); return; }
+        if (voiceCall !== call || call.media?.camTrack) { stream.getTracks().forEach((t) => t.stop()); return; }
         const track = stream.getVideoTracks()[0];
         try { track.contentHint = "motion"; } catch { /* ок */ }
         track.addEventListener("ended", () => { if (call.media?.camTrack === track) voiceStopCamera(call); });
@@ -40,6 +44,8 @@ async function voiceToggleCamera() {
         voiceMediaChanged(call);
     } catch (error) {
         toast(error?.name === "NotAllowedError" ? "Нет доступа к камере — разрешите его в настройках" : "Камера не найдена");
+    } finally {
+        call.camBusy = false;
     }
 }
 
@@ -71,6 +77,10 @@ async function voiceStartScreen(presetId) {
     if (!call) return;
     const preset = VOICE_SCREEN_PRESETS.find((p) => p.id === presetId) || VOICE_SCREEN_PRESETS[0];
     try { localStorage.setItem("kaban-golive-preset", preset.id); } catch { /* ок */ }
+    // Пока открыт системный выбор «что показать», можно было снова открыть меню и запустить
+    // второй показ — первый захват экрана при этом терялся, но продолжал работать.
+    if (call.screenBusy || call.media?.screenTrack) return;
+    call.screenBusy = true;
     let stream;
     try {
         stream = await navigator.mediaDevices.getDisplayMedia({
@@ -83,6 +93,8 @@ async function voiceStartScreen(presetId) {
     } catch (error) {
         if (error?.name !== "NotAllowedError" && error?.name !== "AbortError") toast("Не удалось начать трансляцию");
         return;
+    } finally {
+        call.screenBusy = false;
     }
     if (voiceCall !== call) { stream.getTracks().forEach((t) => t.stop()); return; }
     call.media = call.media || {};
