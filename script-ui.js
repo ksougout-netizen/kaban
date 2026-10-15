@@ -2562,6 +2562,9 @@ function resetGroupAvatarPreview(elId, placeholder) {
 function selectGroupAvatarFile(input) {
     const file = input.files?.[0];
     if (!file) return;
+    // Тот же лимит, что и при смене фото готовой группы: раньше тут не проверялось ничего.
+    const sizeError = avatarSizeError(file);
+    if (sizeError) { toast(sizeError); try { input.value = ""; } catch { /* ignore */ } return; }
     newGroupAvatarFile = file;
 
     const preview = document.getElementById("new-group-avatar-preview");
@@ -3051,8 +3054,9 @@ async function selectGroupInfoAvatarFile(input) {
     if (!file || !currentChatId || !groupMayChangeInfo()) return;
     // Раньше принималось что угодно (любой файл и любого размера) и без сжатия.
     if (!file.type.startsWith("image/")) { toast("Выберите файл изображения"); return; }
-    file = await compressImageFile(file, { maxDimension: 512 });
-    if (file.size > 5 * 1024 * 1024) { toast("Файл слишком большой (максимум 5 МБ)"); return; }
+    file = await compressImageFile(file, { maxDimension: 512 });   // GIF остаётся как есть — анимация сохраняется
+    const sizeError = avatarSizeError(file);
+    if (sizeError) { toast(sizeError); return; }
 
     // Снимок: пока файл грузится, могут открыть другой чат.
     const chatId = currentChatId;

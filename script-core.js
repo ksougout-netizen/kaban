@@ -2297,7 +2297,7 @@ function setupCallPeerConnection(pc, callId) {
         const remoteVideoOrAudio = document.getElementById("call-remote-video");
         if (remoteVideoOrAudio && remoteVideoOrAudio.srcObject !== stream) {
             remoteVideoOrAudio.srcObject = stream;
-            if (activeCall.outputId && remoteVideoOrAudio.setSinkId) remoteVideoOrAudio.setSinkId(activeCall.outputId).catch(() => {});
+            applyCallOutput();
         }
         // Мобильные браузеры (особенно iPhone) не всегда сами запускают
         // воспроизведение после смены источника — без этого был чёрный экран без звука.
@@ -3110,27 +3110,37 @@ async function toggleCallDevices() {
     if (!call) return;
     let devices = [];
     try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { /* без списка */ }
-    const micId = call.mic?.deviceId || call.localStream.getAudioTracks()[0]?.getSettings?.().deviceId || "";
+    const shared = typeof voiceSettings !== "undefined" ? voiceSettings : {};
+    // Выбор — тот же, что в настройках голоса (общий для звонков и комнат); "" — как в системе.
+    const micId = call.micChoice ?? shared.inputId ?? "";
     const camId = call.cameraId || call.localStream.getVideoTracks()[0]?.getSettings?.().deviceId || "";
     const remoteEl = document.getElementById("call-remote-video");
     const canPickOutput = typeof remoteEl?.setSinkId === "function";
     const select = (kind, current, label, onchange) => {
-        const list = devices.filter((d) => d.kind === kind);
-        if (!list.length) return "";
-        return `<label class="call-device-row"><span>${label}</span><select onchange="${onchange}(this.value)">${
-            list.map((d, i) => `<option value="${escapeHTML(d.deviceId)}"${d.deviceId === current ? " selected" : ""}>${escapeHTML(d.label || `${label} ${i + 1}`)}</option>`).join("")}</select></label>`;
+        if (kind === "videoinput" || typeof kabanDeviceList !== "function") {
+            const list = devices.filter((d) => d.kind === kind);
+            if (!list.length) return "";
+            return `<label class="call-device-row"><span>${label}</span><select onchange="${onchange}(this.value)">${
+                list.map((d, i) => `<option value="${escapeHTML(d.deviceId)}"${d.deviceId === current ? " selected" : ""}>${escapeHTML(d.label || `${label} ${i + 1}`)}</option>`).join("")}</select></label>`;
+        }
+        const { defaultLabel, items } = kabanDeviceList(devices, kind);
+        if (!items.length) return "";
+        const known = items.some((d) => d.id === current);
+        return `<label class="call-device-row"><span>${label}</span><select onchange="${onchange}(this.value)"><option value=""${!known ? " selected" : ""}>${escapeHTML(defaultLabel)}</option>${
+            items.map((d) => `<option value="${escapeHTML(d.id)}"${d.id === current ? " selected" : ""}>${escapeHTML(d.label)}</option>`).join("")}</select></label>`;
     };
     panel.innerHTML =
         select("audioinput", micId, "Микрофон", "switchCallMic") +
-        (canPickOutput ? select("audiooutput", call.outputId || "default", "Динамик", "switchCallOutput") : "") +
+        (canPickOutput ? select("audiooutput", call.outputId ?? shared.outputId ?? "", "Динамик", "switchCallOutput") : "") +
         select("videoinput", camId, "Камера", "switchCallCamera") ||
         `<div class="call-device-empty">Устройства не найдены</div>`;
     panel.hidden = false;
 }
 
-async function switchCallMic(deviceId) {
+async function switchCallMic(deviceId, { quiet = false } = {}) {
     const call = activeCall;
     if (!call) return;
+    call.micChoice = deviceId || "";
     try {
         if (call.mic) {
             // Меняется только источник, отправляемая (обработанная) дорожка та же.
@@ -3144,7 +3154,7 @@ async function switchCallMic(deviceId) {
                 call.localStream.addTrack(track);
             }
         } else {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+            const stream = await getCallMicStream(deviceId);
             const track = stream.getAudioTracks()[0];
             track.enabled = !call.local.muted;
             const sender = call.pc.getSenders().find((s) => s.track?.kind === "audio");
@@ -3153,16 +3163,44 @@ async function switchCallMic(deviceId) {
             call.localStream.addTrack(track);
         }
         // Запоминаем выбор — им же пользуются голосовые комнаты и следующие звонки.
-        if (typeof voiceSettings !== "undefined") { voiceSettings.inputId = deviceId; if (typeof saveVoiceSettings === "function") saveVoiceSettings(); }
-        toast("Микрофон переключён");
+        if (typeof voiceSettings !== "undefined" && voiceSettings.inputId !== deviceId) {
+            voiceSettings.inputId = deviceId;
+            if (typeof saveVoiceSettings === "function") saveVoiceSettings();
+            // В голосовой комнате (если она открыта параллельно) — тот же микрофон.
+            if (typeof voiceCall !== "undefined" && voiceCall?.local && typeof voiceAttachMic === "function") voiceAttachMic(voiceCall.local).catch(() => {});
+        }
+        if (!quiet) toast("Микрофон переключён");
     } catch { toast("Не удалось переключить микрофон"); }
+}
+
+// Куда звучит собеседник в звонке 1:1 — туда же, куда голоса комнат (настройки голоса).
+// Раньше звонок всегда играл в системное устройство, а комнаты — в выбранное: в комнате
+// человека слышно в наушниках, в звонке — из колонок (или не слышно вовсе).
+async function applyCallOutput() {
+    const call = activeCall;
+    const el = document.getElementById("call-remote-video");
+    if (!call || !el || typeof el.setSinkId !== "function") return;
+    const wanted = call.outputId ?? (typeof voiceSettings !== "undefined" ? voiceSettings.outputId : "") ?? "";
+    if (el.sinkId === wanted) return;
+    try {
+        await el.setSinkId(wanted || "");
+    } catch {
+        // Выбранное устройство отключено — играем в системное, а не в никуда.
+        if (wanted) { try { await el.setSinkId(""); } catch { /* ок */ } }
+    }
 }
 
 async function switchCallOutput(deviceId) {
     const call = activeCall;
     if (!call) return;
-    call.outputId = deviceId;
-    try { await document.getElementById("call-remote-video").setSinkId(deviceId); toast("Звук переключён"); }
+    call.outputId = deviceId || "";
+    if (typeof voiceSettings !== "undefined" && voiceSettings.outputId !== call.outputId) {
+        voiceSettings.outputId = call.outputId;
+        if (typeof saveVoiceSettings === "function") saveVoiceSettings();
+        if (typeof voiceCtx !== "undefined" && voiceCtx?.setSinkId) voiceCtx.setSinkId(call.outputId).catch(() => {});
+        if (typeof listenApplySink === "function") listenApplySink();
+    }
+    try { await document.getElementById("call-remote-video").setSinkId(call.outputId); toast("Звук переключён"); }
     catch { toast("Не удалось переключить динамик"); }
 }
 

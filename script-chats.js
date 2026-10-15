@@ -615,6 +615,23 @@ function triggerAvatarUpload() {
     document.getElementById("profile-avatar-input").click();
 }
 
+// Лимиты размера аватара (профиль и группы). Обычное фото перед загрузкой
+// ужимается до 512 px, а GIF трогать нельзя — пересжатие убило бы анимацию, —
+// поэтому он уходит как есть, и ему позволено больше. Верхняя граница всё равно
+// ниже лимита бакета (20 МБ): аватар скачивает каждый, у кого вы есть в чатах.
+const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+const AVATAR_GIF_MAX_BYTES = 8 * 1024 * 1024;
+
+// Текст ошибки, если файл не проходит по размеру; пустая строка — всё в порядке.
+function avatarSizeError(file) {
+    if (file.type === "image/gif") {
+        return file.size > AVATAR_GIF_MAX_BYTES
+            ? "GIF слишком тяжёлая (максимум 8 МБ) — сожмите её или сделайте короче"
+            : "";
+    }
+    return file.size > AVATAR_MAX_BYTES ? "Файл слишком большой (максимум 5 МБ)" : "";
+}
+
 async function handleAvatarFileChange(event) {
 
     const file = event.target.files?.[0];
@@ -625,10 +642,12 @@ async function handleAvatarFileChange(event) {
 
     // Аватар показывается кружком на 40–120 px, а раньше уходил как есть — фото
     // с телефона на 4–5 МБ скачивал каждый, у кого вы есть в списке чатов.
+    // GIF compressImageFile возвращает без изменений (анимация сохраняется).
     const compressed = await compressImageFile(file, { maxDimension: 512 });
-    if (compressed.size > 5 * 1024 * 1024) { toast("Файл слишком большой (максимум 5 МБ)"); return; }
+    const sizeError = avatarSizeError(compressed);
+    if (sizeError) { toast(sizeError); return; }
 
-    toast("Загружаем фото…");
+    toast(compressed.type === "image/gif" ? "Загружаем GIF…" : "Загружаем фото…");
     const oldAvatarUrl = cachedMyProfile?.avatar_url;
     let uploadedUrl = null;
 

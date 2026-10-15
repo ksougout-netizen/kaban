@@ -210,7 +210,9 @@
 
     /* ---------- подключение к местам, где ставится фото ---------- */
 
-    const croppable = (file) => file && /^image\/(jpeg|png|webp|bmp|avif)$/i.test(file.type);   // GIF и прочее — как раньше
+    // GIF сюда намеренно не попадает: редактор отдаёт статичный JPEG, а GIF должен
+    // остаться анимированным — он уходит как есть (лимит размера: avatarSizeError).
+    const croppable = (file) => file && /^image\/(jpeg|png|webp|bmp|avif)$/i.test(file.type);
 
     async function prepare(inputLike, title) {
         const file = inputLike?.files?.[0];

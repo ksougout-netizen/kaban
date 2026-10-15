@@ -1589,6 +1589,8 @@ async function voiceChangeInputDevice(deviceId) {
     if (voiceCall?.local) {
         try { await voiceAttachMic(voiceCall.local); voiceCall.noMic = false; } catch { toast("Не удалось переключить микрофон"); }
     }
+    // Идёт звонок 1:1 — переключаем и в нём: устройства у звонков и комнат общие.
+    if (typeof activeCall !== "undefined" && activeCall && typeof switchCallMic === "function") switchCallMic(deviceId, { quiet: true });
 }
 
 function voiceChangeOutputDevice(deviceId) {
@@ -1597,6 +1599,7 @@ function voiceChangeOutputDevice(deviceId) {
     if (voiceCtx?.setSinkId) voiceCtx.setSinkId(deviceId || "").catch(() => toast("Не удалось переключить устройство вывода"));
     else toast("Этот браузер не умеет выбирать устройство вывода — звук идёт на устройство по умолчанию");
     if (typeof listenApplySink === "function") listenApplySink();
+    if (typeof activeCall !== "undefined" && activeCall && typeof applyCallOutput === "function") applyCallOutput();
 }
 
 function voiceSetInputVolume(value) {
@@ -2061,7 +2064,18 @@ async function openVoiceSettings() {
     if (!voiceCall) {
         try {
             const ctx = voiceEnsureCtx();
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: voiceSettings.inputId ? { exact: voiceSettings.inputId } : undefined, echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noise, autoGainControl: false } });
+            const audio = (id) => ({ audio: { deviceId: id ? { exact: id } : undefined, echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noise, autoGainControl: false } });
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia(audio(voiceSettings.inputId));
+            } catch (error) {
+                // Сохранённый микрофон отключён — проверяем системный, а не показываем «мёртвый» индикатор.
+                if (!voiceSettings.inputId) throw error;
+                stream = await navigator.mediaDevices.getUserMedia(audio(""));
+            }
+            // Разрешение на микрофон только что выдано — теперь браузер раскрывает
+            // настоящие названия устройств (до этого были «Микрофон 1», «Динамики 2»).
+            voiceFillDevices().catch(() => {});
             const analyser = ctx.createAnalyser();
             analyser.fftSize = 1024;
             const src = ctx.createMediaStreamSource(stream);
@@ -2085,15 +2099,35 @@ function closeVoiceSettings() {
     voiceCapturingPtt = false;
 }
 
+// Список устройств без путаницы. Chrome на Windows добавляет служебные записи
+// «По умолчанию — Наушники» (deviceId "default") и «Связь — Наушники»
+// ("communications") — это НЕ отдельные устройства, а ссылки на настоящие. Раньше
+// одно и то же устройство было в списке 2–3 раза под разными именами, плюс наш
+// собственный пункт «По умолчанию». Теперь: один пункт «По умолчанию (как в
+// Windows: Наушники)» и по одному пункту на каждое реальное устройство.
+function kabanDeviceList(devices, kind) {
+    const all = devices.filter((d) => d.kind === kind);
+    const strip = (label) => String(label || "").replace(/^(По умолчанию|Default|Связь|Communications)\s*[-—–]\s*/i, "").trim();
+    const def = all.find((d) => d.deviceId === "default");
+    const real = all.filter((d) => d.deviceId && d.deviceId !== "default" && d.deviceId !== "communications");
+    const fallback = kind === "audioinput" ? "Микрофон" : kind === "audiooutput" ? "Динамики" : "Камера";
+    return {
+        defaultLabel: def?.label ? `По умолчанию (${strip(def.label)})` : "По умолчанию (как в системе)",
+        items: real.map((d, i) => ({ id: d.deviceId, label: strip(d.label) || `${fallback} ${i + 1}` }))
+    };
+}
+
 async function voiceFillDevices() {
 
     let devices = [];
     try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { /* нет доступа */ }
 
     const options = (kind, selected) => {
-        const list = devices.filter((d) => d.kind === kind);
-        return `<option value="">По умолчанию</option>` + list.map((d, i) =>
-            `<option value="${escapeHTML(d.deviceId)}"${d.deviceId === selected ? " selected" : ""}>${escapeHTML(d.label || (kind === "audioinput" ? `Микрофон ${i + 1}` : `Динамики ${i + 1}`))}</option>`).join("");
+        const { defaultLabel, items } = kabanDeviceList(devices, kind);
+        // Сохранённое устройство сейчас не подключено — показываем это, а не молча «другое».
+        const missing = selected && !items.some((d) => d.id === selected);
+        return `<option value=""${!selected || missing ? " selected" : ""}>${escapeHTML(defaultLabel)}${missing ? " — выбранное не подключено" : ""}</option>`
+            + items.map((d) => `<option value="${escapeHTML(d.id)}"${d.id === selected ? " selected" : ""}>${escapeHTML(d.label)}</option>`).join("");
     };
 
     document.getElementById("voice-input-select").innerHTML = options("audioinput", voiceSettings.inputId);
