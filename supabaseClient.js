@@ -149,6 +149,34 @@ async function deleteStorageObjectByUrl(bucket, url) {
 }
 
 
+// Список чатов приходит с последним сообщением БЕЗ attachment_meta (ни get_chat_list,
+// ни запасной запрос его не берут), а подпись в списке от него зависит: звонок без
+// исхода считался «Пропущенным звонком» (даже принятый, 6 минут разговора), подарок
+// показывал свой спрятанный текст вместо «🎁 Подарок», стикер — «Фото». Догружаем
+// одним запросом и только нужные кусочки (без вложений и прочего тяжёлого).
+async function fillLastMessageMeta(db, rows) {
+    const last = rows.map((row) => row.chats?.messages?.[0]).filter((m) => m?.id && m.attachment_meta === undefined && m.type !== "system");
+    if (!last.length) return rows;
+    const byId = new Map(last.map((m) => [m.id, m]));
+    const ids = [...byId.keys()];
+    try {
+        for (let i = 0; i < ids.length; i += 100) {
+            const { data, error } = await db.from("messages")
+                .select("id, call:attachment_meta->call, gift:attachment_meta->gift, poll:attachment_meta->poll, sticker:attachment_meta->sticker, game:attachment_meta->game, album:attachment_meta->album")
+                .in("id", ids.slice(i, i + 100));
+            if (error) throw error;
+            (data || []).forEach(({ id, ...parts }) => {
+                const meta = Object.fromEntries(Object.entries(parts).filter(([, value]) => value !== null && value !== undefined));
+                const message = byId.get(id);
+                if (message) message.attachment_meta = Object.keys(meta).length ? meta : null;
+            });
+        }
+    } catch (error) {
+        console.warn("Подписи последних сообщений: не удалось догрузить подробности", error);
+    }
+    return rows;
+}
+
 /* ============================================================================
    АВТОРИЗАЦИЯ
    ========================================================================= */
@@ -287,7 +315,7 @@ const KabanAPI = {
             const { data, error } = await db.rpc("get_chat_list");
             if (!error && Array.isArray(data)) {
                 getChatsViaRpc = true;
-                return data.map((row) => ({ ...row, unreadCount: Number(row.unreadCount || 0) }));
+                return fillLastMessageMeta(db, data.map((row) => ({ ...row, unreadCount: Number(row.unreadCount || 0) })));
             }
             if (error && isMissingRpcError(error)) getChatsViaRpc = false;
             else if (error) console.warn("get_chat_list не ответил, обычный путь", error);
@@ -373,14 +401,14 @@ const KabanAPI = {
         });
         const senderNameById = new Map((senders || []).map((u) => [u.id, u.display_name]));
         const unreadCountByChatId = new Map((unreadRows || []).map((r) => [r.chat_id, r.unread_count]));
-        return rows.map((row) => ({
+        return fillLastMessageMeta(db, rows.map((row) => ({
             ...row,
             otherUser: otherUserByChatId.get(row.chat_id) || null,
             lastMessageSenderName: row.chats?.type === "group"
                 ? senderNameById.get(row.chats.messages?.[0]?.sender_id) || null
                 : null,
             unreadCount: Number(unreadCountByChatId.get(row.chat_id) || 0)
-        }));
+        })));
     },
 
     // Найти пользователя по нику — для кнопки "+" (новый чат).

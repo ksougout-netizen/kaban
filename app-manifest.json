@@ -1,5 +1,5 @@
 {
- "version": "20261015-161",
+ "version": "20261015-162",
  "minShell": "1.0.0",
  "files": {
   "apple-touch-icon.png": {
@@ -63,7 +63,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "5c15b5864a9ff5ef9cd06a23057c15a8c7590884a552607ef7b8d8e0afd08af2",
+   "sha256": "b48d2cd6604efb083bbc221e0b11b7b5f6bdb1ab839cd14cc949c3606347994c",
    "size": 244912
   },
   "interactive-emoji.js": {
@@ -167,8 +167,8 @@
    "size": 486870
   },
   "supabaseClient.js": {
-   "sha256": "bffe16153c9c010786db270d055814cdd17aa2189fb9126d95b587bfa232659d",
-   "size": 121245
+   "sha256": "13fbc27cb90b460e350af7e6d83be93713759b3393409c131dcd4349b4a8633c",
+   "size": 123293
   },
   "sw.js": {
    "sha256": "6dab9d7ea9c8fc29d6b66771f9ebadac2d26d3123ee3019a54d390ea3dcb511b",
