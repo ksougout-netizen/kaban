@@ -1,5 +1,5 @@
 {
- "version": "20261015-159",
+ "version": "20261015-161",
  "minShell": "1.0.0",
  "files": {
   "apple-touch-icon.png": {
@@ -63,7 +63,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "315981639a10606fbe8d77a6081d93d867f5608eb26b7a5a40adbbf530cdb2ef",
+   "sha256": "5c15b5864a9ff5ef9cd06a23057c15a8c7590884a552607ef7b8d8e0afd08af2",
    "size": 244912
   },
   "interactive-emoji.js": {
@@ -71,8 +71,8 @@
    "size": 14003
   },
   "listen.js": {
-   "sha256": "c51c28da99e105bd5c1aff18bf90baa5b667ecb7942b050616b5f819355f0c14",
-   "size": 45465
+   "sha256": "351f01ecfb83e0054916c97c8ea93b5cc444e677ef9e2b0f2c0d13e6baa5f2e8",
+   "size": 45605
   },
   "manifest.json": {
    "sha256": "57c6f80bd3b04a43c50ea2bc4af987fbff264cede5f66c503c8353bf88a7589f",
@@ -111,12 +111,12 @@
    "size": 19712
   },
   "script-chats.js": {
-   "sha256": "83a28c712b572d0b2fce6985e473276e69c4526ca0f592700160042913dc3bf3",
-   "size": 256452
+   "sha256": "4dbf03709b74d5809201a95d7b32a527d47621e93c3028d3338518ebe092bd5b",
+   "size": 257240
   },
   "script-core.js": {
-   "sha256": "e872b808b1d2da61248b33ffa90628410977d8a835fb6a11c84bc44c4e13d7cc",
-   "size": 416561
+   "sha256": "076e4d34f3a513925f06a73ca0be2e579090e9a3d03097aa5ed45ee7ca7b7f46",
+   "size": 416783
   },
   "script-messages.js": {
    "sha256": "e252288eaeba2361ed004cbfb9d05b836d6e19a176b6b171c4372a1b724aa3b0",
@@ -163,8 +163,8 @@
    "size": 23957
   },
   "style.css": {
-   "sha256": "f5e5cffa86b7d8f1566af16ca75d56af032810ed661a27d259b80480d43157d5",
-   "size": 486459
+   "sha256": "3278b56bc966688a5377b275a476b578c7ba91ac85a6bf2ea88cdc690d7cbef1",
+   "size": 486870
   },
   "supabaseClient.js": {
    "sha256": "bffe16153c9c010786db270d055814cdd17aa2189fb9126d95b587bfa232659d",
@@ -199,8 +199,8 @@
    "size": 20623
   },
   "voice.js": {
-   "sha256": "46ddc027ab6eeed681c4eb48dc20a802fc1631f78a51a26dbbe6a1a6f9be125c",
-   "size": 124076
+   "sha256": "55f007b2999498e254c86fc099e02e42837e5ed2b1e0c34856e65224e759ffe1",
+   "size": 125824
   },
   "wow.js": {
    "sha256": "dcb0866cd6bd3e67f8a4beb8298a76f11a20699153f7b9b903ac22e3fc3465d0",

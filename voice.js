@@ -38,6 +38,32 @@ const voiceSettings = Object.assign({
     sounds: true, sfx: true, musicDuck: true
 },(() => { try { return JSON.parse(localStorage.getItem(VOICE_SETTINGS_KEY) || "{}"); } catch { return {}; } })());
 
+// Куда играть звук. Если выбранное устройство — это и есть системное «по умолчанию»
+// (тот же физический динамик, groupId совпадает), играем в «по умолчанию»: эхоподавление
+// Chrome надёжно вычитает из микрофона только то, что звучит на устройстве по умолчанию.
+// Раньше при явном выборе той же колонки по её id собеседники слышали своё эхо.
+const voiceOutputGroups = new Map();   // deviceId → groupId
+let voiceDefaultOutputGroup = null;
+
+async function voiceRefreshOutputDevices() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        voiceOutputGroups.clear();
+        voiceDefaultOutputGroup = null;
+        devices.filter((d) => d.kind === "audiooutput").forEach((d) => {
+            voiceOutputGroups.set(d.deviceId, d.groupId);
+            if (d.deviceId === "default") voiceDefaultOutputGroup = d.groupId;
+        });
+    } catch { /* без списка — играем в выбранное как есть */ }
+}
+
+function voiceSinkFor(deviceId) {
+    if (!deviceId || deviceId === "default") return "";
+    const group = voiceOutputGroups.get(deviceId);
+    return group && voiceDefaultOutputGroup && group === voiceDefaultOutputGroup ? "" : deviceId;
+}
+voiceRefreshOutputDevices();
+
 function saveVoiceSettings() {
     try { localStorage.setItem(VOICE_SETTINGS_KEY, JSON.stringify(voiceSettings)); } catch { /* не критично */ }
 }
@@ -63,7 +89,7 @@ let voiceCtx = null;
 function voiceEnsureCtx() {
     if (!voiceCtx) {
         voiceCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
-        if (voiceCtx.setSinkId && voiceSettings.outputId) voiceCtx.setSinkId(voiceSettings.outputId).catch(() => {});
+        if (voiceCtx.setSinkId && voiceSinkFor(voiceSettings.outputId)) voiceCtx.setSinkId(voiceSinkFor(voiceSettings.outputId)).catch(() => {});
         // Для журнала программы: звук комнаты «встал» (устройство вывода пропало и т. п.).
         const ctx = voiceCtx;
         ctx.addEventListener?.("statechange", () => {
@@ -92,16 +118,19 @@ document.addEventListener("pointerdown", () => { if (voiceCtx && voiceCtx.state 
 // Устройство вывода из настроек пропало (выключили наушники) — играем в системное,
 // иначе звук комнаты шёл в никуда.
 navigator.mediaDevices?.addEventListener?.("devicechange", async () => {
+    await voiceRefreshOutputDevices();   // системное «по умолчанию» могло смениться
+    if (typeof applyCallOutput === "function") applyCallOutput();
     if (!voiceSettings.outputId || !voiceCtx?.setSinkId) return;
     try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const present = devices.some((d) => d.kind === "audiooutput" && d.deviceId === voiceSettings.outputId);
+        const sink = voiceSinkFor(voiceSettings.outputId);
         if (!present && voiceCtx.sinkId !== "") {
             await voiceCtx.setSinkId("");
             if (typeof listenAudio !== "undefined" && listenAudio.setSinkId) listenAudio.setSinkId("").catch(() => {});
             if (voiceCall) toast("Устройство вывода отключено — звук идёт на устройство по умолчанию");
-        } else if (present && voiceCtx.sinkId !== voiceSettings.outputId) {
-            await voiceCtx.setSinkId(voiceSettings.outputId);
+        } else if (present && voiceCtx.sinkId !== sink) {
+            await voiceCtx.setSinkId(sink);
             if (typeof listenApplySink === "function") listenApplySink();
         }
     } catch { /* ок */ }
@@ -1654,7 +1683,7 @@ async function voiceChangeInputDevice(deviceId) {
 function voiceChangeOutputDevice(deviceId) {
     voiceSettings.outputId = deviceId;
     saveVoiceSettings();
-    if (voiceCtx?.setSinkId) voiceCtx.setSinkId(deviceId || "").catch(() => toast("Не удалось переключить устройство вывода"));
+    if (voiceCtx?.setSinkId) voiceCtx.setSinkId(voiceSinkFor(deviceId)).catch(() => toast("Не удалось переключить устройство вывода"));
     else toast("Этот браузер не умеет выбирать устройство вывода — звук идёт на устройство по умолчанию");
     if (typeof listenApplySink === "function") listenApplySink();
     if (typeof activeCall !== "undefined" && activeCall && typeof applyCallOutput === "function") applyCallOutput();

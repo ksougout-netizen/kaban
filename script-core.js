@@ -3561,7 +3561,8 @@ async function applyCallOutput() {
     const call = activeCall;
     const el = callRemoteAudioEl();
     if (!call || !el || typeof el.setSinkId !== "function") return;
-    const wanted = call.outputId ?? (typeof voiceSettings !== "undefined" ? voiceSettings.outputId : "") ?? "";
+    const chosen = call.outputId ?? (typeof voiceSettings !== "undefined" ? voiceSettings.outputId : "") ?? "";
+    const wanted = typeof voiceSinkFor === "function" ? voiceSinkFor(chosen) : chosen;   // то же, что «по умолчанию», — играем туда (эхоподавление)
     if (el.sinkId === wanted) return;
     try {
         await el.setSinkId(wanted || "");
@@ -3578,10 +3579,10 @@ async function switchCallOutput(deviceId) {
     if (typeof voiceSettings !== "undefined" && voiceSettings.outputId !== call.outputId) {
         voiceSettings.outputId = call.outputId;
         if (typeof saveVoiceSettings === "function") saveVoiceSettings();
-        if (typeof voiceCtx !== "undefined" && voiceCtx?.setSinkId) voiceCtx.setSinkId(call.outputId).catch(() => {});
+        if (typeof voiceCtx !== "undefined" && voiceCtx?.setSinkId) voiceCtx.setSinkId(voiceSinkFor(call.outputId)).catch(() => {});
         if (typeof listenApplySink === "function") listenApplySink();
     }
-    try { await callRemoteAudioEl().setSinkId(call.outputId); toast("Звук переключён"); }
+    try { await callRemoteAudioEl().setSinkId(voiceSinkFor(call.outputId)); toast("Звук переключён"); }
     catch { toast("Не удалось переключить динамик"); }
 }
 

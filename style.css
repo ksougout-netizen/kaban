@@ -11928,6 +11928,10 @@ body.recording-active .recording-status.video-recording ~ .record-lock-hint { bo
 .tab-quick-menu-backdrop.as-popover .tab-quick-menu-item:hover { background: var(--surface2); }
 .tab-quick-menu-backdrop.as-popover .tab-quick-menu-item.danger:hover { background: color-mix(in srgb, var(--red) 12%, transparent); }
 @keyframes ctx-pop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+/* Меню, открытое из окна (например, смена аватара в профиле), — поверх этого окна. */
+.tab-quick-menu-backdrop.over-modals { z-index: 200; }
+/* Запись видео-аватара открывается из окна профиля (z-index 96) — раньше оказывалась под ним. */
+#avatar-video-backdrop { z-index: 205; }
 
 /* ============================================================================
    «ВСЕ СООБЩЕНИЯ СЛЕВА» (как в Telegram Desktop) + аватары в ленте

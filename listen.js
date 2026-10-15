@@ -494,7 +494,8 @@ function listenApplyVolume() {
 // раньше голоса шли, например, в наушники, а музыка — в колонки по умолчанию, и микрофон
 // подхватывал её и отправлял остальным.
 function listenApplySink() {
-    const id = typeof voiceSettings !== "undefined" ? (voiceSettings.outputId || "") : "";
+    const chosen = typeof voiceSettings !== "undefined" ? (voiceSettings.outputId || "") : "";
+    const id = typeof voiceSinkFor === "function" ? voiceSinkFor(chosen) : chosen;   // см. voiceSinkFor (эхоподавление)
     if (typeof listenAudio.setSinkId === "function" && listenAudio.sinkId !== id) listenAudio.setSinkId(id).catch(() => {});
 }
 

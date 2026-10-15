@@ -698,7 +698,17 @@ function openAvatarEditMenu() {
             <span>Убрать видео-аватар</span>
         </button>` : ""}
     `;
-    document.getElementById("tab-quick-menu-backdrop").hidden = false;
+    // Меню открывается из окна профиля, а общее «быстрое меню» лежит ниже него по слоям —
+    // раньше оно появлялось внизу экрана ЗА профилем, и его не было видно. Теперь — поверх,
+    // на компьютере прямо под аватаркой, на телефоне — шторкой снизу.
+    const backdrop = document.getElementById("tab-quick-menu-backdrop");
+    backdrop.classList.add("over-modals");
+    backdrop.hidden = false;
+    const avatar = document.getElementById("profile-screen-avatar");
+    if (avatar && window.innerWidth > 600) {
+        const rect = avatar.getBoundingClientRect();
+        positionQuickMenuAt(rect.left + rect.width / 2 - 120, rect.bottom + 8);
+    }
 
 }
 
@@ -1783,7 +1793,7 @@ function openTabQuickMenu(tab) {
 function closeTabQuickMenu() {
     const backdrop = document.getElementById("tab-quick-menu-backdrop");
     backdrop.hidden = true;
-    backdrop.classList.remove("as-popover");
+    backdrop.classList.remove("as-popover", "over-modals");
 }
 
 // На компьютере то же меню, что по долгому тапу, открывается правой кнопкой мыши —
