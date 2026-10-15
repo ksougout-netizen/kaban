@@ -11551,6 +11551,21 @@ body.reduce-motion .voice-avatar.speaking { animation: none; }
 .vp-btn { padding: 8px 10px; border: 0; border-radius: 10px; background: var(--surface2); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 .vp-btn:hover { background: var(--border); }
 .vp-btn.danger { color: #ef4444; }
+.vp-btn:disabled { opacity: .55; cursor: default; }
+
+/* Управление комнатой (кнопка «•••»): переименовать / удалить. */
+.vroom-more.active { background: var(--surface); color: var(--text); }
+.vroom-edit { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 2px 44px; }
+.vroom-edit-row { display: flex; gap: 8px; }
+.vroom-edit-row .poll-field { flex: 1; min-width: 0; margin: 0; height: 36px; padding: 0 12px; border-radius: 10px; background: var(--surface); border: 1.5px solid var(--border); font-size: 13.5px; }
+.vroom-edit-row .poll-field:focus { border-color: var(--accent); outline: none; }
+.vroom-edit-row .vp-btn { height: 36px; padding: 0 14px; }
+.vroom-edit .vp-btn { background: var(--surface); }
+.vroom-edit .vp-btn:hover:not(:disabled) { background: var(--border); }
+.vroom-edit-delete { align-self: flex-start; }
+.vroom-edit-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.vroom-edit-confirm span { flex: 1 1 100%; }
+@media (max-width: 480px) { .vroom-edit { margin-left: 0; } }
 
 .voice-rooms-manage { display: flex; gap: 8px; margin-bottom: 8px; }
 .voice-rooms-manage .poll-field { flex: 1; min-width: 0; margin: 0; }

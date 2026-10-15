@@ -1457,6 +1457,31 @@ function playOrUnlock(el) {
     try { if (typeof voiceCall !== "undefined" && voiceCall?.local?.ctx?.state === "suspended") voiceCall.local.ctx.resume(); } catch {}
 }, true));
 
+// Голос собеседника играет через отдельный <audio> только со звуковыми дорожками.
+// Раньше он играл через <video> вместе с видеодорожкой, а в аудиозвонке (и в групповом
+// без камер) она пустая — кадров нет, и Chrome не запускает такой элемент до первого
+// кадра: разговор шёл в полной тишине, пока кто-нибудь не включал и не выключал камеру.
+// true — состав дорожек изменился.
+function setElementTracks(el, tracks) {
+    const want = tracks.filter((track) => track.readyState !== "ended");
+    const current = el.srcObject?.getTracks?.() || [];
+    if (current.length === want.length && want.every((track) => current.includes(track))) return false;
+    el.srcObject = want.length ? new MediaStream(want) : null;
+    return true;
+}
+
+function callRemoteAudioEl() {
+    let el = document.getElementById("call-remote-audio");
+    if (!el) {
+        el = document.createElement("audio");
+        el.id = "call-remote-audio";
+        el.autoplay = true;
+        el.hidden = true;
+        document.body.appendChild(el);
+    }
+    return el;
+}
+
 // Метка этой вкладки/окна в сигналах звонка: у одного аккаунта может быть
 // открыто несколько устройств, и ответить должен ровно один из них.
 const CALL_TAB_ID = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
@@ -2584,21 +2609,25 @@ function setupCallPeerConnection(pc, callId) {
 
     pc.ontrack = (event) => {
         if (!activeCall || activeCall.callId !== callId) return;
-        // Все дорожки собеседника — в один поток: видеоканал аудиозвонка приходит
-        // без своего MediaStream (event.streams пуст), и раньше он затирал звук.
+        // Все дорожки собеседника — в один поток (для анализа голоса и проверки видео):
+        // видеоканал аудиозвонка приходит без своего MediaStream (event.streams пуст).
         if (!activeCall.remoteStream) activeCall.remoteStream = new MediaStream();
         const stream = activeCall.remoteStream;
         if (!stream.getTracks().includes(event.track)) stream.addTrack(event.track);
         event.track.addEventListener("unmute", () => renderCallMedia());
         event.track.addEventListener("mute", () => renderCallMedia());
-        const remoteVideoOrAudio = document.getElementById("call-remote-video");
-        if (remoteVideoOrAudio && remoteVideoOrAudio.srcObject !== stream) {
-            remoteVideoOrAudio.srcObject = stream;
-            applyCallOutput();
-        }
+        // Голос — через отдельный <audio>, картинка — через беззвучный <video> (см. setElementTracks).
+        const audioEl = callRemoteAudioEl();
+        if (setElementTracks(audioEl, stream.getAudioTracks())) applyCallOutput();
         // Мобильные браузеры (особенно iPhone) не всегда сами запускают
         // воспроизведение после смены источника — без этого был чёрный экран без звука.
-        if (remoteVideoOrAudio) playOrUnlock(remoteVideoOrAudio);
+        playOrUnlock(audioEl);
+        const videoEl = document.getElementById("call-remote-video");
+        if (videoEl) {
+            videoEl.muted = true;
+            setElementTracks(videoEl, stream.getVideoTracks());
+            playOrUnlock(videoEl);
+        }
         if (event.track.kind === "audio") startCallVoiceMeter(activeCall);
         renderCallMedia();
     };
@@ -3040,7 +3069,7 @@ function teardownActiveCall(result, unseenMissedCall = false) {
         activeCall.channel?.leave();
         activeCall = null;
     }
-    ["call-remote-video", "call-local-video", "call-mini-video"].forEach((id) => {
+    ["call-remote-audio", "call-remote-video", "call-local-video", "call-mini-video"].forEach((id) => {
         const el = document.getElementById(id);
         if (el) el.srcObject = null;
     });
@@ -3466,7 +3495,7 @@ async function toggleCallDevices() {
     // Выбор — тот же, что в настройках голоса (общий для звонков и комнат); "" — как в системе.
     const micId = call.micChoice ?? shared.inputId ?? "";
     const camId = call.cameraId || call.localStream.getVideoTracks()[0]?.getSettings?.().deviceId || "";
-    const remoteEl = document.getElementById("call-remote-video");
+    const remoteEl = callRemoteAudioEl();
     const canPickOutput = typeof remoteEl?.setSinkId === "function";
     const select = (kind, current, label, onchange) => {
         if (kind === "videoinput" || typeof kabanDeviceList !== "function") {
@@ -3530,7 +3559,7 @@ async function switchCallMic(deviceId, { quiet = false } = {}) {
 // человека слышно в наушниках, в звонке — из колонок (или не слышно вовсе).
 async function applyCallOutput() {
     const call = activeCall;
-    const el = document.getElementById("call-remote-video");
+    const el = callRemoteAudioEl();
     if (!call || !el || typeof el.setSinkId !== "function") return;
     const wanted = call.outputId ?? (typeof voiceSettings !== "undefined" ? voiceSettings.outputId : "") ?? "";
     if (el.sinkId === wanted) return;
@@ -3552,7 +3581,7 @@ async function switchCallOutput(deviceId) {
         if (typeof voiceCtx !== "undefined" && voiceCtx?.setSinkId) voiceCtx.setSinkId(call.outputId).catch(() => {});
         if (typeof listenApplySink === "function") listenApplySink();
     }
-    try { await document.getElementById("call-remote-video").setSinkId(call.outputId); toast("Звук переключён"); }
+    try { await callRemoteAudioEl().setSinkId(call.outputId); toast("Звук переключён"); }
     catch { toast("Не удалось переключить динамик"); }
 }
 
@@ -4895,8 +4924,7 @@ function createGroupCallPeer(call, userId, meta, asInitiator) {
     pc.ontrack = (event) => {
         remoteStream.addTrack(event.track);
         try { event.receiver.jitterBufferTarget = 100; } catch {}
-        const video = peer.tile?.querySelector("video");
-        if (video) playOrUnlock(video);   // новая дорожка (звук/камера) — запустить, если браузер остановил
+        syncGroupCallTileMedia(peer);   // новая дорожка (звук/камера) — подключить и запустить
         updateGroupCallTile(call, peer);
     };
     // Собранные до отправки offer/answer кандидаты уже внутри SDP — поштучно только запоздавшие.
@@ -5240,6 +5268,7 @@ function leaveGroupCall(reason = "left") {
     call.room?.leave();
 
     const root = document.getElementById("gcall");
+    releaseTileMedia(document.getElementById("gcall-grid"));
     document.getElementById("gcall-grid").innerHTML = "";
     root.hidden = true;
     root.setAttribute("aria-hidden", "true");
@@ -5343,18 +5372,36 @@ function addGroupCallTile(call, peer) {
     peer.tile = tile;
     call.tiles.set(peer.userId, tile);
     document.getElementById("gcall-grid").appendChild(tile);
-    const video = tile.querySelector("video");
-    video.srcObject = peer.remoteStream;
+    // Голос участника — отдельным <audio>, видео — беззвучным <video> (см. setElementTracks:
+    // без камеры видеодорожка пустая, и через <video> звука не было до первого кадра).
+    const audio = document.createElement("audio");
+    audio.autoplay = true;
+    audio.hidden = true;
+    tile.appendChild(audio);
+    tile.querySelector("video").muted = true;
     // Как в звонке 1:1 (playOrUnlock): плитка появляется, когда участник подключился, —
     // уже без жеста пользователя, и мобильный браузер мог не запустить звук (autoplay),
     // а групповой звонок шёл в тишине. Отказ запоминается и снимается первым касанием.
-    playOrUnlock(video);
+    syncGroupCallTileMedia(peer);
     refreshGroupCallGrid();
+}
+
+function syncGroupCallTileMedia(peer) {
+    const tile = peer.tile;
+    if (!tile) return;
+    const video = tile.querySelector("video");
+    const audio = tile.querySelector("audio");
+    if (audio) { setElementTracks(audio, peer.remoteStream.getAudioTracks()); playOrUnlock(audio); }
+    if (video) { setElementTracks(video, peer.remoteStream.getVideoTracks()); playOrUnlock(video); }
+}
+
+function releaseTileMedia(root) {
+    root?.querySelectorAll("audio, video").forEach((el) => { el.srcObject = null; });
 }
 
 function removeGroupCallTile(call, userId) {
     const tile = call.tiles.get(userId);
-    if (tile) { tile.remove(); call.tiles.delete(userId); }
+    if (tile) { releaseTileMedia(tile); tile.remove(); call.tiles.delete(userId); }
     refreshGroupCallGrid();
 }
 

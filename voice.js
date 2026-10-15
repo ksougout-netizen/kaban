@@ -1289,6 +1289,17 @@ async function voiceHandleSig(payload) {
 
     const from = payload.from;
 
+    // Комнату, в которой мы сидим, удалили. Верим не сообщению, а списку комнат: если её
+    // правда больше нет — выходим, иначе остались бы в комнате, которой нет в списке.
+    if (payload.type === "room-deleted") {
+        const rooms = await voiceLoadRooms(call.chatId).catch(() => null);
+        if (voiceCall === call && rooms && !rooms.tableMissing && !rooms.rooms.some((r) => r.id === call.roomId)) {
+            await voiceLeave(true);
+            toast("Комнату удалили — вы вышли из неё");
+        }
+        return;
+    }
+
     if (payload.type === "kick") {
         if (!voiceIsGroupAdmin(call.chatId, from)) return;
         await voiceLeave(true);
@@ -1924,10 +1935,12 @@ function voicePersonRow(userId, meta, roomId) {
 
 }
 
-function voiceRenderRooms() {
+function voiceRenderRooms(force = false) {
 
     const backdrop = document.getElementById("voice-rooms-backdrop");
     if (!backdrop || !backdrop.classList.contains("open")) return;
+    // Пока набирают название комнаты, присутствие и прочие перерисовки поле не трогают.
+    if (!force && document.activeElement?.id === "vroom-edit-input") return;
 
     const list = document.getElementById("voice-rooms-list");
     const watch = voiceWatch;
@@ -1957,8 +1970,9 @@ function voiceRenderRooms() {
                 ${joinedHere
                     ? `<button type="button" class="vroom-join leave" onclick="voiceLeave()">Выйти</button>`
                     : `<button type="button" class="vroom-join" ${full ? "disabled" : ""} onclick="voiceJoinRoom(${jsAttr(room.id)})">${full ? "Заполнена" : "Войти"}</button>`}
-                ${manage && !room.virtual ? `<button type="button" class="vroom-more" onclick="voiceRoomMenu(${jsAttr(room.id)})" aria-label="Управление комнатой">${voiceSvg("more")}</button>` : ""}
+                ${manage && !room.virtual ? `<button type="button" class="vroom-more${voiceRoomEditId === room.id ? " active" : ""}" onclick="voiceRoomMenu(${jsAttr(room.id)})" aria-label="Управление комнатой" title="Переименовать или удалить">${voiceSvg("more")}</button>` : ""}
             </div>
+            ${manage && voiceRoomEditId === room.id ? voiceRoomEditHTML(room, ids.length) : ""}
             ${ids.length ? `<div class="vroom-people">${people}</div>` : '<div class="vroom-empty">Пока никого — зайдите первым</div>'}
         </div>`;
     }).join(""));
@@ -2017,30 +2031,90 @@ async function voiceCreateRoomFromInput() {
 
 }
 
-async function voiceRoomMenu(roomId) {
+/* ---- управление комнатой: переименовать / удалить ----
+   Раньше «•••» открывало системное окно prompt() («напишите „удалить“»). В программе
+   для ПК prompt() не поддерживается вовсе — кнопка ничего не делала, и удалить или
+   переименовать комнату было невозможно. Теперь — панель прямо в карточке комнаты. */
 
-    const watch = voiceWatch;
-    const room = watch?.rooms.find((r) => r.id === roomId);
-    if (!room) return;
+let voiceRoomEditId = null;        // у какой комнаты открыта панель
+let voiceRoomConfirmDelete = false; // «Удалить?» — ждём подтверждения
+let voiceRoomBusy = false;
+let voiceRoomDraft = null;         // что набрано в поле названия (перерисовка списка не должна его стирать)
 
-    const action = prompt(`Комната «${room.name}»\n\nВведите новое название, чтобы переименовать, или напишите «удалить», чтобы удалить комнату:`, room.name);
-    if (action === null) return;
-    const value = action.trim();
-    if (!value || value === room.name) return;
+function voiceRoomEditHTML(room, peopleCount) {
+    const confirmRow = voiceRoomConfirmDelete
+        ? `<div class="vroom-edit-confirm">
+               <span>Удалить «${escapeHTML(room.name)}»?${peopleCount ? ` Сейчас в ней ${peopleCount} чел. — их отключит.` : ""}</span>
+               <button type="button" class="vp-btn danger" onmousedown="event.preventDefault()" onclick="voiceRoomDelete(${jsAttr(room.id)})"${voiceRoomBusy ? " disabled" : ""}>Удалить</button>
+               <button type="button" class="vp-btn" onmousedown="event.preventDefault()" onclick="voiceRoomConfirmDelete = false; voiceRenderRooms(true)">Отмена</button>
+           </div>`
+        : `<button type="button" class="vp-btn danger vroom-edit-delete" onmousedown="event.preventDefault()" onclick="voiceRoomConfirmDelete = true; voiceRenderRooms(true)">Удалить комнату</button>`;
+    return `
+        <div class="vroom-edit" onclick="event.stopPropagation()">
+            <div class="vroom-edit-row">
+                <input type="text" class="poll-field vroom-edit-input" id="vroom-edit-input" maxlength="32" value="${escapeHTML(voiceRoomDraft ?? room.name)}" aria-label="Название комнаты" oninput="voiceRoomDraft = this.value"
+                       onkeydown="if (event.key === 'Enter') voiceRoomRename(${jsAttr(room.id)}); else if (event.key === 'Escape') { event.stopPropagation(); voiceRoomMenu(null); }"
+                       onblur="setTimeout(voiceRenderRooms, 250)">
+                <button type="button" class="vp-btn" onmousedown="event.preventDefault()" onclick="voiceRoomRename(${jsAttr(room.id)})"${voiceRoomBusy ? " disabled" : ""}>Сохранить</button>
+            </div>
+            ${confirmRow}
+        </div>`;
+}
 
-    try {
-        if (value.toLowerCase() === "удалить") {
-            if (voiceCall && voiceCall.roomId === roomId) await voiceLeave(true);
-            await KabanAPI.deleteVoiceRoom(roomId);
-        } else {
-            await KabanAPI.renameVoiceRoom(roomId, value.slice(0, 32));
-        }
-        const fresh = await voiceLoadRooms(watch.chatId);
-        if (voiceWatch === watch) { watch.rooms = fresh.rooms; watch.empty = !!fresh.empty; voiceSyncHubs(watch); voiceRefreshUi(); }
-    } catch (error) {
-        toast("Не удалось изменить комнату: " + (error?.message || error));
+function voiceRoomMenu(roomId) {
+    voiceRoomEditId = roomId && voiceRoomEditId !== roomId ? roomId : null;
+    voiceRoomConfirmDelete = false;
+    voiceRoomDraft = null;
+    voiceRenderRooms(true);
+    if (voiceRoomEditId) {
+        const input = document.getElementById("vroom-edit-input");
+        input?.focus();
+        input?.select();
     }
+}
 
+async function voiceRoomApply(roomId, work, failText) {
+    const watch = voiceWatch;
+    if (!watch || voiceRoomBusy) return;
+    voiceRoomBusy = true;
+    voiceRenderRooms(true);
+    try {
+        await work();
+        voiceRoomEditId = null;
+        voiceRoomConfirmDelete = false;
+        voiceRoomDraft = null;
+        const fresh = await voiceLoadRooms(watch.chatId);
+        if (voiceWatch === watch) { watch.rooms = fresh.rooms; watch.tableMissing = fresh.tableMissing; watch.empty = !!fresh.empty; voiceSyncHubs(watch); }
+    } catch (error) {
+        const text = String(error?.message || error);
+        toast(/нет прав|row-level|permission|42501/i.test(text) ? "Менять комнаты могут владелец и админы группы" : `${failText}: ${text}`);
+    } finally {
+        voiceRoomBusy = false;
+        voiceRefreshUi();
+        voiceRenderRooms(true);
+    }
+}
+
+function voiceRoomRename(roomId) {
+    const room = voiceWatch?.rooms.find((r) => r.id === roomId);
+    const value = (document.getElementById("vroom-edit-input")?.value || "").trim().slice(0, 32);
+    if (!room) return;
+    if (!value) { toast("Назовите комнату"); return; }
+    if (value === room.name) { voiceRoomMenu(null); return; }
+    voiceRoomApply(roomId, () => KabanAPI.renameVoiceRoom(roomId, value), "Не удалось переименовать");
+}
+
+function voiceRoomDelete(roomId) {
+    voiceRoomApply(roomId, async () => {
+        // Сами в этой комнате — сначала выходим, потом удаляем.
+        if (voiceCall && voiceCall.chatId === voiceWatch?.chatId && voiceCall.roomId === roomId) await voiceLeave(true);
+        const others = Object.keys(voiceWatch?.presence.get(roomId) || {}).filter((id) => id !== myRealUserId);
+        const handle = voiceWatch?.handles.get(roomId);
+        await KabanAPI.deleteVoiceRoom(roomId);
+        // Тех, кто в ней сейчас, отключаем (уже после удаления — они проверяют, что комнаты
+        // правда нет): иначе они остались бы в комнате, которой больше нет в списке.
+        if (others.length) handle?.run((api) => others.forEach((id) => api.send({ type: "room-deleted", to: id, from: myRealUserId })));
+    }, "Не удалось удалить");
 }
 
 /* ---- баннер в чате и кнопка в шапке ---------------------------------------------------------------------------------- */

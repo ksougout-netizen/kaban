@@ -1528,14 +1528,17 @@ const KabanAPI = {
 
     async renameVoiceRoom(roomId, name) {
         const db = getSupabaseClient();
-        const { error } = await db.from("voice_rooms").update({ name }).eq("id", roomId);
+        // .select() — иначе без прав база молча ничего не меняет, и ошибки не было.
+        const { data, error } = await db.from("voice_rooms").update({ name }).eq("id", roomId).select("id");
         if (error) throw error;
+        if (!data?.length) throw new Error("нет прав менять комнаты этой группы");
     },
 
     async deleteVoiceRoom(roomId) {
         const db = getSupabaseClient();
-        const { error } = await db.from("voice_rooms").delete().eq("id", roomId);
+        const { data, error } = await db.from("voice_rooms").delete().eq("id", roomId).select("id");
         if (error) throw error;
+        if (!data?.length) throw new Error("нет прав удалять комнаты этой группы");
     },
 
     // Список комнат группы меняется у кого-то другого — обновляем у себя.
