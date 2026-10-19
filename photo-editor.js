@@ -662,7 +662,11 @@
 
         if (!state.open) return;
         const edited = state.items.some((item, i) => (i === state.active ? state.hIdx : item.hIdx) > 0);
-        if (!force && edited && !confirm("Закрыть редактор? Изменения не сохранятся.")) return;
+        if (!force && edited) {
+            // Закроется только после ответа «Закрыть»; «Отмена» — продолжаем редактировать.
+            kabanConfirm("Закрыть редактор? Изменения не сохранятся.", { ok: "Закрыть", danger: true }).then((yes) => { if (yes) closeEditor(true); });
+            return;
+        }
 
         finishTextEdit(true);
         state.open = false;

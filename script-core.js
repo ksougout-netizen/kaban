@@ -151,6 +151,18 @@ function draftStorageKey(chatId) {
     return DRAFT_STORAGE_KEY + ":" + (chatId || "demo");
 }
 
+// Слабый телефон (Galaxy S8/S9 и ровесники: Android, 4 ГБ памяти и меньше, графика 2017 года).
+// На нём размытие под стеклом, живые обои и частицы стоят дорого каждый кадр, поэтому по
+// умолчанию они выключены (в настройках можно включить). Остальным — без изменений.
+const LITE_DEVICE = (() => {
+    try {
+        const forced = localStorage.getItem("kaban-lite");
+        if (forced === "1" || forced === "0") return forced === "1";
+    } catch { /* без хранилища — по признакам */ }
+    return /Android/i.test(navigator.userAgent) && ((navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4);
+})();
+document.documentElement.classList.toggle("lite-device", LITE_DEVICE);
+
 const appSettings = {
     darkMode: false,
     reduceMotion: false,
@@ -189,8 +201,12 @@ const appSettings = {
     // Атмосфера в чате (atmosphere.js): auto — по сезону; интенсивность low|mid|high.
     atmosphereKind: "auto",
     atmosphereDensity: "mid",
-    linkPreviews: true
+    linkPreviews: true,
+    // Облегчённый набор для слабого телефона уже применён (один раз, см. loadSettings).
+    liteDefaults: false
 };
+const LITE_SETTINGS = { liveWallpapers: false, sidebarFrost: false, sidebarGloss: false, seasonalAtmosphere: false };
+if (LITE_DEVICE) Object.assign(appSettings, LITE_SETTINGS);
 
 /* ============================================================================
    ТЕМА ОФОРМЛЕНИЯ: режим + акцентный цвет + подкраска фона + пузыри + обои.
@@ -872,6 +888,12 @@ function initializeSettings() {
             if (typeof savedSettings[name] === "string") appSettings[name] = savedSettings[name];
         });
         if (Number.isInteger(savedSettings.tintLevel)) appSettings.tintLevel = savedSettings.tintLevel;
+        // Слабый телефон, настройки сохранены ещё до облегчения — выключаем тяжёлое один раз;
+        // включит обратно сам — так и останется.
+        if (LITE_DEVICE && !appSettings.liteDefaults) {
+            Object.assign(appSettings, LITE_SETTINGS, { liteDefaults: true });
+            saveSettings();
+        }
 
         // Прежние пастельные темы → цвет + средняя подкраска фона (как они и выглядели).
         if (LEGACY_ACCENTS[appSettings.accentColor]) {
@@ -1722,12 +1744,17 @@ function callVoicePrefs() {
     };
 }
 
+// Открытые микрофоны звонков (1:1 и групповых) — чтобы смена шумоподавления в настройках
+// или догрузившаяся нейросеть применялись к уже идущему разговору.
+const openCallMics = new Set();
+
 async function getCallMicStream(deviceId) {
     const prefs = callVoicePrefs();
     const audio = (id) => ({
         deviceId: id ? { exact: id } : undefined,
         echoCancellation: prefs.echo,
-        noiseSuppression: prefs.noise,
+        // Браузерный шумодав — в режиме «Обычное» или пока нейросеть не готова (noise.js).
+        noiseSuppression: typeof KabanNoise !== "undefined" ? KabanNoise.browserSuppression() : prefs.noise,
         autoGainControl: false,
         channelCount: 1
     });
@@ -1745,6 +1772,9 @@ async function getCallMicStream(deviceId) {
 async function openCallMic() {
 
     const prefs = callVoicePrefs();
+    // ИИ-шумодав: на ПК/Android готов за доли секунды (файлы локальные), на сайте в первый
+    // раз может не успеть — тогда звонок начинается с браузерным, а нейросеть подключится сама.
+    if (typeof KabanNoise !== "undefined") await KabanNoise.readyWithin(1200);
     const raw = await getCallMicStream(prefs.inputId);
     const rawTrack = raw.getAudioTracks()[0];
 
@@ -1784,10 +1814,13 @@ async function openCallMic() {
             analyser.fftSize = 1024;
             const dest = ctx.createMediaStreamDestination();
             src.connect(analyser);                         // «живой ли микрофон» — по сырому сигналу
-            if (prefs.level) src.connect(hp).connect(comp).connect(gain).connect(limiter).connect(trim).connect(dest);
-            else src.connect(hp).connect(gain).connect(limiter).connect(trim).connect(dest);
+            // Нейросеть шумодава — сразу за микрофоном, до выравнивания громкости.
+            const dn = typeof KabanNoise !== "undefined" && KabanNoise.useNode() ? await KabanNoise.acquire(ctx) : null;
+            if (dn) src.connect(dn).connect(hp); else src.connect(hp);
+            if (prefs.level) hp.connect(comp).connect(gain).connect(limiter).connect(trim).connect(dest);
+            else hp.connect(gain).connect(limiter).connect(trim).connect(dest);
             mic.ctx = ctx;
-            mic.nodes = { src, hp, comp, gain, limiter, trim, analyser, dest, buf: new Float32Array(1024) };
+            mic.nodes = { src, dn, hp, comp, gain, limiter, trim, analyser, dest, buf: new Float32Array(1024) };
             mic.track = dest.stream.getAudioTracks()[0];
             mic.processed = true;
         }
@@ -1810,14 +1843,29 @@ async function openCallMic() {
 
     // Сменить микрофон посреди звонка: меняется только источник, отправляемая дорожка
     // та же — собеседнику ничего пересогласовывать не нужно.
-    mic.setDevice = async (deviceId) => {
+    // reprocess — то же устройство, но другая обработка (шумодав, эхо). Chrome не открывает
+    // одно устройство с разной обработкой одновременно и молча отдавал прежнюю: «Обычный»
+    // шумодав, включённый посреди звонка, не включался. Поэтому старый поток — закрыть ДО
+    // открытия нового (пауза ~0,2 с). При смене устройства — наоборот: сначала новый, чтобы
+    // при ошибке остался работающий старый.
+    mic.setDevice = async (deviceId, { reprocess = false } = {}) => {
+        if (reprocess) mic.raw.getTracks().forEach((t) => t.stop());
         const next = await getCallMicStream(deviceId);
         const nextTrack = next.getAudioTracks()[0];
         if (mic.nodes) {
             const src = mic.ctx.createMediaStreamSource(next);
             try { mic.nodes.src.disconnect(); } catch { /* уже отключён */ }
+            // Шумодав по текущей настройке: включили / выключили / нейросеть догрузилась.
+            const wantNode = typeof KabanNoise !== "undefined" && KabanNoise.useNode();
+            if (wantNode && !mic.nodes.dn) {
+                mic.nodes.dn = await KabanNoise.acquire(mic.ctx);
+                mic.nodes.dn?.connect(mic.nodes.hp);
+            } else if (!wantNode && mic.nodes.dn) {
+                KabanNoise.release(mic.nodes.dn);
+                mic.nodes.dn = null;
+            }
             src.connect(mic.nodes.analyser);
-            src.connect(mic.nodes.hp);
+            src.connect(mic.nodes.dn || mic.nodes.hp);
             mic.nodes.src = src;
         } else {
             nextTrack.enabled = mic.track.enabled;
@@ -1842,11 +1890,22 @@ async function openCallMic() {
 
     mic.stop = () => {
         mic.stopped = true;
+        openCallMics.delete(mic);
         clearInterval(mic.aliveTimer);
         try { mic.nodes?.src.disconnect(); mic.nodes?.trim.disconnect(); } catch { /* ок */ }
+        if (mic.nodes?.dn) { KabanNoise.release(mic.nodes.dn); mic.nodes.dn = null; }
         mic.raw.getTracks().forEach((t) => t.stop());
         if (mic.processed) mic.track.stop();
     };
+
+    openCallMics.add(mic);
+    // Нейросеть выбрана, но не успела к началу звонка — как догрузится, переоткрываем
+    // микрофон уже с ней (отправляемая дорожка та же, собеседнику ничего не меняется).
+    if (mic.processed && !mic.nodes.dn && typeof KabanNoise !== "undefined" && KabanNoise.status() === "loading") {
+        KabanNoise.prepare().then(() => {
+            if (!mic.stopped && !mic.nodes.dn) mic.setDevice(mic.deviceId, { reprocess: true }).catch(() => toast("Не удалось включить ИИ-шумодав в этом звонке"));
+        }).catch(() => { /* недоступна — остаётся браузерный */ });
+    }
 
     return mic;
 }
@@ -3257,6 +3316,9 @@ function showOutgoingCallUI() {
 }
 
 function showIncomingCallUI(offer) {
+
+    // Пока звонит — нейросеть шумодава уже грузится, к «Принять» будет готова.
+    if (typeof KabanNoise !== "undefined") KabanNoise.warm();
 
     document.getElementById("call-kind").textContent = offer.isVideo ? "Входящий видеозвонок" : "Входящий звонок";
     document.getElementById("call-state").textContent = offer.isVideo ? "Видеозвонок…" : "Звонит вам…";
@@ -6956,11 +7018,21 @@ function playReceiveSound() {
 }
 // Высота пустого поля ввода (одна строка) — меряется один раз, сбрасывается в applySettings.
 var composerEmptyHeight = 0;
+// Chrome 123+: поле растёт по тексту само (field-sizing: content, см. style.css) — без замера
+// scrollHeight, который на каждую букву синхронно раскладывал всю страницу (на слабом
+// телефоне — рывок почти на каждое нажатие, см. замер).
+const COMPOSER_AUTOSIZE = !!window.CSS?.supports?.("field-sizing", "content");
+if (COMPOSER_AUTOSIZE) document.documentElement.classList.add("composer-autosize");
 
 function resizeComposer() {
 
     const input =
         document.getElementById("input");
+
+    if (COMPOSER_AUTOSIZE) {
+        if (typeof syncComposerFormatBar === "function") syncComposerFormatBar();
+        return;
+    }
 
     // Пустое поле (открыли чат без черновика, отправили сообщение) — высота заведомо
     // в одну строку, ставим её без замера. Замер (height:auto + scrollHeight) заставлял

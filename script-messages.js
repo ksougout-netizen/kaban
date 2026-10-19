@@ -228,6 +228,28 @@ document.getElementById("messages").addEventListener("contextmenu", (event) => {
 
 });
 
+// На телефоне меню сообщения — нижняя шторка (style.css → #message-context-menu) с
+// затемнением. Затемнение — отдельный слой: он «съедает» нажатие мимо меню, иначе оно
+// закрывало меню И срабатывало на том, что под ним (ссылка, кнопка, другое сообщение).
+(function contextMenuScrim() {
+    const menu = document.getElementById("message-context-menu");
+    if (!menu) return;
+    const phone = window.matchMedia("(max-width: 650px)");
+    let scrim = null;
+    new MutationObserver(() => {
+        if (!menu.hidden && phone.matches && !scrim) {
+            scrim = document.createElement("div");
+            scrim.className = "context-menu-scrim";
+            scrim.addEventListener("click", (event) => { event.stopPropagation(); menu.hidden = true; });
+            scrim.addEventListener("contextmenu", (event) => event.preventDefault());
+            menu.before(scrim);
+        } else if (menu.hidden && scrim) {
+            scrim.remove();
+            scrim = null;
+        }
+    }).observe(menu, { attributes: true, attributeFilter: ["hidden"] });
+})();
+
 document.addEventListener("click", (event) => {
     if (!event.target.closest("#message-context-menu")) {
         document.getElementById("message-context-menu").hidden = true;
@@ -2046,9 +2068,14 @@ function openForwardPopover(messageId) {
         const name = chat.type === "group"
             ? (chat.title || "Группа")
             : isSavedMessages ? "Избранное" : (loadContactAlias(other?.id) || other?.display_name || "Пользователь");
+        // Те же аватары, что в списке чатов (фото или цветные инициалы), а не одинаковые 👤.
+        const av = avatarParts(chat.type === "group"
+            ? { id: chat.id, name, url: chat.avatar_url, kind: "group" }
+            : isSavedMessages ? { id: chat.id, name, kind: "saved" }
+            : { id: other?.id, name, url: other?.avatar_url, kind: other?.is_bot && !other?.avatar_url ? "bot" : "user" });
         return `
             <button class="new-chat-result-row" type="button" onclick="forwardRealMessage('${chat.id}')">
-                <span class="new-chat-result-avatar${isSavedMessages ? " chat-avatar-saved" : ""}">${isSavedMessages ? "🔖" : "👤"}</span>
+                <span class="new-chat-result-avatar forward-avatar${av.cls}"${av.style}>${av.inner}</span>
                 <span>${escapeHTML(name)}</span>
             </button>
         `;

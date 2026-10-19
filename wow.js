@@ -587,6 +587,15 @@
         gloss.className = "sidebar-gloss";
         gloss.setAttribute("aria-hidden", "true");
         sidebar.prepend(gloss);
+        // Отблеск пробегает раз в ~9 с и только когда его видно (глянец включён, окно на виду).
+        const phoneLayout = window.matchMedia("(max-width: 650px)");
+        setInterval(() => {
+            if (document.hidden || !document.body.classList.contains("gloss-on") || document.body.classList.contains("reduce-motion")) return;
+            // На телефоне открыт чат — панель чатов уехала за край экрана, блик никто не увидит.
+            if (phoneLayout.matches && document.body.classList.contains("chat-selected")) return;
+            gloss.classList.add("sheen");
+            setTimeout(() => gloss.classList.remove("sheen"), 2100);
+        }, 9000);
     })();
 
     /* ---- 6. ЭКРАН ЗВОНКА ДЫШИТ ГОЛОСОМ ------------------------------------------------ */

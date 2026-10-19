@@ -832,8 +832,14 @@
     const ATMO_MIN_FRAME_MS = 30;
 
     function frame(now) {
+        // Рано — не будим браузер каждый кадр экрана (на 120 Гц это 120 пустых проходов в
+        // секунду), а ждём таймером до следующего нужного кадра.
+        if (now - S.last < ATMO_MIN_FRAME_MS) {
+            S.raf = -1;
+            S.wait = setTimeout(() => { S.wait = 0; if (S.raf === -1) S.raf = requestAnimationFrame(frame); }, Math.max(1, ATMO_MIN_FRAME_MS - (now - S.last) - 4));
+            return;
+        }
         S.raf = requestAnimationFrame(frame);
-        if (now - S.last < ATMO_MIN_FRAME_MS) return;
         const dt = Math.min(0.05, (now - S.last) / 1000 || 0.016);
         S.last = now;
         S.t += dt;
@@ -863,7 +869,9 @@
     }
 
     function stop() {
-        if (S.raf) cancelAnimationFrame(S.raf);
+        if (S.raf > 0) cancelAnimationFrame(S.raf);
+        clearTimeout(S.wait);
+        S.wait = 0;
         S.raf = 0;
         if (S.canvas) { S.canvas.hidden = true; S.ctx.clearRect(0, 0, S.canvas.width, S.canvas.height); }
     }

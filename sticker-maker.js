@@ -526,7 +526,7 @@
             button.addEventListener("contextmenu", async (event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (!confirm("Удалить стикер из «Моих стикеров»?")) return;
+                if (!(await kabanConfirm("Удалить стикер из «Моих стикеров»?", { ok: "Удалить", danger: true }))) return;
                 await deleteMySticker(item.id);
                 button.remove();
             });

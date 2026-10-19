@@ -751,9 +751,9 @@ function saveFolderFromEditor() {
 
 }
 
-function deleteFolderFromEditor() {
+async function deleteFolderFromEditor() {
     if (!folderEditorId) return;
-    if (!confirm("Удалить папку? Сами чаты останутся на месте.")) return;
+    if (!(await kabanConfirm("Удалить папку? Сами чаты останутся на месте.", { ok: "Удалить", danger: true }))) return;
     saveFolders(loadFolders().filter((f) => f.id !== folderEditorId));
     if (activeChatFolder === "f:" + folderEditorId) activeChatFolder = "all";
     closeFolderEditor();

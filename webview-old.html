@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KABAN</title>
+<!-- Запасная страница приложения для Android (server.errorPath в capacitor.config.json):
+     устаревший «Android System WebView» (KABAN нужен Chrome 111+) или ошибка загрузки.
+     Нарочно на старом JS и CSS — должна открыться на любом WebView. -->
+<style>
+    html, body { margin: 0; background: #101010; }
+    body { color: #f2f2f2; font-family: Roboto, "Segoe UI", sans-serif; }
+    .card { box-sizing: border-box; max-width: 420px; margin: 0 auto; padding: 22vh 22px 28px; text-align: center; }
+    h1 { font-size: 21px; margin: 0 0 10px; }
+    p { font-size: 15px; line-height: 1.45; color: #b5b5b5; margin: 0 0 14px; }
+    a.btn, button { display: block; box-sizing: border-box; width: 100%; margin: 10px 0 0; padding: 14px; border: 0; border-radius: 14px;
+        background: #2a9ef1; color: #fff; font: inherit; font-size: 16px; font-weight: bold; text-decoration: none; }
+    button.secondary { background: #2a2a2a; color: #f2f2f2; }
+    .ver { margin-top: 18px; font-size: 12px; color: #6f6f6f; }
+</style>
+</head>
+<body>
+<div class="card">
+    <h1 id="title">Нужно обновить компонент Android</h1>
+    <p id="text">KABAN работает на встроенном браузере телефона — «Android System WebView». Он устарел: обновите его в Play Маркете (бесплатно, 1–2 минуты) и откройте KABAN снова.</p>
+    <a class="btn" id="market" href="market://details?id=com.google.android.webview">Открыть в Play Маркете</a>
+    <button class="secondary" id="retry" type="button">Я обновил — открыть KABAN</button>
+    <div class="ver" id="ver"></div>
+</div>
+<script>
+    (function () {
+        var m = /Chrome\/(\d+)/.exec(navigator.userAgent);
+        var major = m ? parseInt(m[1], 10) : 0;
+        document.getElementById("ver").innerHTML = "WebView " + (m ? m[1] : "?") + " · нужен 111 или новее";
+        if (major >= 111) {
+            // WebView свежий — значит, просто не загрузилась страница.
+            document.getElementById("title").innerHTML = "Не удалось открыть KABAN";
+            document.getElementById("text").innerHTML = "Попробуйте ещё раз. Если не поможет — закройте приложение и откройте снова.";
+            document.getElementById("market").style.display = "none";
+            document.getElementById("retry").innerHTML = "Повторить";
+            document.getElementById("retry").className = "";
+        }
+        document.getElementById("retry").onclick = function () { location.href = "https://localhost/"; };
+    })();
+</script>
+</body>
+</html>

@@ -309,7 +309,7 @@ async function deleteCurrentStory() {
     if (!storyViewer) return;
     const story = storyViewer.queue[storyViewer.index];
     if (!story || story.user_id !== myRealUserId) return;
-    if (!confirm("Удалить эту историю?")) return;
+    if (!(await kabanConfirm("Удалить эту историю?", { ok: "Удалить", danger: true }))) return;
 
     try {
         await KabanAPI.deleteStory(story.id, story.media_url);

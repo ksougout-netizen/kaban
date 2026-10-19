@@ -271,6 +271,7 @@ function describeThisDevice() {
     const ua = navigator.userAgent;
     const os = /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad|iPod/.test(ua) ? "iOS" : /Mac OS X/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "Устройство";
     if (window.kabanDesktop) return { title: "KABAN для Windows", sub: "Программа для компьютера", icon: "💻" };
+    if (window.kabanAndroid) return { title: "KABAN для Android", sub: "Приложение для телефона", icon: "📱" };
     const browser = /YaBrowser/.test(ua) ? "Яндекс Браузер" : /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Браузер";
     const mobile = /Android|iPhone|iPad|iPod|Mobile/.test(ua);
     const standalone = window.matchMedia?.("(display-mode: standalone)").matches;
@@ -296,7 +297,7 @@ function closeDevicesModal() {
 }
 
 async function terminateOtherSessions() {
-    if (!confirm("Выйти из KABAN на всех других устройствах?")) return;
+    if (!(await kabanConfirm("Выйти из KABAN на всех других устройствах?", { ok: "Завершить сеансы", danger: true }))) return;
     const button = document.getElementById("devices-terminate-btn");
     button.disabled = true;
     try {

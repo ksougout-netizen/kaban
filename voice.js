@@ -37,6 +37,13 @@ const voiceSettings = Object.assign({
     echo: true, noise: true, agc: true,
     sounds: true, sfx: true, musicDuck: true
 },(() => { try { return JSON.parse(localStorage.getItem(VOICE_SETTINGS_KEY) || "{}"); } catch { return {}; } })());
+// Шумоподавление (noise.js): "ai" — нейросеть, "browser" — встроенное в браузер, "off".
+// Раньше был один выключатель noise: выключенный остаётся выключенным; на слабом телефоне
+// по умолчанию браузерное (нейросеть там слишком нагрузила бы процессор).
+if (!voiceSettings.noiseMode) {
+    voiceSettings.noiseMode = voiceSettings.noise === false ? "off" : (typeof LITE_DEVICE !== "undefined" && LITE_DEVICE ? "browser" : "ai");
+}
+if (!voiceSettings.noiseStrength) voiceSettings.noiseStrength = "max";
 
 // Куда играть звук. Если выбранное устройство — это и есть системное «по умолчанию»
 // (тот же физический динамик, groupId совпадает), играем в «по умолчанию»: эхоподавление
@@ -88,7 +95,11 @@ let voiceCtx = null;
 
 function voiceEnsureCtx() {
     if (!voiceCtx) {
-        voiceCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
+        // 48 кГц явно: нейросеть шумодава (noise.js) работает только на этой частоте, а по
+        // умолчанию контекст берёт частоту устройства (на части ПК — 44,1 кГц).
+        const AC = window.AudioContext || window.webkitAudioContext;
+        try { voiceCtx = new AC({ latencyHint: "interactive", sampleRate: 48000 }); }
+        catch { voiceCtx = new AC({ latencyHint: "interactive" }); }
         if (voiceCtx.setSinkId && voiceSinkFor(voiceSettings.outputId)) voiceCtx.setSinkId(voiceSinkFor(voiceSettings.outputId)).catch(() => {});
         // Для журнала программы: звук комнаты «встал» (устройство вывода пропало и т. п.).
         const ctx = voiceCtx;
@@ -452,13 +463,24 @@ async function voiceStartLocalAudio(call) {
 
 }
 
-async function voiceAttachMic(local) {
+// reprocess — то же устройство, другая обработка (настройки шумодава/эха, догрузившаяся
+// нейросеть). Chrome не открывает одно устройство с разной обработкой одновременно и молча
+// отдавал прежнюю — поэтому переключатели эха и шумоподавления посреди комнаты раньше не
+// срабатывали. Старый поток закрываем ДО открытия нового (пауза ~0,2 с).
+async function voiceAttachMic(local, { reprocess = false } = {}) {
+
+    if (reprocess) local.micStream?.getTracks().forEach((track) => track.stop());
+
+    // ИИ-шумодав (noise.js): на ПК/Android файлы локальные и готовы за доли секунды; не успел
+    // (первый раз на сайте) — пока браузерный, а как догрузится — переоткроем микрофон с ИИ.
+    const ai = typeof KabanNoise !== "undefined" && await KabanNoise.readyWithin(1200);
+    const browserNs = typeof KabanNoise !== "undefined" ? KabanNoise.browserSuppression() : voiceSettings.noiseMode !== "off";
 
     const constraints = {
         audio: {
             deviceId: voiceSettings.inputId ? { exact: voiceSettings.inputId } : undefined,
             echoCancellation: voiceSettings.echo,
-            noiseSuppression: voiceSettings.noise,
+            noiseSuppression: browserNs,
             // Встроенная автоподстройка Chrome на Windows двигает СИСТЕМНЫЙ ползунок
             // микрофона и со временем опускает его (голос становится всё тише — и тут,
             // и в звонках). Вместо неё — своё выравнивание громкости (local.leveler).
@@ -475,7 +497,7 @@ async function voiceAttachMic(local) {
         if (voiceSettings.inputId && (error.name === "OverconstrainedError" || error.name === "NotFoundError")) {
             voiceSettings.inputId = "";
             saveVoiceSettings();
-            stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noise, autoGainControl: false, channelCount: 1 } });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: voiceSettings.echo, noiseSuppression: browserNs, autoGainControl: false, channelCount: 1 } });
         } else {
             throw error;
         }
@@ -503,7 +525,26 @@ async function voiceAttachMic(local) {
         hp.connect(comp).connect(local.inputGain);
         local.leveler = hp;
     }
-    local.src.connect(voiceSettings.agc !== false ? local.leveler : local.inputGain);
+    const target = voiceSettings.agc !== false ? local.leveler : local.inputGain;
+
+    // Нейросеть — сразу за микрофоном, до выравнивания громкости: иначе компрессор
+    // поднимал бы тихий шум клавиатуры раньше, чем его уберут.
+    if (ai && !local.denoise) local.denoise = await KabanNoise.acquire(local.ctx);
+    if (!ai && local.denoise) { KabanNoise.release(local.denoise); local.denoise = null; }
+    if (local.denoise) {
+        try { local.denoise.disconnect(); } catch { /* ещё не подключён */ }
+        local.src.connect(local.denoise);
+        local.denoise.connect(target);
+    } else {
+        local.src.connect(target);
+    }
+
+    // ИИ выбран, но ещё грузится — как будет готов, тихо переоткрываем микрофон уже с ним.
+    if (!ai && typeof KabanNoise !== "undefined" && voiceSettings.noiseMode === "ai" && KabanNoise.status() === "loading") {
+        KabanNoise.prepare().then(() => {
+            if (voiceCall?.local === local && !local.denoise && local.micStream === stream) voiceAttachMic(local, { reprocess: true }).catch(() => toast("Не удалось включить ИИ-шумодав в комнате"));
+        }).catch(() => { /* недоступен — остаётся браузерный */ });
+    }
 
 }
 
@@ -611,6 +652,7 @@ async function voiceLeave(silent) {
     if (typeof voiceStopAllMedia === "function") voiceStopAllMedia(call);
     call.local?.micStream?.getTracks().forEach((track) => track.stop());
     try { call.local?.src?.disconnect(); } catch { /* уже отключён */ }
+    if (call.local?.denoise) { KabanNoise.release(call.local.denoise); call.local.denoise = null; }
     try { call.master?.disconnect(); } catch { /* уже отключён */ }
 
     if (call.handle) {
@@ -1920,6 +1962,7 @@ function openVoiceRooms() {
     backdrop.classList.add("open");
     backdrop.setAttribute("aria-hidden", "false");
     voiceRenderRooms();
+    KabanNoise.warm();   // пока выбирают комнату — нейросеть шумодава уже грузится
 }
 
 function closeVoiceRooms() {
@@ -2214,7 +2257,7 @@ async function openVoiceSettings() {
     if (!voiceCall) {
         try {
             const ctx = voiceEnsureCtx();
-            const audio = (id) => ({ audio: { deviceId: id ? { exact: id } : undefined, echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noise, autoGainControl: false } });
+            const audio = (id) => ({ audio: { deviceId: id ? { exact: id } : undefined, echoCancellation: voiceSettings.echo, noiseSuppression: voiceSettings.noiseMode === "browser", autoGainControl: false } });
             let stream;
             try {
                 stream = await navigator.mediaDevices.getUserMedia(audio(voiceSettings.inputId));
@@ -2222,6 +2265,12 @@ async function openVoiceSettings() {
                 // Сохранённый микрофон отключён — проверяем системный, а не показываем «мёртвый» индикатор.
                 if (!voiceSettings.inputId) throw error;
                 stream = await navigator.mediaDevices.getUserMedia(audio(""));
+            }
+            // Окно успели закрыть, пока включался микрофон («Назад» сразу после открытия) —
+            // иначе тест запускался уже после закрытия и микрофон оставался включённым навсегда.
+            if (!backdrop.classList.contains("open") || voiceMicTest || voiceCall) {
+                stream.getTracks().forEach((t) => t.stop());
+                return;
             }
             // Разрешение на микрофон только что выдано — теперь браузер раскрывает
             // настоящие названия устройств (до этого были «Микрофон 1», «Динамики 2»).
@@ -2297,7 +2346,7 @@ function voiceRenderSettings() {
     document.getElementById("voice-in-vol").value = String(voiceSettings.inputVolume);
     document.getElementById("voice-out-vol").value = String(voiceSettings.outputVolume);
     document.getElementById("voice-echo-input").checked = voiceSettings.echo;
-    document.getElementById("voice-noise-input").checked = voiceSettings.noise;
+    voiceRenderNoise();
     document.getElementById("voice-agc-input").checked = voiceSettings.agc;
     document.getElementById("voice-sounds-input").checked = voiceSettings.sounds;
     const duckInput = document.getElementById("voice-duck-input");
@@ -2308,13 +2357,44 @@ function voiceRenderSettings() {
 
 function voiceSetSetting(key, value) {
     voiceSettings[key] = value;
+    if (key === "noiseMode") voiceSettings.noise = value !== "off";   // для старых версий, читающих noise
     saveVoiceSettings();
-    if (key === "echo" || key === "noise" || key === "agc") {
-        // Эти параметры применяются при открытии микрофона — переоткрываем в комнате.
-        if (voiceCall?.local) voiceAttachMic(voiceCall.local).catch(() => toast("Не удалось применить настройку микрофона"));
+    if (key === "noiseMode" && value === "ai") KabanNoise.warm();
+    if (key === "noiseStrength") KabanNoise.applyStrength();          // на лету, без переоткрытия микрофона
+    if (key === "echo" || key === "noiseMode" || key === "agc") {
+        // Эти параметры применяются при открытии микрофона — переоткрываем в комнате и в звонке.
+        if (voiceCall?.local) voiceAttachMic(voiceCall.local, { reprocess: true }).catch(() => toast("Не удалось применить настройку микрофона"));
+        if (typeof openCallMics !== "undefined") openCallMics.forEach((mic) => mic.setDevice(mic.deviceId, { reprocess: true }).catch(() => toast("Не удалось применить настройку микрофона")));
     }
     voiceRenderSettings();
 }
+
+// Шумоподавление в настройках голоса: режим, сила (для ИИ) и что сейчас происходит.
+function voiceRenderNoise() {
+    const mode = voiceSettings.noiseMode;
+    document.querySelectorAll("[data-voice-noise]").forEach((b) => b.classList.toggle("active", b.dataset.voiceNoise === mode));
+    document.querySelectorAll("[data-voice-strength]").forEach((b) => b.classList.toggle("active", b.dataset.voiceStrength === voiceSettings.noiseStrength));
+    const strength = document.getElementById("voice-noise-strength");
+    if (strength) strength.hidden = mode !== "ai";
+    const hint = document.getElementById("voice-noise-status");
+    if (!hint) return;
+    const st = KabanNoise.status();
+    hint.textContent = {
+        off: "Микрофон без подавления шума.",
+        browser: "Встроенный шумодав браузера: слабее нейросети, зато почти не нагружает устройство.",
+        idle: "Нейросеть DeepFilterNet3 включится при входе в комнату или звонке.",
+        loading: "Загружаем нейросеть шумодава… Пока работает обычный.",
+        ready: voiceSettings.noiseStrength === "soft"
+            ? "Нейросеть: фон тише в десятки раз, голос не трогается даже при печати во время речи."
+            : "Нейросеть: клавиатура, вентилятор и фон исчезают, голос остаётся чистым.",
+        active: voiceSettings.noiseStrength === "soft"
+            ? "Работает · мягкое: фон тише в десятки раз, голос не трогается."
+            : "Работает · клавиатура, вентилятор и фон убираются.",
+        unavailable: "Нейросеть не поддерживается на этом устройстве — работает обычный шумодав."
+    }[st] || "";
+    hint.classList.toggle("active", st === "active");
+}
+if (typeof KabanNoise !== "undefined") KabanNoise.onChange(() => { if (document.getElementById("voice-settings-backdrop")?.classList.contains("open")) voiceRenderNoise(); });
 
 function voiceUpdateMeters(levelDb) {
     const fill = document.getElementById("voice-meter-fill");

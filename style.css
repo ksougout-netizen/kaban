@@ -2223,6 +2223,9 @@ body:not(.chat-selected) .content {
     text-align: center;
 }
 
+/* Подпись во втором span (В закладки / Закрепить) — не узкая колонка значка, а остальная ширина. */
+.context-menu-item span + span { flex: 1 1 auto; text-align: left; }
+
 .context-menu-item-danger { color: #c83f45; }
 
 /* Обёртка: прокручиваемая лента реакций (заполняется в script.js →
@@ -3380,6 +3383,9 @@ body[data-tint] .sidebar {
     animation: message-enter .2s ease-out both;
 }
 
+/* Строки истории (открытие чата, подгрузка вверх) появляются сразу, «въезжает» только новое. */
+.message-row.no-enter { animation: none; }
+
 @keyframes message-enter {
     from { opacity: 0; translate: 0 5px; }
     to { opacity: 1; translate: 0 0; }
@@ -4404,6 +4410,8 @@ body:not(.chat-selected) .pinned-bar { display: none; }
     padding: 8px 0;
     overflow-y: hidden;
 }
+/* Растёт по тексту сам (до max-height, дальше — прокрутка); см. resizeComposer. */
+.composer-autosize .input-box textarea { field-sizing: content; overflow-y: auto; }
 
 .input-button {
     width: 34px;
@@ -10354,14 +10362,18 @@ body.reduce-motion .anim-glyph { animation: none !important; }
     z-index: -1;
     background: var(--wp);
     pointer-events: none;
-    transform: translate3d(var(--px, 0px), var(--py, 0px), 0) rotate(0deg) scale(1.06);
+    /* Сдвиг за курсором — отдельным свойством translate, а дрейф анимирует только transform
+       без переменных: такую анимацию ведёт видеокарта. С var() в ключевых кадрах она шла
+       в главном потоке и пересчитывала стили каждый кадр, пока открыт чат. */
+    translate: var(--px, 0px) var(--py, 0px);
+    transform: rotate(0deg) scale(1.06);
     will-change: transform;
     animation: wallpaper-drift 48s ease-in-out infinite alternate;
 }
 
 @keyframes wallpaper-drift {
-    from { transform: translate3d(var(--px, 0px), var(--py, 0px), 0) rotate(0deg) scale(1.06); }
-    to { transform: translate3d(var(--px, 0px), var(--py, 0px), 0) rotate(5deg) scale(1.16); }
+    from { transform: rotate(0deg) scale(1.06); }
+    to { transform: rotate(5deg) scale(1.16); }
 }
 
 body.reduce-motion .chat-area.has-wallpaper > .chat-wallpaper-layer::before { animation: none; }
@@ -11583,6 +11595,15 @@ body.reduce-motion .voice-avatar.speaking { animation: none; }
 .voice-key { min-width: 54px; padding: 7px 14px; border: 1.5px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
 .voice-key:hover { border-color: var(--accent); }
 .voice-switch { margin-bottom: 8px; }
+/* Шумоподавление в настройках голоса (noise.js): режим, сила нейросети и её состояние. */
+.voice-noise { margin-bottom: 8px; padding: 12px 14px; border-radius: 14px; background: var(--surface2); }
+.voice-noise-title { margin-bottom: 8px; font-size: 14px; }
+.voice-noise .theme-seg { background: var(--surface); }
+.voice-noise-strength { margin-top: 6px; }
+.voice-noise-strength[hidden] { display: none; }
+.voice-noise-status { margin: 8px 2px 0; font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+.voice-noise-status.active { color: #16a34a; }
+body.dark .voice-noise-status.active { color: #4ade80; }
 .voice-threshold-wrap { margin: 0 0 12px; padding: 12px 14px; border-radius: 14px; background: var(--surface2); }
 .voice-meter { position: relative; height: 10px; margin-bottom: 10px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 25%, transparent); overflow: hidden; }
 .voice-meter-fill { height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, #22c55e, #84cc16, #f59e0b); transition: width .06s linear; }
@@ -11793,6 +11814,107 @@ body.recording-active .recording-status.video-recording ~ .record-lock-hint { bo
 .desktop-update-btn:hover { filter: brightness(1.07); }
 .desktop-update-close { flex: none; width: 28px; height: 28px; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 18px; cursor: pointer; }
 .desktop-update-close:hover { background: var(--surface2); }
+
+/* Вопросы kabanConfirm / kabanPrompt (dialogs.js) — поверх любых окон, включая редакторы. */
+.kaban-dialog-backdrop { z-index: 9600; }
+.kaban-dialog-text { margin: 4px 2px 14px; font-size: 15px; line-height: 1.45; color: var(--text); white-space: pre-line; }
+.kaban-dialog-input { width: 100%; box-sizing: border-box; margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px;
+    background: var(--surface2); color: var(--text); font: inherit; font-size: 16px; }
+.kaban-dialog-input:focus { outline: none; border-color: var(--accent); }
+.delete-choice-btn.primary { background: var(--accent); color: var(--accent-text); font-weight: 650; }
+.delete-choice-btn.primary:hover { background: var(--accent); filter: brightness(1.06); }
+
+/* «Новый чат» на телефоне — не крошечное всплывающее окно у кнопки «+» (как на компьютере),
+   а шторка сверху на всю ширину с затемнением: поиск сразу с клавиатурой, результаты крупно. */
+@media (max-width: 650px) {
+    .new-chat-popover {
+        left: 0 !important; right: 0; top: 0 !important; width: auto; z-index: 61;
+        padding: calc(14px + env(safe-area-inset-top)) 16px 14px;
+        border: 0; border-radius: 0 0 22px 22px;
+        box-shadow: 0 0 0 100vmax rgba(0,0,0,.38), 0 10px 30px rgba(0,0,0,.2);
+        transform: translateY(-100%);
+        transition: opacity .2s ease, visibility .2s ease, transform .26s cubic-bezier(.2,.85,.25,1);
+    }
+    .new-chat-popover::before { content: "Новый чат"; display: block; margin: 0 2px 10px; font-size: 17px; font-weight: 700; color: var(--text); }
+    .new-chat-popover.open { transform: none; }
+    .new-chat-popover input { font-size: 16px; padding: 12px 14px; border-radius: 14px; }
+    .new-chat-popover .new-chat-results { max-height: 55vh; }
+}
+
+/* Списки выбора чата/человека (переслать, новый чат, новая группа, отправить контакт) на телефоне —
+   как список чатов: крупный текст, круглые аватары, строка под палец (на компьютере — плотнее). */
+@media (max-width: 650px) {
+    .new-chat-result-row { gap: 12px; padding: 9px 8px; font-size: 15px; border-radius: 12px; }
+    .new-chat-result-avatar { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 50%; font-size: 18px; }
+    .new-chat-result-avatar .avatar-initials { font-size: 15px; }
+}
+.forward-avatar.has-initials, .forward-avatar.has-photo { border-radius: 50%; }
+
+/* Меню сообщения на телефоне — нижняя шторка, как в приложениях Android: ряд реакций сверху,
+   крупные пункты под палец, затемнение (.context-menu-scrim, script-messages.js). На компьютере —
+   прежнее компактное меню у курсора. */
+.context-menu-scrim { position: fixed; inset: 0; z-index: 94; background: rgba(0,0,0,.38); animation: ctx-scrim-in .2s ease; }
+@keyframes ctx-scrim-in { from { opacity: 0; } }
+@keyframes ctx-sheet-in { from { transform: translateY(100%); } }
+@media (max-width: 650px) {
+    #message-context-menu {
+        left: 0 !important; right: 0; top: auto !important; bottom: 0; width: auto !important;
+        max-height: 82dvh; padding: 8px 10px calc(12px + env(safe-area-inset-bottom));
+        border: 0; border-radius: 22px 22px 0 0; box-shadow: 0 -6px 30px rgba(0,0,0,.18);
+        animation: ctx-sheet-in .26s cubic-bezier(.2,.85,.25,1);
+    }
+    #message-context-menu::before { content: ""; display: block; width: 36px; height: 4px; margin: 2px auto 10px; border-radius: 2px; background: var(--border); }
+    #message-context-menu .context-menu-item { gap: 16px; padding: 13px 12px; font-size: 16px; border-radius: 12px; }
+    #message-context-menu .context-menu-item span:first-child { flex-basis: 22px; font-size: 18px; }
+    #message-context-menu .context-menu-react-row button { flex-basis: 44px; font-size: 27px; padding: 6px 0; }
+    #message-context-menu .context-menu-react-wrap { margin-bottom: 4px; }
+}
+
+/* Миниатюра в «Медиа» не загрузилась — нейтральная заглушка вместо значка битой картинки. */
+.thumb-broken { background: var(--surface2) !important; }
+.thumb-broken::before { content: ""; width: 46%; height: 46%; opacity: .45; background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4.5' width='18' height='15' rx='3'/%3E%3Ccircle cx='9' cy='10' r='1.8'/%3E%3Cpath d='m21 16-5-5-9 8.5'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4.5' width='18' height='15' rx='3'/%3E%3Ccircle cx='9' cy='10' r='1.8'/%3E%3Cpath d='m21 16-5-5-9 8.5'/%3E%3C/svg%3E") center / contain no-repeat; }
+
+/* Меню по долгому тапу (чат, вкладка, фото профиля) на телефоне — с «ручкой», как остальные шторки. */
+@media (max-width: 650px) {
+    .tab-quick-menu-backdrop:not(.as-popover) .tab-quick-menu::before { content: ""; display: block; width: 36px; height: 4px; margin: 0 auto 8px; border-radius: 2px; background: var(--border); }
+}
+
+/* Шторка настроек (z 30) была ниже плавающей нижней навигации (z 40) — та лежала поверх её низа.
+   42: выше навигации, но ниже окон, которые открываются из настроек (45+). */
+.settings-backdrop { z-index: 42; }
+
+/* Слабый телефон (html.lite-device, см. LITE_DEVICE в script-core.js): без размытия под стеклом.
+   Размытая шапка, поле ввода, нижняя панель и плашки на фото перерисовывались на каждом кадре
+   прокрутки, а размытые подложки окон — на каждом кадре их появления. Панели — сплошным цветом. */
+html.lite-device *, html.lite-device *::before, html.lite-device *::after { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+html.lite-device :is(.header, .input, .bottom-nav, .message-tools, .attach-menu, .emoji-popover, .voice-dock, .rec-bar,
+    .listen-panel, .reaction-bar, .reaction-who, .effect-picker, .tab-quick-menu, .voice-sfx-pop, .voice-golive-pop) { background: var(--surface) !important; }
+/* Приложение для Android: всплывающие меню — сплошные, как у системы. Полупрозрачное стекло
+   (90% фона + размытие) в WebView на телефоне не размывалось, и сквозь пункты меню вложений
+   и эмодзи читались сообщения под ними. */
+html.is-android :is(.attach-menu, .emoji-popover, .effect-picker, .reaction-bar, .reaction-who, .tab-quick-menu,
+    .voice-sfx-pop, .voice-golive-pop, .message-tools, .reaction-picker-popover) {
+    background: var(--surface) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+}
+
+/* Фон звонка: без движения размытых пятен и вращения ауры (на телефоне 2017 года — постоянная нагрузка на графику во время разговора). */
+html.lite-device .call-blob, html.lite-device .call-aura { animation: none !important; }
+
+/* Приложение для Android: подсказка про разрешения (android-app.js). */
+.is-android .desktop-update-banner { left: 12px; right: 12px; bottom: 12px; max-width: none; }
+.android-setup-backdrop { position: fixed; inset: 0; z-index: 9500; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(0,0,0,.45); }
+.android-setup-card { width: min(460px, 100%); max-height: calc(100vh - 24px); overflow: auto; padding: 20px 18px 16px; border-radius: 22px; background: var(--surface); color: var(--text); box-shadow: 0 18px 50px rgba(0,0,0,.3); }
+.android-setup-card h3 { margin: 0 0 6px; font-size: 19px; }
+.android-setup-lead, .android-setup-note { margin: 0 0 14px; font-size: 13.5px; color: var(--muted); line-height: 1.4; }
+.android-setup-note { margin: 4px 0 12px; }
+.android-setup-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.android-setup-row > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.android-setup-row b { font-size: 14.5px; }
+.android-setup-row span { font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+.android-setup-row button { flex: none; padding: 8px 12px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-text); font: inherit; font-size: 13px; font-weight: 650; }
+.android-setup-close { display: block; width: 100%; margin-top: 8px; padding: 11px; border: 0; border-radius: 12px; background: var(--surface2); color: var(--text); font: inherit; font-size: 14.5px; font-weight: 600; }
 
 /* ============================================================================
    КАМЕРА И ЭКРАН В ГОЛОСОВЫХ КОМНАТАХ
@@ -13382,6 +13504,14 @@ body.reduce-motion .pe-window, body.reduce-motion .pe-backdrop { transition: non
     .header-tools-divider { display: none; }
     .person { gap: 10px; padding: 4px 4px; }
 }
+/* Телефоны шириной 360 (Galaxy S8/S21): в шапке группы с четырьмя кнопками на имя оставалось
+   ~40 px («Scr…»). Кнопки уже (высота для пальца прежняя), аватар и поля поменьше — имени вдвое больше места. */
+@media (max-width: 400px) {
+    .header { padding: 0 6px 0 4px; }
+    .header-tool { width: 36px; flex: 0 0 36px; }
+    .person { gap: 8px; }
+    .person-avatar { width: 38px; height: 38px; flex-basis: 38px; }
+}
 
 /* Контекстное меню: подпись пункта не переносится по словам («В / закладки») */
 .context-menu-item { white-space: nowrap; }/* На телефоне показать экран всё равно нельзя — кнопка только отнимала место у имени. */
@@ -13767,12 +13897,13 @@ body.gloss-on .sidebar-gloss::before {
     width: 55%;
     background: linear-gradient(105deg, rgba(255,255,255,0) 22%, rgba(255,255,255,calc(.04 * var(--g))) 44%, rgba(255,255,255,calc(.065 * var(--g))) 50%, rgba(255,255,255,calc(.04 * var(--g))) 56%, rgba(255,255,255,0) 78%);
     transform: translateX(-120%) skewX(-12deg);
-    animation: sidebar-sheen 9s cubic-bezier(.45,.05,.25,1) 2s infinite;
-    will-change: transform;
 }
+/* Пробег запускает wow.js (класс .sheen на 2 с раз в ~9 с): бесконечная анимация на ::before
+   шла в главном потоке и пересчитывала стили каждый кадр даже в простое. */
+body.gloss-on .sidebar-gloss.sheen::before { animation: sidebar-sheen 2s cubic-bezier(.45,.05,.25,1) both; }
 @keyframes sidebar-sheen {
-    0% { transform: translateX(-120%) skewX(-12deg); }
-    22%, 100% { transform: translateX(260%) skewX(-12deg); }
+    from { transform: translateX(-120%) skewX(-12deg); }
+    to { transform: translateX(260%) skewX(-12deg); }
 }
 body.reduce-motion .sidebar-gloss::before { animation: none; display: none; }
 /* ============================================================================

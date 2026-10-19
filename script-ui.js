@@ -1316,7 +1316,8 @@ function clearReply() {
 
     pendingReply = null;
     document.getElementById("reply-preview").classList.remove("visible");
-    document.getElementById("input").focus();
+    // На телефоне закрытие цитаты не должно само открывать клавиатуру.
+    if (!window.matchMedia("(pointer: coarse)").matches) document.getElementById("input").focus();
 
 }
 
@@ -1355,7 +1356,12 @@ function backToChats() {
     pendingReply = null;
     document.getElementById("reply-preview").classList.remove("visible");
     document.body.classList.remove("chat-selected");
-    document.querySelector(".chat.active")?.focus() || document.querySelector(".chat")?.focus();
+    // Фокус на строке чата — для управления с клавиатуры. На сенсорном экране он не нужен,
+    // а синхронный фокус сразу после смены экрана заставлял пересчитать стили и раскладку
+    // посреди анимации перехода (рывок на слабом телефоне).
+    if (!window.matchMedia("(pointer: coarse)").matches) {
+        requestAnimationFrame(() => (document.querySelector(".chat.active") || document.querySelector(".chat"))?.focus({ preventScroll: true }));
+    }
 
     // Если openRealChat ещё грузит историю (нажали чат и сразу "назад"), его
     // продолжение иначе дорисовало бы сообщения и подписалось на realtime уже
@@ -1659,7 +1665,13 @@ async function openSafetyNumberForCurrentChat() {
         const safetyNumber = await KabanCrypto.getSafetyNumberForChat(currentChatId);
         renderSafetyNumber(safetyNumber);
     } catch (error) {
-        body.innerHTML = `<div class="safety-modal-error">Не удалось получить код: ${escapeHTML(error.message)}</div>`;
+        // «Cannot coerce the result to a single JSON object» — у чата ещё нет обмена ключами
+        // (собеседник не открыл секретный чат): объясняем по-человечески, а не текстом ошибки.
+        const noKeys = /coerce|single JSON|PGRST116|no rows/i.test(String(error?.message || error));
+        body.innerHTML = noKeys
+            ? `<div class="safety-modal-error">Код появится, когда собеседник хотя бы раз откроет этот секретный чат — тогда у вас будут общие ключи шифрования.</div>`
+            : `<div class="safety-modal-error">Не удалось получить код. Проверьте соединение и попробуйте ещё раз.</div>`;
+        console.warn("Код безопасности", error);
     }
 
 }
@@ -2450,7 +2462,8 @@ function closeNewGroupModal(forceClose) {
         const message = newGroupMode === "add"
             ? "Отменить добавление участников? Выбор будет потерян."
             : "Отменить создание группы? Выбор участников будет потерян.";
-        if (!confirm(message)) return;
+        kabanConfirm(message, { ok: "Отменить", cancel: "Продолжить", danger: true }).then((yes) => { if (yes) closeNewGroupModal(true); });
+        return;
     }
 
     const backdrop = document.getElementById("new-group-backdrop");
@@ -4942,6 +4955,7 @@ function updateScrollToBottomButton() {
     const button = document.getElementById("scroll-to-bottom");
     const distanceFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight;
     const isFar = distanceFromBottom > 200;
+    messagesNearBottom = distanceFromBottom < 60;
 
     button.classList.toggle("visible", isFar);
     // Рядом с нижним краем новые сообщения и так видны — счётчик уже не нужен.
@@ -4973,7 +4987,26 @@ let activeSwipe = null;
 const messageList =
     document.getElementById("messages");
 
-messageList.addEventListener("scroll", updateScrollToBottomButton, { passive: true });
+// Лента стала ниже/выше (открылась клавиатура на телефоне, выросло поле ввода, повернули
+// экран): были у последних сообщений — остаёмся у них, а не прячем их под клавиатурой.
+let messagesNearBottom = true;
+let messagesBoxHeight = 0;
+if (window.ResizeObserver) {
+    new ResizeObserver(() => {
+        const height = messageList.clientHeight;
+        if (height === messagesBoxHeight) return;
+        messagesBoxHeight = height;
+        if (messagesNearBottom && currentChatId) messageList.scrollTop = messageList.scrollHeight;
+    }).observe(messageList);
+}
+
+// Не чаще раза в кадр: на телефоне событий прокрутки бывает несколько за кадр, и каждое
+// читало scrollHeight (на слабом телефоне — заметная доля времени кадра при прокрутке).
+let scrollButtonFrame = 0;
+messageList.addEventListener("scroll", () => {
+    if (scrollButtonFrame) return;
+    scrollButtonFrame = requestAnimationFrame(() => { scrollButtonFrame = 0; updateScrollToBottomButton(); });
+}, { passive: true });
 
 // Подгрузка старой истории при скролле почти до самого верха — см.
 // loadOlderMessages. Порог в пикселях, а не "scrollTop === 0", чтобы
@@ -4989,6 +5022,9 @@ messageList.addEventListener("scroll", () => {
     if (!area) return;
     let timer = null;
     messageList.addEventListener("scroll", () => {
+        // Живые обои выключены (на слабом телефоне — по умолчанию) — ставить на паузу нечего.
+        if (!timer && !area.classList.contains("has-wallpaper")) return;
+        if (!timer && document.body.classList.contains("no-live-wallpapers")) return;
         if (!timer) area.classList.add("is-scrolling");
         clearTimeout(timer);
         timer = setTimeout(() => { timer = null; area.classList.remove("is-scrolling"); }, 160);
@@ -5379,12 +5415,14 @@ function applyComposerFormat(kind) {
     const selected = input.value.slice(start, end);
 
     if (kind === "link") {
-        const url = prompt("Ссылка для «" + selected + "»:", "https://");
-        if (!url || !url.trim()) return;
-        input.setRangeText(`[${selected}](${url.trim()})`, start, end, "end");
-        input.focus();
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        syncComposerFormatBar();
+        // Окно вопроса уводит фокус из поля — выделение запомнено в start/end выше.
+        kabanPrompt("Ссылка для «" + selected + "»:", "https://", { ok: "Вставить" }).then((url) => {
+            if (!url || !url.trim() || url.trim() === "https://") { input.focus(); return; }
+            input.setRangeText(`[${selected}](${url.trim()})`, start, end, "end");
+            input.focus();
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            syncComposerFormatBar();
+        });
         return;
     }
 
@@ -5503,6 +5541,39 @@ document.addEventListener("visibilitychange", () => {
     }
 });
 
+// Миниатюра в общих материалах не загрузилась (файл удалён, нет сети) — вместо значка
+// «битой картинки» браузера аккуратная заглушка (style.css → .thumb-broken).
+document.addEventListener("error", (event) => {
+    const img = event.target;
+    if (img?.tagName !== "IMG") return;
+    const holder = img.closest(".shared-thumb, .shared-row-icon");
+    if (!holder) return;
+    holder.classList.add("thumb-broken");
+    img.remove();
+}, true);
+
+// Было ли открыто хоть какое-то окно в момент нажатия Esc (кнопки «Назад» на Android) —
+// замеряем раньше всех обработчиков: окна закрываются каждое своим, и к концу главного
+// обработчика уже не видно, что Esc что-то закрыл. Тогда он же закрывал и сам чат —
+// одно нажатие «Назад» в окне опроса/удаления/обоев выкидывало из переписки.
+let escapeHadLayer = false;
+function anyOverlayOpen() {
+    // Панель реакций, «кто поставил», режим выбора сообщений — закрываются своими модулями
+    // (reactions.js, selection.js), но тоже считаются «окном»: Esc закрывает их, а не чат.
+    if (document.getElementById("reaction-bar") || document.querySelector(".reaction-who")
+        || document.getElementById("messages")?.classList.contains("selection-mode")) return true;
+    const candidates = document.querySelectorAll('[id$="-backdrop"], [id$="-popover"], [class*="backdrop"], #message-context-menu');
+    for (const el of candidates) {
+        if (el.hidden || !el.getClientRects().length) continue;
+        const cs = getComputedStyle(el);
+        if (cs.visibility !== "hidden" && parseFloat(cs.opacity) > 0.01 && cs.display !== "none") return true;
+    }
+    return false;
+}
+window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") escapeHadLayer = anyOverlayOpen();
+}, true);
+
 document.addEventListener("keydown", (event) => {
 
     if (event.key === "Escape") {
@@ -5510,6 +5581,31 @@ document.addEventListener("keydown", (event) => {
     }
 
     if (event.key !== "Escape") return;
+    // Запасной закрыватель окон (convenience.js) не трогает то, что закрыто здесь.
+    // kabanConsumed — нажатие что-то закрыло (здесь или в своём модуле окна): кнопка «Назад»
+    // на Android тогда не сворачивает приложение (android-app.js).
+    event.kabanMainHandled = true;
+    event.kabanConsumed = true;
+
+    // Экран код-пароля поверх всего. Установка/отключение кода — «Назад»/Esc = «Отмена»;
+    // экран разблокировки не закрывается ничем, кроме кода (на Android «Назад» сворачивает).
+    if (document.getElementById("app-lock-screen")?.classList.contains("open")) {
+        if (typeof appLockMode !== "undefined" && appLockMode !== "unlock") cancelAppLockSetup();
+        else event.kabanConsumed = false;
+        return;
+    }
+
+    // Меню по долгому тапу (чат, вкладка, смена фото) — всегда поверх всего: закрываем первым.
+    const quickMenu = document.getElementById("tab-quick-menu-backdrop");
+    if (quickMenu && !quickMenu.hidden) {
+        closeTabQuickMenu();
+        return;
+    }
+
+    if (document.getElementById("forward-popover")?.classList.contains("open")) {
+        closeForwardPopover();
+        return;
+    }
 
     // Окна группы друг над другом: закрываем верхнее (подокна, потом сама информация).
     const topGroupModal = ["group-confirm-backdrop", "group-invite-backdrop", "group-admin-backdrop", "group-member-backdrop", "group-admins-backdrop",
@@ -5596,7 +5692,13 @@ document.addEventListener("keydown", (event) => {
         return;
     }
 
-    if (document.body.classList.contains("chat-selected")) {
+    // Ни одно из известных окон не закрылось здесь: если было открыто другое окно, его закроет
+    // свой обработчик или convenience.js — а сам чат оставляем открытым.
+    event.kabanMainHandled = false;
+    event.kabanConsumed = escapeHadLayer;
+    if (document.body.classList.contains("chat-selected") && !escapeHadLayer) {
+        event.kabanMainHandled = true;
+        event.kabanConsumed = true;
         backToChats();
     }
 

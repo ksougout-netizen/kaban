@@ -309,6 +309,8 @@
         if (!before) return;
         // Сначала даём отработать собственным обработчикам окон; если никто не закрылся — закрываем сами.
         setTimeout(() => {
+            // Окно уже закрыл главный обработчик Esc (script-ui.js) — второе окно под ним не трогаем.
+            if (event.kabanMainHandled) return;
             const layers = openLayers();
             if (!layers.length || layers.length < before) return;
             const z = (el) => Number(getComputedStyle(el).zIndex) || 0;

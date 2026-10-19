@@ -38,6 +38,8 @@ async function setupPushSubscription() {
 
     // Программа для ПК получает сообщения сама (живёт в трее) — веб-push ей не нужен.
     if (window.kabanDesktop) return;
+    // Приложение для Android тоже держит соединение само (android-app.js).
+    if (window.Capacitor?.isNativePlatform?.()) return;
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
 
@@ -596,7 +598,9 @@ function openProfileScreen() {
 function closeProfileScreen(forceClose) {
 
     if (!forceClose && hasUnsavedProfileChanges()) {
-        if (!confirm("Отменить несохранённые изменения профиля?")) return;
+        // Закроется только после «Не сохранять»; иначе профиль остаётся открытым, как было.
+        kabanConfirm("Отменить несохранённые изменения профиля?", { ok: "Не сохранять", danger: true }).then((yes) => { if (yes) closeProfileScreen(true); });
+        return;
     }
 
     const backdrop = document.getElementById("profile-screen-backdrop");
@@ -737,6 +741,11 @@ async function openAvatarVideoRecorder() {
 
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: "user" } });
+        // Окно закрыли, пока включалась камера, — не оставляем её работать.
+        if (!document.getElementById("avatar-video-backdrop")?.classList.contains("open")) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+        }
         avatarVideoRecorderState = { stream, recorder: null, chunks: [], recordedBlob: null, timer: null, startedAt: 0 };
         preview.classList.add("mirrored");
         preview.srcObject = stream;
@@ -2311,7 +2320,7 @@ async function deleteChatFromList(chatId) {
     const message = isGroup
         ? `Покинуть группу «${name}»?`
         : `Удалить чат с «${name}»? Переписка исчезнет из вашего списка (у собеседника останется).${savedContactsReady && savedContacts.has(row.otherUser?.id) ? " Сам контакт сохранится." : ""}`;
-    if (!confirm(message)) return;
+    if (!(await kabanConfirm(message, { ok: isGroup ? "Покинуть" : "Удалить", danger: true }))) return;
 
     try {
         await KabanAPI.removeGroupMember(chatId, myRealUserId);
@@ -3295,7 +3304,7 @@ async function openRealChat(chatId) {
                 dateLabel.textContent = "Начало переписки";
                 messagesContainer.insertBefore(dateLabel, typing);
             }
-            messages.forEach((message) => appendRealMessageRow(message, message.sender_id === me.id));
+            messages.forEach((message) => appendRealMessageRow(message, message.sender_id === me.id, { quiet: true }));
         }
 
         updateMessageGrouping();
@@ -3757,7 +3766,10 @@ document.getElementById("messages")?.addEventListener("click", (event) => {
 
 let typingLastShown = { userId: null, at: 0 };
 
-function appendRealMessageRow(message, isMine, { prepend = false } = {}) {
+// quiet — строка из пачки истории (открытие чата, подгрузка вверх): без анимации появления.
+// «Въезжает» только новое сообщение; 50 строк истории, анимировавшихся разом, на слабом
+// телефоне считались в главном потоке каждый кадр открытия чата.
+function appendRealMessageRow(message, isMine, { prepend = false, quiet = false } = {}) {
 
     const messagesContainer = document.getElementById("messages");
     const typing = document.getElementById("typing");
@@ -3774,14 +3786,14 @@ function appendRealMessageRow(message, isMine, { prepend = false } = {}) {
     // Служебное сообщение группы ("Влад назначил(а) … администратором") —
     // центрированная плашка без пузыря, действий и реакций.
     if (message.type === "system") {
-        row.className = "message-row system-message";
+        row.className = "message-row system-message" + (quiet ? " no-enter" : "");
         row.innerHTML = `<span class="system-message-text">${escapeHTML(message.text || "")}</span>`;
         if (prepend) messagesContainer.insertBefore(row, messagesContainer.firstChild);
         else messagesContainer.insertBefore(row, typing);
         return;
     }
 
-    row.className = "message-row " + (isMine ? "sent" : "received");
+    row.className = "message-row " + (isMine ? "sent" : "received") + (quiet ? " no-enter" : "");
     // Одно «кривое» сообщение (битые attachment_meta от чужого клиента) не должно
     // ронять отрисовку всего чата — показываем его как неподдерживаемое.
     try {
@@ -4001,7 +4013,7 @@ async function loadOlderMessages() {
         // prepend вставляет строго в начало, поэтому идём с конца страницы к
         // началу, иначе порядок внутри страницы перевернётся.
         for (let i = older.length - 1; i >= 0; i--) {
-            appendRealMessageRow(older[i], older[i].sender_id === myRealUserId, { prepend: true });
+            appendRealMessageRow(older[i], older[i].sender_id === myRealUserId, { prepend: true, quiet: true });
         }
 
         // Курсор — по самому старому, что вернул сервер (даже если вся страница

@@ -198,9 +198,9 @@ function desktopShowUpdateBanner(kind, version) {
         </span>
         <button type="button" class="desktop-update-btn">${shell ? "Перезапустить" : "Обновить"}</button>
         <button type="button" class="desktop-update-close" aria-label="Позже" title="Позже">×</button>`;
-    banner.querySelector(".desktop-update-btn").onclick = () => {
+    banner.querySelector(".desktop-update-btn").onclick = async () => {
         const busy = (typeof voiceCall !== "undefined" && voiceCall) || (typeof activeCall !== "undefined" && activeCall);
-        if (busy && !confirm("Обновление прервёт текущий разговор. Продолжить?")) return;
+        if (busy && !(await kabanConfirm("Обновление прервёт текущий разговор. Продолжить?", { ok: "Обновить" }))) return;
         desktopBridge.applyUpdate(shell ? "shell" : "web");
     };
     banner.querySelector(".desktop-update-close").onclick = () => banner.remove();
