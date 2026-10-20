@@ -1271,12 +1271,14 @@ function ensureTurnServers(timeoutMs = 3000) {
 
 const RTC_CONFIG = {
     get iceServers() {
-        // STUN Cloudflare — первым: у многих в России трафик к Google идёт через VPN, и STUN
-        // Google тогда отдаёт адрес VPN-сервера за границей (с ним прямой звонок не
-        // соединяется, звук уходил в ретранслятор), а Cloudflare отвечает напрямую.
+        // STUN — только те, что отвечают из России НАПРЯМУЮ (без VPN): Google здесь заблокирован
+        // (замер: 0 ответов из 10 мимо VPN, через VPN он отдаёт адрес VPN-сервера за границей).
+        // Два запасных — чтобы потеря одного ответа или блокировка одного сервера не оставляли
+        // без внешнего адреса (тогда прямой звонок невозможен и всё идёт через ретранслятор).
         const servers = [
             { urls: "stun:stun.cloudflare.com:3478" },
-            { urls: "stun:stun.l.google.com:19302" }
+            { urls: "stun:stun.sipnet.ru:3478" },
+            { urls: "stun:global.stun.twilio.com:3478" }
         ];
         if (managedIceServers && Date.now() < managedIceExpiresAt + 3600 * 1000) servers.push(...managedIceServers);
         if (DEFAULT_TURN.urls.length) servers.push({ urls: DEFAULT_TURN.urls, username: DEFAULT_TURN.username, credential: DEFAULT_TURN.credential });
@@ -1285,6 +1287,88 @@ const RTC_CONFIG = {
         return servers;
     }
 };
+
+/* ---- прямое соединение в обход VPN ----------------------------------------------------------------
+   Включённый VPN (Happ/Xray, WireGuard, OpenVPN, Radmin, Hamachi…) — ещё один сетевой адаптер.
+   Браузер собирает адреса и через него, а некоторые VPN (TAP-адаптеры, Radmin, Hamachi — для Windows
+   это «Ethernet») даже предпочитает Wi-Fi: звонок двух соседей пошёл бы через VPN-сервер за границей
+   (+150–300 мс), хотя напрямую через провайдера — ~10 мс. Поэтому: если интернет через физический
+   адаптер есть (через него нашёлся внешний адрес), адреса VPN-адаптеров собеседнику НЕ отправляем —
+   соединение идёт напрямую, а ретранслятор остаётся запасным путём (мобильный интернет). Прямого
+   выхода нет (VPN не выпускает трафик мимо себя) — ничего не трогаем, звонок идёт как раньше.
+   Какой адаптер виртуальный, точно знает Windows (программа для ПК: kabanDesktop.netAdapters); в
+   браузере и в старой версии программы — по типу сети от браузера (Wintun-VPN он видит как unknown). */
+
+const kabanNet = { virtual: new Set(), vpnPublic: new Set(), physicalOk: false, checkedAt: 0, probe: null, source: "" };
+const kabanNetPc = new WeakMap();   // соединение → { physical } — нашёлся ли в нём внешний адрес мимо VPN
+
+function refreshNetRoutes(force = false) {
+    if (kabanNet.probe) return kabanNet.probe;
+    if (!force && Date.now() - kabanNet.checkedAt < 60000) return Promise.resolve(kabanNet);
+    kabanNet.probe = (async () => {
+        let adapters = null;
+        try { if (typeof window.kabanDesktop?.netAdapters === "function") adapters = await window.kabanDesktop.netAdapters(); } catch { /* старая версия программы */ }
+        const virtual = new Set(), vpnPublic = new Set(kabanNet.vpnPublic);
+        let physicalOk = false;
+        if (Array.isArray(adapters)) adapters.forEach((a) => { if (a?.virtual && a.ip) virtual.add(String(a.ip)); });
+        let pc = null;
+        try {
+            // Только STUN (без ретранслятора): быстро и без лишних выделений на сервере.
+            pc = new RTCPeerConnection({ iceServers: RTC_CONFIG.iceServers.filter((s) => [].concat(s.urls).every((u) => /^stun:/i.test(u))) });
+            pc.createDataChannel("route-probe");
+            await pc.setLocalDescription(await pc.createOffer());
+            await waitForIceGathering(pc, 3000);
+            const local = [];
+            (await pc.getStats()).forEach((r) => { if (r.type === "local-candidate") local.push(r); });
+            if (!Array.isArray(adapters)) {
+                local.forEach((c) => { if (c.candidateType === "host" && (c.networkType === "vpn" || c.networkType === "unknown") && /^[\d.]+$/.test(c.address || "")) virtual.add(c.address); });
+            }
+            local.forEach((c) => {
+                if (c.candidateType !== "srflx" || !c.address || !c.relatedAddress || c.relatedAddress === "0.0.0.0") return;
+                if (virtual.has(c.relatedAddress)) vpnPublic.add(c.address);
+                else physicalOk = true;
+            });
+        } catch { /* без WebRTC — фильтровать нечего */ } finally { try { pc?.close(); } catch { /* уже закрыто */ } }
+        Object.assign(kabanNet, { virtual, vpnPublic, physicalOk, checkedAt: Date.now(), source: Array.isArray(adapters) ? "windows" : "browser" });
+        if (physicalOk && virtual.size) console.error(`[net] виртуальные адаптеры (VPN и т. п.) ${[...virtual].join(", ")} — звонки идут напрямую мимо них`);
+        return kabanNet;
+    })().finally(() => { kabanNet.probe = null; });
+    return kabanNet.probe;
+}
+
+// true — этот адрес собеседнику не отправляем (он ведёт через VPN, а прямой путь есть).
+function routeCandidateHidden(candidate, pc) {
+    const text = String(candidate?.candidate ?? candidate ?? "");
+    const m = / (\S+) (\d+) typ (host|srflx|prflx|relay)(?: raddr (\S+))?/.exec(text);
+    if (!m) return false;
+    const [, addr, , type, raddr] = m;
+    let state = pc ? kabanNetPc.get(pc) : null;
+    if (pc && !state) kabanNetPc.set(pc, state = { physical: false });
+    const reflexive = type === "srflx" || type === "prflx";
+    const viaVirtual = (type === "host" && kabanNet.virtual.has(addr)) || (reflexive && !!raddr && kabanNet.virtual.has(raddr));
+    if (viaVirtual && reflexive) kabanNet.vpnPublic.add(addr);
+    if (!viaVirtual && type === "srflx" && raddr && raddr !== "0.0.0.0" && state) state.physical = true;
+    const vpnRoute = viaVirtual || (type === "relay" && !!raddr && kabanNet.vpnPublic.has(raddr));
+    return vpnRoute && (!!state?.physical || kabanNet.physicalOk);
+}
+
+// SDP для отправки собеседнику — без адресов, ведущих через VPN (см. выше).
+function routeSignalSdp(sdp, pc) {
+    if (typeof sdp !== "string" || (!kabanNet.virtual.size && !kabanNet.vpnPublic.size)) return sdp;
+    const lines = sdp.split("\r\n");
+    lines.forEach((l) => { if (l.startsWith("a=candidate:")) routeCandidateHidden(l, pc); });   // сначала — есть ли прямой адрес
+    return lines.filter((l) => !l.startsWith("a=candidate:") || !routeCandidateHidden(l, pc)).join("\r\n");
+}
+
+function routeSignalDescription(desc, pc) {
+    if (!desc) return desc;
+    return { type: desc.type, sdp: routeSignalSdp(desc.sdp, pc) };
+}
+
+// Проверяем при запуске и при каждой смене сети (VPN включили/выключили, сменили Wi-Fi).
+setTimeout(() => { refreshNetRoutes().catch(() => {}); }, 5000);
+window.addEventListener("online", () => { refreshNetRoutes(true).catch(() => {}); });
+navigator.connection?.addEventListener?.("change", () => { refreshNetRoutes().catch(() => {}); });   // оценка скорости плавает часто — не чаще раза в минуту
 
 function syncTurnSettingsHint() {
     const hint = document.getElementById("turn-row-hint");
@@ -2032,7 +2116,9 @@ function waitForUsefulCandidates(pc, maxMs, settleMs = 150) {
             resolve();
         };
         const check = () => { if (pc.iceGatheringState === "complete") done(); };
-        const onCandidate = (event) => { if (!settle && useful(event.candidate?.candidate)) settle = setTimeout(done, settleMs); };
+        // Адрес через VPN (при живом прямом пути он собеседнику не уйдёт) — не повод отправлять:
+        // ждём настоящий внешний адрес, иначе приглашение ушло бы без него.
+        const onCandidate = (event) => { if (!settle && useful(event.candidate?.candidate) && !routeCandidateHidden(event.candidate, pc)) settle = setTimeout(done, settleMs); };
         const timer = setTimeout(done, maxMs);
         pc.addEventListener("icegatheringstatechange", check);
         pc.addEventListener("icecandidate", onCandidate);
@@ -2287,7 +2373,7 @@ async function startCall(kind) {
 
         const offerPayload = {
             callId,
-            sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : offer,
+            sdp: routeSignalDescription(pc.localDescription || offer, pc),
             callerId: me.id,
             callerName: cachedMyProfile?.display_name || "Пользователь",
             callerAvatarUrl: cachedMyProfile?.avatar_url || null,
@@ -2373,7 +2459,7 @@ function scheduleCallOfferResend(callId, calleeId, attempt) {
         if (activeCall !== call || call.ringing || call.state !== "calling" || call.answeredBy !== undefined || call.claimedBy) return;
         call.offerResends = (call.offerResends || 0) + 1;
         // В повторе — свежее описание: в нём уже все собранные адреса (первое уходит раньше).
-        const sdp = call.pc.localDescription?.toJSON ? call.pc.localDescription.toJSON() : call.offerPayload.sdp;
+        const sdp = call.pc.localDescription ? routeSignalDescription(call.pc.localDescription, call.pc) : call.offerPayload.sdp;
         try { await KabanAPI.sendCallOffer(calleeId, { ...call.offerPayload, sdp, resend: call.offerResends }); } catch { /* следующая попытка */ }
         scheduleCallOfferResend(callId, calleeId, attempt + 1);
     }, CALL_OFFER_RESEND_DELAYS[attempt] ?? 4000);
@@ -2553,7 +2639,7 @@ async function acceptIncomingCall() {
         // получит по одному — он уже слушает канал звонка.
         await waitForUsefulCandidates(pc, 800);
         if (activeCall !== myCall) return;
-        const answerPayload = { sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : answer, tab: CALL_TAB_ID };
+        const answerPayload = { sdp: routeSignalDescription(pc.localDescription || answer, pc), tab: CALL_TAB_ID };
         // Флаг — до ожидания отправки (см. то же у звонящего): иначе адреса, собранные
         // за время отправки, терялись.
         myCall.sdpSent = true;
@@ -2659,6 +2745,7 @@ function setupCallPeerConnection(pc, callId) {
     pc.onicecandidate = (event) => {
         const call = activeCall;
         if (!event.candidate || !call?.channel || call.callId !== callId || !call.sdpSent) return;
+        if (routeCandidateHidden(event.candidate, pc)) return;   // через VPN, а прямой путь есть
         const candidate = event.candidate.toJSON ? event.candidate.toJSON() : event.candidate;
         // Звонящий: собеседник подключится к каналу звонка только после «Принять» —
         // всё, что отправлено раньше, до него не дойдёт. Копим и повторяем по заявке.
@@ -2702,12 +2789,14 @@ function setupCallPeerConnection(pc, callId) {
         if (pc.connectionState === "connected") {
             // connectedAt/тикер фиксируются ТОЛЬКО при первом соединении —
             // после переподключения длительность не обнуляется.
-            if (activeCall.reconnecting) {
+            const wasReconnecting = activeCall.reconnecting;
+            if (wasReconnecting) {
                 activeCall.reconnecting = false;
                 activeCall.reconnectStartedAt = null;
                 clearTimeout(activeCall.recoveryTimer);
             }
             activeCall.state = "connected";
+            if (wasReconnecting) refreshCallStatusNow();
             prioritizeAudioSenders(pc);
             if (!activeCall.connectedAt) {
                 activeCall.connectedAt = Date.now();
@@ -2749,6 +2838,18 @@ function beginCallRecovery(callId, delayMs) {
         if (call.pc.connectionState === "failed") { toast("Не удалось соединиться"); teardownActiveCall("missed", !call.isCaller); }
         return;
     }
+    // Короткий провал (на плохой сети браузер на долю секунды теряет проверки связи и тут же
+    // находит их снова) — не повод пугать «Переподключаемся…»: раньше надпись мелькала сразу.
+    // Ждём delayMs и, только если связь так и не вернулась, показываем и чиним.
+    if (!call.reconnecting && delayMs > 0) {
+        clearTimeout(call.recoveryTimer);
+        call.recoveryTimer = setTimeout(() => {
+            if (activeCall !== call) return;
+            const st = call.pc.connectionState;
+            if (st === "disconnected" || st === "failed") beginCallRecovery(callId, 0);
+        }, delayMs);
+        return;
+    }
     if (!call.reconnecting) {
         call.reconnecting = true;
         call.reconnectStartedAt = Date.now();
@@ -2769,9 +2870,22 @@ function finishCallRecoveryIfConnected(call) {
         call.reconnecting = false;
         call.reconnectStartedAt = null;
         clearTimeout(call.recoveryTimer);
+        if (activeCall === call) refreshCallStatusNow();
         return true;
     }
     return false;
+}
+
+// Связь вернулась — «Переподключаемся…» снимаем сразу, а не на следующем тике таймера
+// длительности (до секунды звук уже шёл, а на экране всё ещё был обрыв).
+function refreshCallStatusNow() {
+    const text = callStatusText();
+    if (!text) return;
+    document.querySelector("#call-backdrop .call-dialog")?.classList.toggle("reconnecting", !!activeCall?.reconnecting);
+    const el = document.getElementById("call-state");
+    if (el) el.textContent = text;
+    const mini = document.getElementById("call-mini-state");
+    if (mini) mini.textContent = text;
 }
 
 function attemptCallRecovery(callId) {
@@ -2801,13 +2915,13 @@ async function restartCallIce(callId) {
         if (activeCall !== call) return;
         call.restartSeq = (call.restartSeq || 0) + 1;
         const seq = call.restartSeq;
-        await call.channel?.sendRenegotiate?.({ kind: "offer", sdp: call.pc.localDescription.toJSON(), seq });
+        await call.channel?.sendRenegotiate?.({ kind: "offer", sdp: routeSignalDescription(call.pc.localDescription, call.pc), seq });
         // Ответ на перезапуск не пришёл (потерялся при той же смене сети) — повторяем то же
         // предложение через 2,5 с, а не ждём следующей попытки через 6.
         clearTimeout(call.restartResendTimer);
         call.restartResendTimer = setTimeout(() => {
             if (activeCall !== call || call.restartSeq !== seq || call.pc.signalingState !== "have-local-offer") return;
-            Promise.resolve(call.channel?.sendRenegotiate?.({ kind: "offer", sdp: call.pc.localDescription.toJSON(), seq })).catch(() => {});
+            Promise.resolve(call.channel?.sendRenegotiate?.({ kind: "offer", sdp: routeSignalDescription(call.pc.localDescription, call.pc), seq })).catch(() => {});
         }, 2500);
     } catch (error) {
         console.warn("Не удалось переподключить звонок", error);
@@ -2838,7 +2952,7 @@ async function applyCallRenegotiate(call, payload) {
             await waitForIceGathering(call.pc, 1500);
             call.sdpSent = true;
             if (activeCall !== call) return;
-            await call.channel?.sendRenegotiate?.({ kind: "answer", sdp: call.pc.localDescription.toJSON(), seq: payload.seq });
+            await call.channel?.sendRenegotiate?.({ kind: "answer", sdp: routeSignalDescription(call.pc.localDescription, call.pc), seq: payload.seq });
         } else if (payload.kind === "answer" && call.isCaller && call.pc.signalingState === "have-local-offer") {
             // Ответ на ПРЕДЫДУЩУЮ попытку (пока он шёл, мы отправили новую) — к
             // текущему предложению он не подходит, ждём ответ на свежее.
@@ -2875,17 +2989,185 @@ function probeRealtimeSocket() {
 }
 
 // Сеть сменилась (Wi-Fi ↔ мобильный) — не ждём, пока браузер сам заметит обрыв.
-function nudgeCallOnNetworkChange() {
+// «change» у navigator.connection Chrome шлёт и при простом пересчёте оценки скорости (3g ↔ 4g),
+// а это не смена сети: раньше звонящий на каждый такой пересчёт показывал «Переподключаемся…»
+// до 6 с при живой связи. Теперь «change» учитываем, только если сменился тип подключения.
+let lastConnectionType = navigator.connection?.type || "";
+function nudgeCallOnNetworkChange(event) {
+    if (event?.type === "change") {
+        const type = navigator.connection?.type || "";
+        if (type === lastConnectionType) return;
+        lastConnectionType = type;
+    }
     probeRealtimeSocket();
+    // Сокет уже лежит — поднимаем сразу: своё расписание библиотеки — до 10 с между попытками.
+    try { const rt = getSupabaseClient()?.realtime; if (rt && !rt.isConnected()) rt.connect(); } catch { /* ок */ }
+    // Групповой звонок: канал — сразу, застрявшие соединения (сеть сменилась — старые маршруты
+    // мертвы) — пересоздать, не дожидаясь сторожа (до 9 с).
+    const group = activeGroupCall;
+    if (group && !group.ended) {
+        group.room?.nudge?.();
+        setTimeout(() => {
+            if (activeGroupCall !== group || group.ended) return;
+            group.peers.forEach((peer, userId) => {
+                if (peer.pc.connectionState === "connected" || Date.now() - (peer.badSince || Date.now()) <= 3000) return;
+                if (peer.initiator) retryGroupCallPeer(group, userId);
+                else { peer.restartAskedAt = Date.now(); group.room?.sendSignal({ to: userId, from: group.me.id, kind: "restart" }); }
+            });
+        }, 800);
+    }
     const call = activeCall;
     if (!call || !call.connectedAt) return;
     setTimeout(() => {
         if (activeCall !== call) return;
-        if (call.pc.connectionState !== "connected" || call.isCaller) beginCallRecovery(call.callId, 0);
+        // Связь пропала — восстанавливаем (с «Переподключаемся…»). Жива — тихо ищем путь по новой
+        // сети (перезапуск ICE не прерывает звук), без пугающей надписи.
+        if (call.pc.connectionState !== "connected") beginCallRecovery(call.callId, 0);
+        else if (call.isCaller) restartCallIce(call.callId);
+        else Promise.resolve(call.channel?.sendRestartRequest?.()).catch(() => {});
     }, 800);
 }
 window.addEventListener("online", nudgeCallOnNetworkChange);
 navigator.connection?.addEventListener?.("change", nudgeCallOnNetworkChange);
+
+/* ---- защита голоса при забитой отдаче --------------------------------------------------------------
+   Показ экрана или камера, а рядом игра качает обновление — исходящий канал забит. У каждого
+   соединения свой регулятор скорости браузера; в «сетке» комнаты или группового звонка они
+   толкают друг друга, очередь в роутере стоит полной (+0,3 с к задержке), и голос теряет
+   5–19% пакетов — «булькает». Браузер этого не исправляет: его регулятор смотрит на РОСТ
+   задержки, а не на стоячую очередь. Раз в 2–3 с смотрим на задержку маршрута относительно
+   лучшей за минуту и на потери в отчётах собеседников. Перегруз — урезаем видео во ВСЕХ
+   соединениях сразу (от фактической скорости, ×0,6); видео уже на минимуме, а перегруз не
+   уходит — ставим его на паузу (как Zoom/Discord). Чисто — понемногу возвращаем, выше уровня,
+   где канал переполнился, — осторожно. Сам голос не трогаем: проверено — урезание битрейта
+   голоса почти не помогает (заголовки пакетов весят столько же), а перенастройка кодека на
+   лету даёт всплеск потерь. */
+
+const UPLINK_GUARD_MIN = 0.08;
+
+function createUplinkGuard() {
+    return { factor: 1, videoPaused: false, lastCut: 0, clean: 0, stuckRuns: 0, minRuns: 0, rtts: new WeakMap(), vbytes: new WeakMap(), loss: new WeakMap(), rtcpSeen: new Map() };
+}
+
+// true — множитель или пауза видео изменились (пора перенастроить отправителей).
+// videoActive — идёт ли сейчас видео (камера/экран): без него урезать нечего.
+async function uplinkGuardTick(guard, pcs, { videoActive = true } = {}) {
+    if (!videoActive) { guard.clean = 0; guard.stuckRuns = 0; guard.minRuns = 0; return false; }
+    const now = Date.now();
+    let queue = 0, audioLoss = 0, videoLoss = 0, seen = false, videoBps = 0, videoCap = 0;
+    // Видео урезано до предела, а «очередь» не уходит и потерь нет — значит, она не наша:
+    // выросла задержка самой сети (другой маршрут у провайдера). Принимаем её за норму.
+    const rebase = guard.stuckRuns >= 4;
+    if (rebase) guard.stuckRuns = 0;
+    for (const pc of pcs) {
+        if (!pc || pc.connectionState !== "connected") continue;
+        let stats;
+        try { stats = await pc.getStats(); } catch { continue; }
+        let pairId = null, stunRtt = null, rtcpRtt = null, vBytes = 0;
+        const sent = { audio: 0, video: 0 }, lost = { audio: 0, video: 0 };
+        stats.forEach((r) => { if (r.type === "transport" && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId; });
+        stats.forEach((r) => {
+            if (r.type === "candidate-pair" && typeof r.currentRoundTripTime === "number" && (pairId ? r.id === pairId : r.nominated && r.state === "succeeded")) stunRtt = r.currentRoundTripTime;
+            if (r.type === "remote-inbound-rtp") {
+                // Только свежий замер: у звука отчёты редкие, и старое низкое значение
+                // маскировало растущую очередь.
+                const seenKey = r.id, n = r.roundTripTimeMeasurements || 0;
+                const fresh = n > (guard.rtcpSeen.get(seenKey) || 0);
+                guard.rtcpSeen.set(seenKey, n);
+                if (fresh && typeof r.roundTripTime === "number" && r.roundTripTime > 0) rtcpRtt = Math.min(rtcpRtt ?? Infinity, r.roundTripTime);
+                if (r.kind in lost) lost[r.kind] += Math.max(0, r.packetsLost || 0);
+            }
+            if (r.type === "outbound-rtp" && r.kind in sent) sent[r.kind] += r.packetsSent || 0;
+            if (r.type === "outbound-rtp" && r.kind === "video") vBytes += r.bytesSent || 0;
+        });
+        // Потери — по счётчикам за весь интервал замера: доля из одного отчёта шумная (при
+        // честных 5% отдельный отчёт по видео показывал 20% — и картинка урезалась зря).
+        const pl = guard.loss.get(pc);
+        guard.loss.set(pc, { sent, lost });
+        if (pl) {
+            for (const kind of ["audio", "video"]) {
+                const ds = sent[kind] - pl.sent[kind], dl = lost[kind] - pl.lost[kind];
+                if (ds < 40 || dl < 0) continue;   // мало пакетов — оценка ничего не стоит
+                const ratio = Math.min(1, dl / ds);
+                if (kind === "audio") audioLoss = Math.max(audioLoss, ratio); else videoLoss = Math.max(videoLoss, ratio);
+            }
+        }
+        // Задержка — меньшая из двух оценок: проверка связи ICE при потере запроса считает и
+        // время его повторной отправки (скачок на 0,5 с+ на плохом Wi-Fi — не очередь).
+        const rtt = stunRtt == null ? rtcpRtt : rtcpRtt == null ? stunRtt : Math.min(stunRtt, rtcpRtt);
+        // Сколько видео уходит НА САМОМ ДЕЛЕ и какой у него сейчас потолок: урезать надо от
+        // фактической скорости — камера часто идёт куда ниже потолка, и срез потолка ничего не давал.
+        const pv = guard.vbytes.get(pc);
+        guard.vbytes.set(pc, { bytes: vBytes, t: now });
+        if (pv && now > pv.t && vBytes >= pv.bytes) videoBps += (vBytes - pv.bytes) * 8000 / (now - pv.t);
+        pc.getSenders().forEach((s) => {
+            if (s.track?.kind !== "video") return;
+            try { videoCap += s.getParameters().encodings?.[0]?.maxBitrate || 0; } catch { /* нет параметров */ }
+        });
+        if (rtt == null) continue;
+        seen = true;
+        // Лучшая задержка этого маршрута за минуту — «пустая очередь». Маршрут сменился
+        // (переподключение, другой ретранслятор) — считаем заново, иначе новая, честно
+        // большая задержка выглядела бы перегрузом.
+        let route = guard.rtts.get(pc);
+        if (!route || route.pairId !== pairId) { route = { pairId, hist: [] }; guard.rtts.set(pc, route); }
+        route.hist = route.hist.filter((x) => now - x.t < (rebase ? 0 : 60000));
+        route.hist.push({ t: now, rtt });
+        // «Сейчас» — лучший из замеров за ~4 с: разовый скачок задержки (дёрганый мобильный
+        // интернет) — не очередь; стоячая очередь видна во всех замерах.
+        const recent = Math.min(...route.hist.filter((x) => now - x.t < 4500).map((x) => x.rtt));
+        queue = Math.max(queue, recent - Math.min(...route.hist.map((x) => x.rtt)));
+    }
+    if (!seen) return false;
+    const queued = queue > 0.1;
+    // Потери — признак перегруза, только если очередь тоже растёт или они большие и держатся
+    // два замера подряд: случайные 3–5% плохого Wi-Fi без очереди (и разовый всплеск в оценке —
+    // отчёты по звуку приходят раз в несколько секунд) не повод загонять картинку в минимум.
+    guard.lossRuns = audioLoss > 0.1 || videoLoss > 0.15 ? (guard.lossRuns || 0) + 1 : 0;
+    // Обвал (потери звука > 20%) — перегруз сразу, без второго замера: тут каждая секунда слышна.
+    const congested = queued || (Math.max(audioLoss, videoLoss) > 0.03 && queue > 0.06) || guard.lossRuns >= 2 || audioLoss > 0.2 || videoLoss > 0.3;
+    guard.last = { queue: Math.round(queue * 1000), audioLoss: Math.round(audioLoss * 100), videoLoss: Math.round(videoLoss * 100), congested };   // для журнала и проверок
+    guard.stuckRuns = guard.videoPaused && queued && audioLoss <= 0.03 ? guard.stuckRuns + 1 : 0;
+    const before = `${guard.factor}|${guard.videoPaused}`;
+    if (congested) {
+        guard.clean = 0;
+        if (now - guard.lastCut >= 1900) {
+            guard.lastCut = now;
+            // Видео уже на минимуме, а перегруз держится — на паузу: голос важнее картинки.
+            guard.minRuns = guard.factor <= UPLINK_GUARD_MIN ? guard.minRuns + 1 : 0;
+            if (guard.minRuns >= 1 && !guard.videoPaused) {
+                guard.videoPaused = true;
+                // Видео вернули, а канал снова переполнился вскоре — следующая попытка вдвое позже
+                // (15 с → 30 → 60 … до 5 мин): каждая неудачная — это секунды «бульканья».
+                guard.pauseHold = now - (guard.unpausedAt || 0) < 30000 ? Math.min(300000, (guard.pauseHold || 15000) * 2) : 15000;
+                guard.pausedUntil = now + guard.pauseHold;
+            }
+            const used = videoCap > 0 && videoBps > 0 ? Math.min(1, videoBps / videoCap) : 1;
+            if (!guard.videoPaused) {
+                // Потолок — уровень, на котором канал переполнился: выше него поднимаемся осторожно.
+                guard.ceiling = Math.max(UPLINK_GUARD_MIN, guard.factor * used);
+                guard.factor = Math.max(UPLINK_GUARD_MIN, guard.factor * used * 0.6);
+            }
+        }
+    } else if (guard.videoPaused) {
+        // Видео на паузе: возвращаем его (на минимуме) после выдержки и ~15 с без перегруза.
+        if (++guard.clean >= 6 && now >= (guard.pausedUntil || 0)) { guard.clean = 0; guard.minRuns = 0; guard.videoPaused = false; guard.unpausedAt = now; guard.factor = UPLINK_GUARD_MIN; }
+    } else if (++guard.clean >= 3) {
+        // Возврат картинки: быстро — до 85% потолка, выше — медленно (раз в ~10 замеров, +10%),
+        // и сам потолок понемногу поднимается: сеть могла освободиться.
+        const ceiling = guard.ceiling ?? 1;
+        if (guard.factor < ceiling * 0.85) {
+            guard.clean = 0;
+            guard.factor = Math.min(ceiling * 0.85, guard.factor * 1.25 + 0.02);
+        } else if (guard.clean >= 10) {
+            guard.clean = 0;
+            guard.ceiling = Math.min(1, ceiling * 1.1);
+            guard.factor = Math.min(1, guard.factor * 1.1);
+        }
+    }
+    if (rebase && guard.videoPaused) { guard.videoPaused = false; guard.minRuns = 0; guard.factor = UPLINK_GUARD_MIN; }
+    return `${guard.factor}|${guard.videoPaused}` !== before;
+}
 
 /* ---- адаптивное качество видео -------------------------------------------------------------------
    Каждые 3 секунды смотрим статистику отправки: потери пакетов и задержку.
@@ -2905,12 +3187,52 @@ async function applyCallVideoLevel(call, level) {
     try {
         const params = sender.getParameters();
         if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-        params.encodings[0].maxBitrate = CALL_VIDEO_LEVELS[level].maxBitrate;
+        // Ступень качества × защита голоса (канал забит — видео уступает, вплоть до паузы).
+        params.encodings[0].maxBitrate = Math.round(Math.max(30000, CALL_VIDEO_LEVELS[level].maxBitrate * (call.uplink?.factor ?? 1)));
         params.encodings[0].scaleResolutionDownBy = CALL_VIDEO_LEVELS[level].scale;
+        params.encodings[0].active = !call.uplink?.videoPaused;
         params.degradationPreference = "balanced";
         await sender.setParameters(params);
         call.videoLevel = level;
     } catch { /* браузер не поддерживает — остаётся его собственная подстройка */ }
+}
+
+// Каким путём идёт соединение — напрямую или через ретранслятор — и пинг по выбранной паре.
+// localSrflx — есть ли у нас внешний адрес (STUN): без него прямой путь невозможен в принципе.
+function callRouteFromStats(stats) {
+    let pair = null, localSrflx = false;
+    stats.forEach((r) => {
+        if (r.type === "transport" && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId) || pair;
+        if (r.type === "local-candidate" && r.candidateType === "srflx") localSrflx = true;
+    });
+    if (!pair) stats.forEach((r) => { if (!pair && r.type === "candidate-pair" && r.nominated && r.state === "succeeded") pair = r; });
+    if (!pair) return null;
+    const local = stats.get(pair.localCandidateId), remote = stats.get(pair.remoteCandidateId);
+    return {
+        relay: local?.candidateType === "relay" || remote?.candidateType === "relay",
+        pingMs: typeof pair.currentRoundTripTime === "number" ? Math.round(pair.currentRoundTripTime * 1000) : null,
+        localSrflx
+    };
+}
+
+// Соединились через ретранслятор (у нас он во Франции: пинг ~320 мс против ~10 мс напрямую по
+// городу), хотя у нас есть внешний адрес и прямой путь возможен. Так бывает, когда внешний адрес
+// собеседника не успел к началу (ответ STUN задержался), — и браузер больше не искал: звонок
+// так и шёл через Францию до конца. Через 4 с ищем прямой путь заново (перезапуск ICE — звук не
+// прерывается), не больше двух раз и не чаще раза в 15 с. holder — где хранить счётчик попыток.
+function retryDirectRouteDue(holder, route, connectedAt) {
+    if (!route?.relay || !route.localSrflx || !connectedAt) return false;
+    const now = Date.now();
+    if (now - connectedAt < 4000 || (holder.directRetries || 0) >= 2 || now - (holder.directRetryAt || 0) < 15000) return false;
+    holder.directRetries = (holder.directRetries || 0) + 1;
+    holder.directRetryAt = now;
+    return true;
+}
+
+// «9 мс · напрямую» — для подсказки и надписи у индикатора связи.
+function describeRoute(pingMs, route) {
+    if (pingMs == null) return "";
+    return `Пинг ${pingMs} мс · ${route === "relay" ? "через сервер-посредник" : "напрямую"}`;
 }
 
 // Качество связи (для всех звонков): задержка и потери → «полоски» сигнала.
@@ -2922,6 +3244,7 @@ function startCallQualityMonitor(callId) {
     clearInterval(call.qualityTimer);
     call.videoLevel = 0;
     call.signal = 4;
+    call.uplink = call.uplink || createUplinkGuard();
     let bad = 0, good = 0, prevLost = null, prevSent = null, prevInLost = null, prevInRecv = null;
     if (call.pc.getSenders().some((s) => s.track?.kind === "video")) applyCallVideoLevel(call, 0);
     call.qualityTimer = setInterval(async () => {
@@ -2932,11 +3255,14 @@ function startCallQualityMonitor(callId) {
         // сообщением, и если оно терялось, собеседник до конца звонка не видел включённую
         // камеру (кадры шли, а окно показывало аватар) или не видел значок «без звука».
         sendCallState();
-        let rtt = 0, lost = null, sent = null, inLost = null, inRecv = null;
+        let rtt = 0, lost = null, sent = null, inLost = null, inRecv = null, route = null;
         try {
             const stats = await call.pc.getStats();
+            route = callRouteFromStats(stats);
             stats.forEach((report) => {
-                if (report.type === "candidate-pair" && report.nominated && typeof report.currentRoundTripTime === "number") rtt = Math.max(rtt, report.currentRoundTripTime);
+                // Задержка — по выбранной паре: после переподключения старые пары тоже числятся
+                // «nominated», и максимум по ним показывал «слабую связь» на уже быстром пути.
+                if (!route && report.type === "candidate-pair" && report.nominated && typeof report.currentRoundTripTime === "number") rtt = Math.max(rtt, report.currentRoundTripTime);
                 if (report.type === "remote-inbound-rtp" && report.kind === "video") {
                     rtt = Math.max(rtt, report.roundTripTime || 0);
                     lost = report.packetsLost || 0;
@@ -2945,6 +3271,17 @@ function startCallQualityMonitor(callId) {
                 if (report.type === "inbound-rtp" && report.kind === "audio") { inLost = report.packetsLost || 0; inRecv = report.packetsReceived || 0; }
             });
         } catch { return; }
+        if (route) {
+            call.route = route.relay ? "relay" : "direct";
+            call.pingMs = route.pingMs;
+            if (route.pingMs != null) rtt = Math.max(rtt, route.pingMs / 1000);
+        }
+        // Пошли через ретранслятор, хотя прямой путь возможен, — ищем его ещё раз (см. retryDirectRouteDue).
+        if (!call.reconnecting && retryDirectRouteDue(call, route, call.connectedAt)) {
+            console.error(`[call] звонок идёт через ретранслятор (${route.pingMs} мс) — ищем прямой путь, попытка ${call.directRetries}`);
+            if (call.isCaller) restartCallIce(call.callId);
+            else Promise.resolve(call.channel?.sendRestartRequest?.()).catch(() => {});
+        }
         // Доля потерь за последние 3 секунды (по приросту счётчиков).
         let lossRatio = 0;
         if (lost !== null && sent !== null && prevLost !== null && prevSent !== null && sent > prevSent) {
@@ -2960,6 +3297,10 @@ function startCallQualityMonitor(callId) {
         const worst = Math.max(lossRatio, audioLoss);
         call.signal = rtt < 0.15 && worst < 0.02 ? 4 : rtt < 0.3 && worst < 0.05 ? 3 : rtt < 0.6 && worst < 0.12 ? 2 : 1;
         renderCallSignal();
+
+        // Отдача забита (видео/экран + чужая закачка) — картинка уступает голосу.
+        const videoActive = call.pc.getSenders().some((s) => s.track?.kind === "video");
+        if (await uplinkGuardTick(call.uplink, [call.pc], { videoActive }) && activeCall === call && videoActive) await applyCallVideoLevel(call, call.videoLevel);
 
         if (!call.pc.getSenders().some((s) => s.track?.kind === "video")) return;
         const isBad = lossRatio > 0.08 || rtt > 0.6;
@@ -3001,7 +3342,20 @@ function renderCallSignal() {
     if (!el || !activeCall) return;
     el.hidden = !activeCall.connectedAt;
     el.dataset.level = String(activeCall.signal || 4);
-    el.title = ["", "Очень слабая связь", "Слабая связь", "Хорошая связь", "Отличная связь"][activeCall.signal || 4];
+    const quality = ["", "Очень слабая связь", "Слабая связь", "Хорошая связь", "Отличная связь"][activeCall.signal || 4];
+    const route = describeRoute(activeCall.pingMs, activeCall.route);
+    el.title = route ? `${quality}. ${route}` : quality;
+    // Пинг — цифрой рядом с полосками (важно для игр); через посредника — помечаем.
+    const ping = document.getElementById("call-ping");
+    if (ping) {
+        const show = !!activeCall.connectedAt && activeCall.pingMs != null && !activeCall.reconnecting;
+        ping.hidden = !show;
+        if (show) {
+            ping.textContent = `${activeCall.pingMs} мс`;
+            ping.title = route;
+            ping.classList.toggle("is-relay", activeCall.route === "relay");
+        }
+    }
 }
 
 let callDurationTicker = null;
@@ -3111,8 +3465,11 @@ function teardownActiveCall(result, unseenMissedCall = false) {
         updateCallHistoryEntry(activeCall.callId, {
             result: result || (durationSeconds ? "completed" : "missed"),
             seen: !unseenMissedCall,
-            durationSeconds
+            durationSeconds,
+            // Для журнала связи (diagnostics.js): каким путём шёл звонок и с каким пингом.
+            ...(activeCall.route ? { route: activeCall.route, pingMs: activeCall.pingMs } : {})
         });
+        window.kabanDiag?.note("call", `звонок завершён: ${result || "—"}, ${durationSeconds} с, путь ${activeCall.route || "?"}, пинг ${activeCall.pingMs ?? "?"} мс, поиск прямого пути ${activeCall.directRetries || 0}×`);
         logCallToChat(activeCall, result, durationSeconds);
         clearTimeout(activeCall.timeoutTimer);
         clearTimeout(activeCall.recoveryTimer);
@@ -4026,7 +4383,7 @@ async function addScreenViewerSession(share, recipient, me) {
         await configureScreenSender(pc, share.stream.getVideoTracks()[0], share.preset);
 
         pc.onicecandidate = (event) => {
-            if (event.candidate) session.channel?.sendIceCandidate({ candidate: event.candidate });
+            if (event.candidate && !routeCandidateHidden(event.candidate, pc)) session.channel?.sendIceCandidate({ candidate: event.candidate });
         };
         wireScreenConnectionState(pc, sessionId);
 
@@ -4494,7 +4851,7 @@ async function acceptScreenShare() {
             try { if ("playoutDelayHint" in event.receiver) event.receiver.playoutDelayHint = 0.15; } catch {}
         };
         pc.onicecandidate = (event) => {
-            if (event.candidate && activeScreenShare === share) {
+            if (event.candidate && activeScreenShare === share && !routeCandidateHidden(event.candidate, pc)) {
                 share.channel?.sendIceCandidate({ candidate: event.candidate });
             }
         };
@@ -4758,6 +5115,8 @@ async function joinGroupCall(chatId, { withVideo = false, title = "Группа"
     activeGroupCall = call;
     showGroupCallUI(call);
     call.watchTimer = setInterval(() => watchGroupCallPeers(call), 3500);
+    call.uplink = createUplinkGuard();
+    call.uplinkTimer = setInterval(() => groupCallUplinkTick(call), 2000);
 
     try {
 
@@ -4937,14 +5296,18 @@ const GCALL_UPLOAD_BUDGET = 4000000;
 function limitGroupCallVideoSender(sender, call) {
     if (!sender) return;
     const others = Math.max(1, call?.peers?.size || 1);
-    const maxBitrate = Math.round(Math.min(GCALL_VIDEO_BITRATE, GCALL_UPLOAD_BUDGET / others));
-    if (sender._kabanTune === maxBitrate) return;
+    // Бюджет на участника × защита голоса (отдача забита — видео уступает во всех соединениях).
+    const maxBitrate = Math.round(Math.max(20000, Math.min(GCALL_VIDEO_BITRATE, GCALL_UPLOAD_BUDGET / others) * (call?.uplink?.factor ?? 1)));
+    const active = !call?.uplink?.videoPaused;   // канал забит и на минимуме — видео на паузе
+    const key = maxBitrate + (active ? "" : "|paused");
+    if (sender._kabanTune === key) return;
     try {
         const params = sender.getParameters();
         if (!params.encodings || !params.encodings.length) return;   // ещё не согласовано — повторим
         params.encodings[0].maxBitrate = maxBitrate;
         params.encodings[0].maxFramerate = 30;
-        sender._kabanTune = maxBitrate;
+        params.encodings[0].active = active;
+        sender._kabanTune = key;
         sender.setParameters(params).catch(() => { sender._kabanTune = null; });
     } catch {}
 }
@@ -4955,6 +5318,32 @@ function tuneGroupCallSenders(call) {
         limitGroupCallVideoSender(peer.videoSender, call);
         prioritizeAudioSenders(peer.pc);
     });
+}
+
+// Раз в 2 с — защита голоса для всей «сетки» звонка (см. uplinkGuardTick).
+async function groupCallUplinkTick(call) {
+    if (activeGroupCall !== call || call.ended) { clearInterval(call.uplinkTimer); return; }
+    if (call.uplinkBusy) return;
+    call.uplinkBusy = true;
+    try {
+        // Через сервер-посредник (пинг ~320 мс), хотя прямой путь возможен: бесшовного перезапуска
+        // в групповом звонке нет — пересоздаём соединение (пауза ~2 с), один раз на участника и
+        // только если путь правда медленный. Счётчик — по участнику: соединение будет новым.
+        for (const [userId, peer] of [...call.peers]) {
+            if (!peer.initiator || peer.pc.connectionState !== "connected") continue;
+            const route = callRouteFromStats(await peer.pc.getStats().catch(() => new Map()));
+            if (!peer.connectedSince) peer.connectedSince = Date.now();
+            const holder = (call.directByUser ||= {})[userId] ||= {};
+            if (route?.relay && route.pingMs > 150 && (holder.directRetries || 0) < 1 && retryDirectRouteDue(holder, route, peer.connectedSince) && activeGroupCall === call && call.peers.get(userId) === peer) {
+                console.error(`[gcall] соединение с участником через посредника (${route.pingMs} мс) — пробуем напрямую`);
+                retryGroupCallPeer(call, userId);
+            }
+        }
+        const changed = await uplinkGuardTick(call.uplink, [...call.peers.values()].map((p) => p.pc), { videoActive: !!call.videoTrack });
+        if (changed && activeGroupCall === call) tuneGroupCallSenders(call);
+    } finally {
+        call.uplinkBusy = false;
+    }
 }
 
 // asInitiator=true — я шлю offer: заранее закладываем аудио- и видеотрансиверы
@@ -4992,7 +5381,7 @@ function createGroupCallPeer(call, userId, meta, asInitiator) {
     };
     // Собранные до отправки offer/answer кандидаты уже внутри SDP — поштучно только запоздавшие.
     pc.onicecandidate = (event) => {
-        if (event.candidate && peer.sdpSent) {
+        if (event.candidate && peer.sdpSent && !routeCandidateHidden(event.candidate, pc)) {
             call.room?.sendSignal({ to: userId, from: call.me.id, kind: "ice", data: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate });
         }
     };
@@ -5050,9 +5439,22 @@ async function startGroupCallOffer(call, peer) {
         await setCallLocalDescription(peer.pc, offer);
         await waitForIceGathering(peer.pc, 600);
         if (activeGroupCall !== call || call.peers.get(peer.userId) !== peer) return;
-        call.room.sendSignal({ to: peer.userId, from: call.me.id, kind: "offer", data: peer.pc.localDescription.toJSON(), sid: peer.sid });
+        call.room.sendSignal({ to: peer.userId, from: call.me.id, kind: "offer", data: routeSignalDescription(peer.pc.localDescription, peer.pc), sid: peer.sid });
         peer.sdpSent = true;
         peer.negotiatedAt = Date.now();
+        // Предложение или ответ на него потерялись — повторяем то же предложение через 2,5 с
+        // (как в голосовых комнатах). Раньше ждали сторожа: пересоздание через 9 с и ещё до
+        // 3,5 с до его проверки — почти 13 с участника не было слышно.
+        const sid = peer.sid;
+        const resend = (attempt) => {
+            clearTimeout(peer.offerRetryTimer);
+            peer.offerRetryTimer = setTimeout(() => {
+                if (activeGroupCall !== call || call.peers.get(peer.userId) !== peer || peer.sid !== sid || peer.pc.signalingState !== "have-local-offer") return;
+                call.room?.sendSignal({ to: peer.userId, from: call.me.id, kind: "offer", data: routeSignalDescription(peer.pc.localDescription, peer.pc), sid });
+                if (attempt < 3) resend(attempt + 1);
+            }, 2500);
+        };
+        resend(1);
     } catch (error) {
         console.warn("Не удалось отправить offer участнику звонка", error);
     }
@@ -5097,6 +5499,13 @@ async function handleGroupCallSignal(call, message) {
     let peer = call.peers.get(from);
 
     if (message.kind === "offer") {
+        // Повтор того же предложения (наш ответ потерялся или ещё готовится): соединение не
+        // трогаем — повторяем ответ. Пересоздавать его нельзя: если первый ответ всё же дошёл,
+        // собеседник остался бы связан с уже закрытым соединением.
+        if (peer && message.sid && peer.remoteSid === message.sid) {
+            if (peer.answerSent) call.room?.sendSignal({ to: from, from: call.me.id, kind: "answer", data: peer.answerSent, sid: message.sid });
+            return;
+        }
         // Новый offer от уже известного участника = он пересоздал соединение
         // (перезашёл/оборвалось) — старое заменяем.
         if (peer && (peer.remoteSet || peer.pc.signalingState !== "stable")) {
@@ -5107,6 +5516,7 @@ async function handleGroupCallSignal(call, message) {
             if (call.peers.size >= GCALL_MAX_PARTICIPANTS - 1) return;
             peer = createGroupCallPeer(call, from, call.participants.get(from), false);
         }
+        peer.remoteSid = message.sid;
         try {
             await peer.pc.setRemoteDescription(new RTCSessionDescription(message.data));
             peer.remoteSet = true;
@@ -5116,7 +5526,8 @@ async function handleGroupCallSignal(call, message) {
             await setCallLocalDescription(peer.pc, answer);
             await waitForIceGathering(peer.pc, 600);
             if (activeGroupCall !== call || call.peers.get(from) !== peer || peer.pc.signalingState !== "stable") return;
-            call.room.sendSignal({ to: from, from: call.me.id, kind: "answer", data: peer.pc.localDescription.toJSON(), sid: message.sid });
+            peer.answerSent = routeSignalDescription(peer.pc.localDescription, peer.pc);
+            call.room.sendSignal({ to: from, from: call.me.id, kind: "answer", data: peer.answerSent, sid: message.sid });
             peer.sdpSent = true;
             peer.negotiatedAt = Date.now();
         } catch (error) {
@@ -5186,6 +5597,7 @@ function removeGroupCallPeer(call, userId) {
     if (!peer) return;
     call.peers.delete(userId);
     clearTimeout(peer.graceTimer);
+    clearTimeout(peer.offerRetryTimer);
     try { peer.pc.close(); } catch {}
     removeGroupCallTile(call, userId);
     updateGroupCallHeader(call);
@@ -5324,7 +5736,8 @@ function leaveGroupCall(reason = "left") {
 
     clearInterval(call.timer);
     clearInterval(call.watchTimer);
-    call.peers.forEach((peer) => { clearTimeout(peer.graceTimer); try { peer.pc.close(); } catch {} });
+    clearInterval(call.uplinkTimer);
+    call.peers.forEach((peer) => { clearTimeout(peer.graceTimer); clearTimeout(peer.offerRetryTimer); try { peer.pc.close(); } catch {} });
     call.peers.clear();
     call.localStream.getTracks().forEach((track) => track.stop());
     call.mic?.stop();
@@ -5808,7 +6221,7 @@ function setupFileTransferPeerConnection(transfer) {
     const pc = transfer.pc;
 
     pc.onicecandidate = (event) => {
-        if (event.candidate && transfer.channel) {
+        if (event.candidate && transfer.channel && !routeCandidateHidden(event.candidate, pc)) {
             transfer.channel.sendIceCandidate({ candidate: event.candidate });
         }
     };
@@ -6103,7 +6516,7 @@ async function startP2PFileSendNow({ file, transferId, messageId, chatId, otherU
         fileName: file.name,
         fileSize: file.size,
         mime: file.type || "application/octet-stream",
-        sdp: transfer.pc.localDescription?.toJSON ? transfer.pc.localDescription.toJSON() : offer
+        sdp: routeSignalDescription(transfer.pc.localDescription || offer, transfer.pc)
     });
 
     }
@@ -6131,7 +6544,7 @@ async function sendFreshFileOffer(transfer) {
         await transfer.pc.setLocalDescription(offer);
         await waitForIceGathering(transfer.pc, 1500);
         if (transfer.finished) return;
-        transfer.freshOffer = transfer.pc.localDescription.toJSON();
+        transfer.freshOffer = routeSignalDescription(transfer.pc.localDescription, transfer.pc);
         transfer.freshOfferPc = transfer.pc;
         await transfer.channel?.sendReoffer({ sdp: transfer.freshOffer, fresh: true });
     } catch (error) {
@@ -6526,7 +6939,7 @@ async function acceptFileTransfer(transferId) {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await waitForIceGathering(pc, 1500);
-        await channelHandle.sendAnswer({ sdp: pc.localDescription?.toJSON ? pc.localDescription.toJSON() : answer });
+        await channelHandle.sendAnswer({ sdp: routeSignalDescription(pc.localDescription || answer, pc) });
     } catch (error) {
         toast("Не удалось установить соединение");
         finishFileTransfer(transfer, "failed");

@@ -126,6 +126,28 @@ function voiceResumeCtxSoon(ctx, attempt = 0) {
 // Без жеста пользователя браузер может не дать возобновить звук — тогда первым же нажатием.
 document.addEventListener("pointerdown", () => { if (voiceCtx && voiceCtx.state === "suspended") voiceCtx.resume().catch(() => {}); }, true);
 
+// Сеть вернулась / ноутбук проснулся (на ПК — сигнал powerMonitor, см. desktop/src/preload.js):
+// каналы комнат, ждущие повторной попытки, открываем сразу, застрявшие соединения подталкиваем.
+window.addEventListener("online", () => {
+    voiceHubs.forEach((hub) => hub.retryNow?.());
+    if (voiceCall) voiceKickStalePeers(voiceCall);
+});
+
+// Сеть или канал комнаты вернулись — соединения, которые не в «connected», чиним сразу.
+function voiceKickStalePeers(call) {
+    if (voiceCall !== call || call.leaving) return;
+    [...call.peers.values()].forEach((peer) => {
+        if (peer.pc.connectionState === "connected") return;
+        // Только что (пере)согласовали — оно ещё соединяется, не мешаем.
+        if (Date.now() - peer.negotiatedAt < 5000 && peer.pc.connectionState !== "failed") return;
+        // Связи не было дольше 10 с — собеседник своё соединение, скорее всего, уже закрыл
+        // (сервер сообщил, что мы вышли), и перезапуск ICE на старом ни к чему не приведёт:
+        // раньше после сна ноутбука ждали сторожа ещё 12 с. Пересоздаём сразу.
+        if (peer.initiator && Date.now() - (peer.badSince || Date.now()) > 10000) voiceRebuildPeer(call, peer);
+        else voiceRecoverPeer(call, peer);
+    });
+}
+
 // Устройство вывода из настроек пропало (выключили наушники) — играем в системное,
 // иначе звук комнаты шёл в никуда.
 navigator.mediaDevices?.addEventListener?.("devicechange", async () => {
@@ -236,6 +258,12 @@ function voiceHubAcquire(chatId, roomId, { onSig, onPresence } = {}) {
             hub.onReconnect?.();
         });
 
+        const attempt = () => {
+            clearTimeout(hub.retryTimer);
+            hub.reconnecting = false;
+            if (voiceHubs.get(key) !== hub) return;
+            open().catch(() => reconnect());
+        };
         const reconnect = () => {
             if (voiceHubs.get(key) !== hub || hub.reconnecting) return;
             hub.reconnecting = true;
@@ -243,12 +271,12 @@ function voiceHubAcquire(chatId, roomId, { onSig, onPresence } = {}) {
             hub.api = null;
             try { old?.close(); } catch { /* уже закрыт */ }
             const delay = [800, 2000, 4000, 8000, 15000][Math.min(hub.retry++, 4)];
-            setTimeout(() => {
-                hub.reconnecting = false;
-                if (voiceHubs.get(key) !== hub) return;
-                open().catch(() => reconnect());
-            }, delay);
+            hub.retryTimer = setTimeout(attempt, delay);
         };
+        // Сеть вернулась (или ноутбук проснулся) — не ждём очередной попытки по расписанию:
+        // после долгого обрыва пауза между ними дорастала до 15 с, и человек возвращался в
+        // комнату на 15 с позже, чем мог бы.
+        hub.retryNow = () => { if (hub.reconnecting) { hub.retry = 0; attempt(); } };
 
         open().catch((error) => { console.warn("Не удалось открыть голосовую комнату", error); hub.failed = true; reconnect(); });
     }
@@ -616,7 +644,7 @@ async function voiceJoin(chatId, roomId, roomName, groupName) {
 
     call.handle = voiceHubAcquire(chatId, roomId, { onSig: voiceHandleSig, onPresence: voiceOnRoomPresence });
     call.handle.hub.identity = voiceIdentity();
-    call.handle.hub.onReconnect = () => { if (voiceCall === call) voicePushMeta(); };
+    call.handle.hub.onReconnect = () => { if (voiceCall === call) { voicePushMeta(); voiceKickStalePeers(call); } };
     // Если канал ещё открывается — присутствие отправит сам хаб, как только подключится.
     if (call.handle.hub.api) call.handle.hub.api.track(call.handle.hub.identity);
     voicePushMeta();
@@ -625,6 +653,11 @@ async function voiceJoin(chatId, roomId, roomName, groupName) {
     clearInterval(voicePingTimer);
     voiceTickTimer = setInterval(voiceTick, 60);
     voicePingTimer = setInterval(voicePingTick, 3500);
+    // Защита голоса при забитой отдаче (общая для всей «сетки», см. script-core.js).
+    if (typeof createUplinkGuard === "function") {
+        call.uplink = createUplinkGuard();
+        call.uplinkTimer = setInterval(() => voiceUplinkTick(call), 2000);
+    }
 
     voiceSound("join");
     voiceRefreshUi();
@@ -646,6 +679,7 @@ async function voiceLeave(silent) {
     voiceToggleSfxPanel(false);
     clearInterval(voiceTickTimer);
     clearInterval(voicePingTimer);
+    clearInterval(call.uplinkTimer);
     voiceTickTimer = voicePingTimer = null;
 
     call.peers.forEach((peer, userId) => voiceClosePeer(call, userId));
@@ -730,7 +764,8 @@ function voiceCreatePeer(call, userId, epoch) {
     // сообщений разом, часть терялась при переподключении канала, и соединение
     // с кем-то одним «висело» без звука.
     pc.onicecandidate = (event) => {
-        if (event.candidate && peer.sdpSent) voiceSend(call, { type: "ice", to: userId, data: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate });
+        // Адрес через VPN при живом прямом пути собеседнику не шлём (см. routeCandidateHidden).
+        if (event.candidate && peer.sdpSent && !(typeof routeCandidateHidden === "function" && routeCandidateHidden(event.candidate, pc))) voiceSend(call, { type: "ice", to: userId, data: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate });
     };
 
     pc.ontrack = (event) => voiceOnTrack(call, peer, event);
@@ -752,7 +787,18 @@ function voiceCreatePeer(call, userId, epoch) {
 }
 
 function voiceSend(call, payload) {
-    call.handle?.run((api) => api.send({ ...payload, from: myRealUserId, epoch: call.joinedAt }));
+    call.handle?.run((api) => {
+        // Пока канал был закрыт (сон ноутбука, обрыв), сообщения копились в очереди. К моменту
+        // отправки соединение могло быть уже пересоздано: устаревшие предложения и адреса не
+        // шлём — раньше собеседник получал их пачкой и пересоздавал соединение по каждому по
+        // очереди, маршрут ломался, и звук возвращался только через ~11 с.
+        if (payload.type === "offer" || payload.type === "answer" || payload.type === "ice") {
+            const peer = voiceCall === call ? call.peers.get(payload.to) : null;
+            if (!peer || (payload.type === "offer" && payload.sid && peer.sid !== payload.sid)) return;
+            if (payload.type === "answer" && payload.sid && peer.remoteSid && peer.remoteSid !== payload.sid) return;
+        }
+        api.send({ ...payload, from: myRealUserId, epoch: call.joinedAt });
+    });
 }
 
 /* ---- саундборд: короткие звуки, которые слышит вся комната (синтез, без файлов) -------------------- */
@@ -1251,7 +1297,9 @@ async function voiceSendDescription(call, peer, type, extra) {
     const desc = peer.pc.localDescription;
     const expectState = type === "answer" ? "stable" : "have-local-offer";
     if (!desc || desc.type !== type || peer.pc.signalingState !== expectState) return;
-    voiceSend(call, { type, to: peer.userId, sdp: desc.sdp, ...extra });
+    // Без адресов, ведущих через VPN, если прямой путь есть (см. routeSignalSdp в script-core.js).
+    const forPeer = (sdp) => (typeof routeSignalSdp === "function" ? routeSignalSdp(sdp, peer.pc) : sdp);
+    voiceSend(call, { type, to: peer.userId, sdp: forPeer(desc.sdp), ...extra });
     peer.sdpSent = true;
     peer.negotiatedAt = Date.now();
     // Предложение или ответ на него потерялись (канал переподключался) — повторяем то же
@@ -1265,7 +1313,7 @@ async function voiceSendDescription(call, peer, type, extra) {
             if (voiceCall !== call || call.peers.get(peer.userId) !== peer || peer.descSeq !== seq || peer.offerSeq !== oseq) return;
             if (peer.pc.signalingState !== "have-local-offer") return;
             // Текущее описание — в нём уже все собранные адреса.
-            voiceSend(call, { type, to: peer.userId, sdp: peer.pc.localDescription?.sdp || desc.sdp, ...extra });
+            voiceSend(call, { type, to: peer.userId, sdp: forPeer(peer.pc.localDescription?.sdp || desc.sdp), ...extra });
         }, 2500);
     }
 }
@@ -1315,6 +1363,19 @@ function voiceRebuildPeer(call, peer) {
     voiceConnectTo(call, peer.userId, meta);
 }
 
+async function voiceUplinkTick(call) {
+    if (voiceCall !== call) { clearInterval(call.uplinkTimer); return; }
+    if (call.uplinkBusy || !call.uplink) return;
+    call.uplinkBusy = true;
+    try {
+        const videoActive = !!(call.media?.camTrack || call.media?.screenTrack);
+        const changed = await uplinkGuardTick(call.uplink, [...call.peers.values()].map((p) => p.pc), { videoActive });
+        if (changed && voiceCall === call && typeof voiceTuneVideoSenders === "function") call.peers.forEach((peer) => voiceTuneVideoSenders(call, peer));
+    } finally {
+        call.uplinkBusy = false;
+    }
+}
+
 // Сторож (раз в 3,5 с из voicePingTick): соединения, застрявшие не в «connected».
 function voiceWatchPeers(call) {
     const now = Date.now();
@@ -1326,6 +1387,9 @@ function voiceWatchPeers(call) {
         }
         const st = peer.pc.connectionState;
         if (st === "connected" || st === "closed") { peer.stuckRestarts = 0; continue; }
+        // Канал комнаты закрыт (нет сети) — предложение всё равно не уйдёт: пересоздавать
+        // соединения впустую незачем. Сеть вернётся — переподключит обработчик «online».
+        if (!call.handle?.hub?.api) continue;
         // Отсчёт — от последнего согласования или от момента, когда связь пропала
         // (короткое «disconnected» на секунду-две браузер обычно лечит сам).
         const stuckFor = now - Math.max(peer.negotiatedAt, peer.badSince || peer.createdAt);
@@ -1412,8 +1476,10 @@ async function voiceHandleSig(payload) {
             peer.sdpSent = false;
             await peer.pc.setLocalDescription(answer);
             await voiceFlushIce(peer);
-            // Номер предложения возвращаем — по нему инициатор отличит ответ на устаревшее.
-            await voiceSendDescription(call, peer, "answer", payload.oseq !== undefined ? { oseq: payload.oseq } : {});
+            // Номер предложения и метку соединения возвращаем — по ним инициатор отличит ответ на
+            // устаревшее предложение. Одного номера мало: у пересозданного соединения нумерация
+            // снова с 1, и запоздавший ответ старому применялся к новому (другие ключи — обрыв).
+            await voiceSendDescription(call, peer, "answer", { ...(payload.oseq !== undefined ? { oseq: payload.oseq } : {}), ...(payload.sid ? { sid: payload.sid } : {}) });
         } catch (error) {
             console.warn("Не удалось ответить на предложение", error);
             voiceClosePeer(call, from);
@@ -1439,6 +1505,7 @@ async function voiceHandleSig(payload) {
         // падало, и голос пропадал ещё на 8–12 с до пересоздания сторожем. Теперь такой
         // ответ пропускаем и ждём ответ на свежее (как в звонках 1:1, см. restartSeq).
         if (peer.pc.signalingState !== "have-local-offer") return;
+        if (payload.sid && peer.sid && payload.sid !== peer.sid) return;   // ответ прежнему (пересозданному) соединению
         if (payload.oseq !== undefined && peer.offerSeq !== undefined && payload.oseq !== peer.offerSeq) return;
         try {
             await peer.pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
@@ -1651,22 +1718,27 @@ async function voicePingTick() {
     voiceWatchPeers(call);
 
     const samples = [];
-    for (const peer of call.peers.values()) {
+    let relayed = 0;
+    for (const peer of [...call.peers.values()]) {
         if (peer.pc.connectionState !== "connected") continue;
         // Битрейт видео под текущее число зрителей и приоритет голоса (без лишних setParameters).
         if (typeof voiceTuneVideoSenders === "function") voiceTuneVideoSenders(call, peer);
         else if (typeof prioritizeAudioSenders === "function") prioritizeAudioSenders(peer.pc);
         try {
-            const stats = await peer.pc.getStats();
-            stats.forEach((report) => {
-                if (report.type === "candidate-pair" && report.state === "succeeded" && report.nominated && typeof report.currentRoundTripTime === "number") {
-                    samples.push(report.currentRoundTripTime * 1000);
-                }
-            });
+            // Пинг — по выбранной паре: раньше усреднялись все «nominated», включая устаревшие.
+            const route = typeof callRouteFromStats === "function" ? callRouteFromStats(await peer.pc.getStats()) : null;
+            if (!route) continue;
+            if (route.pingMs != null) samples.push(route.pingMs);
+            peer.relay = route.relay;
+            if (route.relay) relayed++;
+            if (!peer.connectedSince) peer.connectedSince = Date.now();
+            // Через сервер-посредник, хотя прямой путь возможен, — ищет заново инициатор (см. script-core.js).
+            if (peer.initiator && voiceCall === call && retryDirectRouteDue(peer, route, peer.connectedSince)) voiceRestartPeer(call, peer);
         } catch { /* соединение закрывается */ }
     }
 
     call.pingMs = samples.length ? Math.round(samples.reduce((a, b) => a + b, 0) / samples.length) : null;
+    call.relayed = relayed;
     voiceRenderDock();
 
 }
@@ -1918,13 +1990,15 @@ function voiceRenderDock() {
     const others = Object.keys(call.members).filter((id) => id !== myRealUserId).length;
     const status = others === 0 ? "Вы одни в комнате" : (connected < others ? "Соединяемся…" : "Голосовая связь");
 
-    voiceSetText(document.getElementById("voice-dock-title"), status);
+    // Пинг цифрой — рядом со статусом (для игр важнее «полосок»).
+    voiceSetText(document.getElementById("voice-dock-title"), call.pingMs != null && status === "Голосовая связь" ? `${status} · ${call.pingMs} мс` : status);
     voiceSetText(document.getElementById("voice-dock-sub"), `${call.roomName} · ${call.groupName}`);
 
     const quality = voiceQualityLevel(call);
     const q = document.getElementById("voice-quality");
     if (q.dataset.level !== String(quality)) q.dataset.level = String(quality);
-    q.title = call.pingMs != null ? `Задержка ${call.pingMs} мс` : "Связь устанавливается";
+    q.title = call.pingMs == null ? "Связь устанавливается"
+        : `Пинг ${call.pingMs} мс · ${call.relayed ? `через сервер-посредник: ${call.relayed} из ${connected}` : "напрямую"}`;
 
     voiceSetHtml(document.getElementById("voice-dock-avatar"), voiceAvatarHTML(myRealUserId, voiceMeta(), true));
 

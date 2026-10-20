@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1033"/>
+      <stop offset="1" stop-color="#1a1150"/>
+    </linearGradient>
+    <linearGradient id="a1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0"/>
+      <stop offset=".3" stop-color="#34f5a8"/>
+      <stop offset=".7" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="a2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0"/>
+      <stop offset=".4" stop-color="#c084fc"/>
+      <stop offset=".8" stop-color="#f472b6"/>
+      <stop offset="1" stop-color="#f472b6" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="blur" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="9"/></filter>
+  </defs>
+  <rect width="256" height="256" fill="url(#sky)"/>
+  <path d="M-10 150 C 50 70, 110 160, 170 90 S 250 60, 270 80" stroke="url(#a1)" stroke-width="46" fill="none" filter="url(#blur)" opacity=".95"/>
+  <path d="M-10 185 C 60 120, 120 200, 180 140 S 250 120, 270 130" stroke="url(#a2)" stroke-width="34" fill="none" filter="url(#blur)" opacity=".8"/>
+  <path d="M-10 150 C 50 70, 110 160, 170 90 S 250 60, 270 80" stroke="#b9ffe0" stroke-width="3" fill="none" opacity=".55"/>
+  <circle cx="58" cy="52" r="2.2" fill="#fff" opacity=".9"/>
+  <circle cx="200" cy="40" r="1.6" fill="#fff" opacity=".7"/>
+  <circle cx="150" cy="200" r="1.4" fill="#fff" opacity=".6"/>
+  <circle cx="34" cy="210" r="1.8" fill="#fff" opacity=".5"/>
+  <path d="M190 172 l7 16 16 7 -16 7 -7 16 -7 -16 -16 -7 16 -7z" fill="#fff" opacity=".95"/>
+  <path d="M0 236 L40 214 70 226 104 204 140 222 178 208 214 226 256 210 256 256 0 256z" fill="#070a1f"/>
+</svg>

@@ -40,7 +40,7 @@
 
 <link rel="preconnect" href="https://ketvgmietommjqutejuj.supabase.co" crossorigin>
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261020-3">
+<link rel="stylesheet" href="style.css?v=20261020-8">
 </head>
 
 <body>
@@ -1418,6 +1418,14 @@
                     <span class="settings-option-value" id="turn-row-hint">Не настроен</span>
                     <span class="settings-option-chevron">›</span>
                 </button>
+                <button type="button" class="settings-option settings-option-link" onclick="openDiagnostics()">
+                    <span class="settings-option-icon ico-blue"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10.5a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z"/><path d="M14 3.5V8h4M9 12h6M9 15.5h6"/></svg></span>
+                    <span class="settings-option-copy">
+                        <span class="settings-option-title">Журнал связи</span>
+                        <span class="settings-option-hint">Отправить разработчику, если что-то не работает</span>
+                    </span>
+                    <span class="settings-option-chevron">›</span>
+                </button>
             </div>
         </div>
         </div>
@@ -1480,6 +1488,7 @@
             <div class="call-name" id="call-name">Собеседник</div>
             <div class="call-status-row">
                 <span class="call-signal" id="call-signal" data-level="4" hidden><i></i><i></i><i></i><i></i></span>
+                <span class="call-ping" id="call-ping" hidden></span>
                 <span class="call-state" id="call-state" aria-live="polite">Вызов…</span>
             </div>
             <div class="call-remote-muted" id="call-remote-muted" hidden>
@@ -3400,50 +3409,52 @@
 
 
 <!-- Библиотеки лежат рядом с сайтом (vendor/): не зависим от CDN, которые бывают недоступны; версия supabase-js закреплена (2.117.2). -->
+<script src="diagnostics.js?v=20261020-8"></script>
 <script src="vendor/supabase.js?v=2.117.2"></script>
-<script src="supabaseClient.js?v=20261020-3"></script>
-<script src="private-media.js?v=20261020-3"></script>
-<script src="crypto.js?v=20261020-3"></script>
+<script src="supabaseClient.js?v=20261020-8"></script>
+<script src="private-media.js?v=20261020-8"></script>
+<script src="crypto.js?v=20261020-8"></script>
 <!-- script.js разбит на 4 файла для удобства навигации (раньше был один
      файл ~350КБ/8300+ строк) — порядок подключения важен, см. комментарий
      в начале каждого файла. Это НЕ ES-модули: обычные классические
      скрипты, выполняются последовательно как один большой файл, функции
      между ними в общей глобальной области видимости, как и раньше. -->
-<script src="emoji-data.js?v=20261020-3"></script>
-<script src="script-core.js?v=20261020-3"></script>
-<script src="script-ui.js?v=20261020-3"></script>
-<script src="script-chats.js?v=20261020-3"></script>
-<script src="script-messages.js?v=20261020-3"></script>
-<script src="effects.js?v=20261020-3"></script>
-<script src="games.js?v=20261020-3"></script>
-<script src="voice-ai.js?v=20261020-3"></script>
-<script src="stories.js?v=20261020-3"></script>
-<script src="productivity.js?v=20261020-3"></script>
-<script src="reactions.js?v=20261020-3"></script>
-<script src="listen.js?v=20261020-3"></script>
-<script src="noise.js?v=20261020-3"></script>
-<script src="voice.js?v=20261020-3"></script>
-<script src="voice-video.js?v=20261020-3"></script>
-<script src="resilience.js?v=20261020-3"></script>
-<script src="scheduled.js?v=20261020-3"></script>
-<script src="profile.js?v=20261020-3"></script>
-<script src="desktop-app.js?v=20261020-3"></script>
-<script src="photo-editor.js?v=20261020-3"></script>
-<script src="disappearing.js?v=20261020-3"></script>
-<script src="viewer.js?v=20261020-3"></script>
-<script src="selection.js?v=20261020-3"></script>
-<script src="convenience.js?v=20261020-3"></script>
-<script src="dialogs.js?v=20261020-3"></script>
-<script src="contact-share.js?v=20261020-3"></script>
-<script src="avatar-cropper.js?v=20261020-3"></script>
-<script src="shared-media.js?v=20261020-3"></script>
-    <script src="wow.js?v=20261020-3"></script>
-    <script src="atmosphere.js?v=20261020-3"></script>
-    <script src="delight.js?v=20261020-3"></script>
-    <script src="interactive-emoji.js?v=20261020-3"></script>
-    <script src="sticker-maker.js?v=20261020-3"></script>
-    <script src="screen-draw.js?v=20261020-3"></script>
-    <script src="android-app.js?v=20261020-3"></script>
+<script src="emoji-data.js?v=20261020-8"></script>
+<script src="script-core.js?v=20261020-8"></script>
+<script src="script-ui.js?v=20261020-8"></script>
+<script src="script-chats.js?v=20261020-8"></script>
+<script src="script-messages.js?v=20261020-8"></script>
+<script src="effects.js?v=20261020-8"></script>
+<script src="games.js?v=20261020-8"></script>
+<script src="deals.js?v=20261020-8"></script>
+<script src="voice-ai.js?v=20261020-8"></script>
+<script src="stories.js?v=20261020-8"></script>
+<script src="productivity.js?v=20261020-8"></script>
+<script src="reactions.js?v=20261020-8"></script>
+<script src="listen.js?v=20261020-8"></script>
+<script src="noise.js?v=20261020-8"></script>
+<script src="voice.js?v=20261020-8"></script>
+<script src="voice-video.js?v=20261020-8"></script>
+<script src="resilience.js?v=20261020-8"></script>
+<script src="scheduled.js?v=20261020-8"></script>
+<script src="profile.js?v=20261020-8"></script>
+<script src="desktop-app.js?v=20261020-8"></script>
+<script src="photo-editor.js?v=20261020-8"></script>
+<script src="disappearing.js?v=20261020-8"></script>
+<script src="viewer.js?v=20261020-8"></script>
+<script src="selection.js?v=20261020-8"></script>
+<script src="convenience.js?v=20261020-8"></script>
+<script src="dialogs.js?v=20261020-8"></script>
+<script src="contact-share.js?v=20261020-8"></script>
+<script src="avatar-cropper.js?v=20261020-8"></script>
+<script src="shared-media.js?v=20261020-8"></script>
+    <script src="wow.js?v=20261020-8"></script>
+    <script src="atmosphere.js?v=20261020-8"></script>
+    <script src="delight.js?v=20261020-8"></script>
+    <script src="interactive-emoji.js?v=20261020-8"></script>
+    <script src="sticker-maker.js?v=20261020-8"></script>
+    <script src="screen-draw.js?v=20261020-8"></script>
+    <script src="android-app.js?v=20261020-8"></script>
 
 </body>
 </html>

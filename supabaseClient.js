@@ -2037,16 +2037,20 @@ const KabanAPI = {
             });
         };
 
+        let reopenTimer = null;
+        const attempt = () => {
+            clearTimeout(reopenTimer);
+            reopenTimer = null;
+            if (left) return;
+            open().then(() => { if (myMeta && !left) channel?.track(myMeta).catch(() => {}); }).catch(() => reopen());
+        };
         const reopen = () => {
             if (left) return;
             const old = channel;
             channel = null;
             try { db.removeChannel(old); } catch {}
             const delay = [700, 2000, 4000, 8000][Math.min(retry++, 3)];
-            setTimeout(() => {
-                if (left) return;
-                open().then(() => { if (myMeta && !left) channel?.track(myMeta).catch(() => {}); }).catch(() => reopen());
-            }, delay);
+            reopenTimer = setTimeout(attempt, delay);
         };
 
         const ready = open();
@@ -2058,6 +2062,8 @@ const KabanAPI = {
             sendSignal: (payload) => (channel ? channel.send({ type: "broadcast", event: "signal", payload }) : Promise.resolve("closed")),
             // null — канал прямо сейчас переподключается: список неизвестен (а не пуст).
             getParticipants: () => (channel ? readParticipants() : null),
+            // Сеть вернулась — ждущую попытку переподключения делаем сразу, а не через до 8 с.
+            nudge: () => { if (reopenTimer && !left) { retry = 0; attempt(); } },
             leave: async () => {
                 left = true;
                 const ch = channel;

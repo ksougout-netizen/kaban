@@ -182,20 +182,25 @@ function voiceTuneVideoSenders(call, peer) {
         const sender = t[slot]?.sender;
         if (!sender?.track) return;
         maxBitrate = Math.round(maxBitrate);
-        const key = maxBitrate + "|" + (degradation || "");
+        const active = !call.uplink?.videoPaused;   // канал забит, а видео уже на минимуме — пауза
+        const key = maxBitrate + "|" + (degradation || "") + (active ? "" : "|paused");
         if (sender._kabanTune === key) return;
         try {
             const params = sender.getParameters();
             if (!params.encodings || !params.encodings.length) return;   // ещё не согласовано — повторим позже
             params.encodings[0].maxBitrate = maxBitrate;
+            params.encodings[0].active = active;
             if (degradation) params.degradationPreference = degradation;
             sender._kabanTune = key;
             sender.setParameters(params).catch(() => { sender._kabanTune = null; });
         } catch { /* повторим на следующей проверке */ }
     };
-    tune(VOICE_SLOT_CAM, Math.min(450000, VOICE_MAX_UPLOAD / viewers / 3));
+    // × защита голоса: отдача забита (игра качает обновление) — картинка уступает голосу во
+    // всех соединениях сразу (см. uplinkGuardTick в script-core.js).
+    const f = call.uplink?.factor ?? 1;
+    tune(VOICE_SLOT_CAM, Math.max(20000, Math.min(450000, VOICE_MAX_UPLOAD / viewers / 3) * f));
     const preset = call.media?.screenPreset || VOICE_SCREEN_PRESETS[0];
-    tune(VOICE_SLOT_SCREEN, Math.max(600000, Math.min(preset.bitrate, VOICE_MAX_UPLOAD / viewers)), preset.fps >= 60 ? "maintain-framerate" : "maintain-resolution");
+    tune(VOICE_SLOT_SCREEN, Math.max(60000, Math.max(600000, Math.min(preset.bitrate, VOICE_MAX_UPLOAD / viewers)) * f), preset.fps >= 60 ? "maintain-framerate" : "maintain-resolution");
     if (typeof prioritizeAudioSenders === "function") prioritizeAudioSenders(peer.pc);
 }
 

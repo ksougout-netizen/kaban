@@ -2664,6 +2664,11 @@ function formatLastSeen(lastSeenIso) {
 // online — сначала смотрим на realtime-presence (мгновенно, только пока
 // открыт именно этот чат), при её отсутствии — на снимок is_online/last_seen
 // из базы (см. cachedChatRows). typing — временно перекрывает оба.
+// Подпись бота в шапке чата: у каждого своя.
+function botStatusText(user) {
+    return user?.username === "aurora_bot" ? "Раздачи, скидки и новости игр" : "ИИ-бот · Gemini";
+}
+
 function renderChatHeaderStatus({ online, lastSeen, typing }) {
 
     const el = document.querySelector(".person-status");
@@ -2722,7 +2727,7 @@ function clearTypingIndicator() {
     // типа чата, а не безусловное "был(а)" (оно подходит только живому человеку).
     const meta = cachedChatRows.find((row) => row.chat_id === currentChatId);
     const el = document.querySelector(".person-status");
-    if (el && meta?.otherUser?.is_bot) { el.classList.remove("is-typing"); el.textContent = "ИИ-бот · Gemini"; return; }
+    if (el && meta?.otherUser?.is_bot) { el.classList.remove("is-typing"); el.textContent = botStatusText(meta.otherUser); return; }
     if (el && currentChatIsSecret) { el.classList.remove("is-typing"); el.textContent = "Секретный чат"; return; }
     if (el && !meta?.otherUser) { el.classList.remove("is-typing"); el.textContent = "Личные заметки"; return; }
     renderChatHeaderStatus({ online: isUserEffectivelyOnline(meta?.otherUser), lastSeen: lastSeenOf(meta?.otherUser) });
@@ -3113,7 +3118,7 @@ async function openRealChat(chatId) {
             isBot: true
         });
         const botStatusEl = document.querySelector(".person-status");
-        if (botStatusEl) { botStatusEl.classList.remove("is-typing"); botStatusEl.textContent = "ИИ-бот · Gemini"; }
+        if (botStatusEl) { botStatusEl.classList.remove("is-typing"); botStatusEl.textContent = botStatusText(meta?.otherUser); }
         setContactMood("ИИ-бот", "none");
 
         const botBlockButton = document.querySelector('[data-profile-toggle="blocked"]');

@@ -6510,6 +6510,17 @@ body.reduce-motion .call-blob { animation: none; }
 .call-signal[data-level="1"] i:nth-child(-n+1), .call-signal[data-level="2"] i:nth-child(-n+2),
 .call-signal[data-level="3"] i:nth-child(-n+3), .call-signal[data-level="4"] i { background: #fff; }
 .call-signal[data-level="1"] i:nth-child(1) { background: #ffd43b; }
+/* Журнал связи (diagnostics.js): превью отчёта и недавние чаты, куда его отправить. */
+.diag-modal { max-width: 560px; }
+.diag-preview { margin: 8px 16px 4px; padding: 10px 12px; max-height: 230px; overflow: auto; border-radius: 12px; background: var(--surface2); color: var(--text); font: 11px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word; user-select: text; }
+.diag-chats { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 16px 6px; }
+.diag-chat { padding: 7px 12px; border: none; border-radius: 999px; background: var(--surface2); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diag-chat:hover { background: color-mix(in srgb, var(--accent) 16%, var(--surface2)); }
+
+/* Пинг цифрой рядом с полосками; через сервер-посредник — жёлтым (значит, напрямую не вышло). */
+.call-ping { font-size: 12px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,.14); color: #fff; line-height: 16px; }
+.call-ping[hidden] { display: none; }
+.call-ping.is-relay { background: rgba(255,212,59,.22); color: #ffe48a; }
 .call-remote-muted { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; padding: 6px 12px; border-radius: 999px; background: rgba(0,0,0,.22); font-size: 13px; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 .call-remote-muted[hidden] { display: none; }
 .call-remote-muted svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
@@ -8908,9 +8919,12 @@ body.reduce-motion .gcall { animation: none; }
     font-size: 42px;
 }
 
-.contact-modal-name { margin-top: 12px; font-size: 21px; text-shadow: 0 1px 8px rgba(0,0,0,.18); }
-.contact-modal-handle { color: rgba(255,255,255,.8); font-size: 13px; }
-.contact-modal-profile .mood { color: rgba(255,255,255,.92); }
+.contact-modal-name { margin-top: 12px; font-size: 21px; text-shadow: 0 1px 2px rgba(0,0,0,.32), 0 2px 12px rgba(0,0,0,.22); }
+.contact-modal-handle { color: #fff; font-size: 13px; font-weight: 500; text-shadow: 0 1px 2px rgba(0,0,0,.3); }
+/* Плашка «в сети / был(а) N ч. назад» на цветной шапке: полупрозрачная, как в полной карточке.
+   Раньше фон брался из темы (--surface2 — белый в светлой) при белом тексте — надпись не читалась. */
+.contact-modal-profile .mood { background: rgba(0,0,0,.18); color: #fff; font-size: 12px; font-weight: 600; padding: 6px 12px; }
+.contact-modal-profile .mood .status-dot.offline { background: rgba(255,255,255,.7); }
 
 .contact-modal-actions { margin: 14px 14px 0; gap: 8px; }
 
@@ -9157,18 +9171,20 @@ body.reduce-motion .gcall { animation: none; }
     color: #fff;
 }
 
-.profile-hero-name { margin-top: 12px; font-size: 23px; font-weight: 700; text-shadow: 0 1px 8px rgba(0,0,0,.18); text-align: center; overflow-wrap: anywhere; }
-.profile-hero-handle { font-size: 14px; color: rgba(255,255,255,.82); }
+/* Белый текст на светлых градиентах (салатовый, жёлтый) «затухал» — тень плотнее, ник без прозрачности. */
+.profile-hero-name { margin-top: 12px; font-size: 23px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,.32), 0 2px 12px rgba(0,0,0,.22); text-align: center; overflow-wrap: anywhere; }
+.profile-hero-handle { font-size: 14px; color: #fff; font-weight: 500; text-shadow: 0 1px 2px rgba(0,0,0,.3); }
 
 .mood.profile-hero-status {
     margin-top: 10px;
     padding: 7px 14px;
-    background: rgba(255,255,255,.2);
+    background: rgba(0,0,0,.18);
     color: #fff;
     font-size: 12.5px;
+    font-weight: 600;
 }
 
-.mood.profile-hero-status:hover { background: rgba(255,255,255,.32); }
+.mood.profile-hero-status:hover { background: rgba(0,0,0,.26); }
 
 .profile-body { padding: 14px 14px calc(24px + env(safe-area-inset-bottom)); }
 .profile-body .status-emoji-picker { margin: 0 0 12px; }
@@ -9747,15 +9763,16 @@ body.bubble-no-tail .theme-preview-msg.out { border-bottom-right-radius: var(--b
     font-size: 54px;
 }
 
-.info-window-name { margin-top: 14px; font-size: 23px; font-weight: 700; text-align: center; text-shadow: 0 1px 8px rgba(0,0,0,.18); overflow-wrap: anywhere; }
-.info-window-handle-text { margin: 0; font-size: 14px; color: rgba(255,255,255,.82); }
+.info-window-name { margin-top: 14px; font-size: 23px; font-weight: 700; text-align: center; text-shadow: 0 1px 2px rgba(0,0,0,.32), 0 2px 12px rgba(0,0,0,.22); overflow-wrap: anywhere; }
+.info-window-handle-text { margin: 0; font-size: 14px; color: #fff; font-weight: 500; text-shadow: 0 1px 2px rgba(0,0,0,.3); }
 
 .mood.info-window-mood {
     margin-top: 8px;
     padding: 7px 14px;
-    background: rgba(255,255,255,.2);
+    background: rgba(0,0,0,.18);
     color: #fff;
     font-size: 12.5px;
+    font-weight: 600;
 }
 
 .info-window-contact {
@@ -10424,6 +10441,45 @@ body.reduce-motion .chat-area.chat-enter .messages { animation: none; }
 .game-tile-hint { font-size: 12px; color: var(--muted); }
 
 .game-card { min-width: 230px; }
+
+/* ---- Карточки Авроры (deals.js): раздачи, скидки, новости игр ---- */
+.message.has-deal { background: none !important; padding: 0 !important; box-shadow: none !important; border: 0 !important; backdrop-filter: none !important; }
+.message.has-deal::before, .message.has-deal::after { display: none !important; }
+.message.has-deal > .message-time, .message.has-deal > .message-time * { color: var(--muted) !important; }
+.message.has-deal > .message-time { padding: 3px 4px 0; }
+.message.has-deal > .message-sender-name { padding: 0 4px 4px; }
+.deal-card { width: min(340px, 70vw); border-radius: 16px; overflow: hidden; background: var(--surface); border: 1px solid color-mix(in srgb, var(--text) 9%, transparent); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+.deal-media { display: block; aspect-ratio: 460 / 215; background: #0b1220; overflow: hidden; }
+.deal-media img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .35s ease; }
+.deal-card:hover .deal-media img { transform: scale(1.03); }
+.deal-body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 5px; }
+.deal-top { display: flex; align-items: center; gap: 8px; }
+.deal-badge { padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; color: #fff; background: linear-gradient(135deg, #22c55e, #10b981); }
+.deal-discount .deal-badge { background: linear-gradient(135deg, #f97316, #ef4444); text-transform: none; font-size: 13px; }
+.deal-news .deal-badge { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+.deal-store { font-size: 12px; color: var(--muted); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deal-title { font-size: 15.5px; font-weight: 700; line-height: 1.25; color: var(--text); overflow-wrap: anywhere; }
+.deal-price { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--muted); }
+.deal-price b { font-size: 18px; color: var(--text); font-weight: 800; }
+.deal-free .deal-price b { color: #16a34a; }
+.deal-meta { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.deal-summary { font-size: 13px; line-height: 1.45; color: var(--text); white-space: pre-wrap; padding: 8px 10px; border-radius: 10px; background: var(--surface2); }
+.deal-btn { margin-top: 4px; display: block; padding: 9px 12px; border-radius: 11px; text-align: center; font-size: 14px; font-weight: 700; color: #fff; text-decoration: none; background: linear-gradient(135deg, #22c55e, #059669); transition: filter .15s ease, transform .15s ease; }
+.deal-discount .deal-btn { background: linear-gradient(135deg, #1b2838, #2a475e); }
+.deal-news .deal-btn { background: linear-gradient(135deg, #6366f1, #7c3aed); }
+.deal-btn:hover { filter: brightness(1.08); }
+.deal-btn:active { transform: scale(.98); }
+.deal-card.is-ended { opacity: .6; }
+.deal-card.is-ended .deal-media img { filter: grayscale(1); }
+
+.deal-list { width: min(340px, 70vw); display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 16px; background: var(--surface); color: var(--text); border: 1px solid color-mix(in srgb, var(--text) 9%, transparent); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+.deal-list-head { font-weight: 800; font-size: 15px; margin-bottom: 4px; }
+.deal-row { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 12px; text-decoration: none; color: inherit; background: color-mix(in srgb, var(--text) 4%, transparent); transition: background .15s ease; }
+.deal-row:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.deal-row img, .deal-row-ph { flex: none; width: 74px; height: 42px; border-radius: 8px; object-fit: cover; background: #0b1220; display: grid; place-items: center; font-size: 20px; }
+.deal-row-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.deal-row-title { font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deal-row-sub { font-size: 11.5px; color: var(--muted); }
 .game-title { font-size: 14.5px; font-weight: 700; }
 .game-sub { margin: 2px 0 8px; font-size: 11.5px; opacity: .7; }
 .game-status { margin-top: 8px; font-size: 12.5px; font-weight: 600; text-align: center; }
