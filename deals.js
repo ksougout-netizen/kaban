@@ -83,6 +83,243 @@ function buildDealListHTML(message) {
     return `<div class="deal-list"><div class="deal-list-head">🎁 Сейчас бесплатно</div>${rows || `<div class="deal-row-sub">Ничего не раздают</div>`}</div>`;
 }
 
+/* ---- Кнопки под сообщениями Авроры (как inline-кнопки Telegram) ----------------------------------
+   attachment_meta.buttons = [[{ t: подпись, c: команда }]]. Нажатие не пишет сообщение в чат: команда
+   уходит Авроре через RPC aurora_button (aurora_buttons.sql), а ответ приходит правкой этого же
+   сообщения или новым сообщением. Команда «@input:…» — только вставить текст в строку ввода. */
+
+function buildBotButtonsHTML(message) {
+    const rows = Array.isArray(message.attachment_meta?.buttons) ? message.attachment_meta.buttons : [];
+    if (!rows.length || message.deleted_at) return "";
+    return `<div class="bot-buttons">${rows.slice(0, 8).map((row) => `<div class="bot-buttons-row">${(Array.isArray(row) ? row : []).slice(0, 4).map((b) =>
+        `<button type="button" class="bot-btn" data-cmd="${escapeHTML(String(b?.c || ""))}" onclick="auroraPress(event, this)">${escapeHTML(String(b?.t || ""))}</button>`).join("")}</div>`).join("")}</div>`;
+}
+
+const auroraPressedAt = new WeakMap();
+
+async function auroraPress(event, el) {
+    event.preventDefault();
+    event.stopPropagation();
+    const cmd = el.dataset.cmd || "";
+    if (cmd.startsWith("@input:")) {
+        const input = document.getElementById("input");
+        if (input) {
+            input.value = cmd.slice(7);
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
+            if (typeof resizeComposer === "function") resizeComposer();
+            if (typeof updateComposerAction === "function") updateComposerAction();
+        }
+        return;
+    }
+    if (!cmd.startsWith("/") || el.classList.contains("is-busy")) return;
+    const messageId = el.closest(".message-row")?.dataset.messageId || null;
+    // Сразу видно, что нажалось: переключатель перещёлкивается, кнопка «думает».
+    el.classList.add("is-busy");
+    if (el.classList.contains("aur-switch")) {
+        el.classList.toggle("is-on");
+        el.setAttribute("aria-checked", String(el.classList.contains("is-on")));
+        const state = el.parentElement?.querySelector(".aur-state");
+        if (state) state.textContent = el.classList.contains("is-on") ? "Вкл" : "Выкл";
+    }
+    auroraPressedAt.set(el, Date.now());
+    try {
+        const { error } = await getSupabaseClient().rpc("aurora_button", { p_chat: currentChatId, p_message: messageId, p_cmd: cmd });
+        if (error) throw error;
+    } catch (error) {
+        console.warn("Кнопка Авроры:", error);
+        el.classList.remove("is-busy");
+        if (typeof toast === "function") toast(/aurora_button|function/i.test(String(error?.message)) ? "Кнопки Авроры ещё не включены на сервере" : "Не получилось — попробуйте ещё раз");
+        if (messageId && typeof updateRealMessageRow === "function") updateRealMessageRow(messageId, { force: true });
+        return;
+    }
+    // Ответ обычно за 1–3 с (сообщение перерисуется само); если нет — снимаем «думает».
+    setTimeout(() => { if (el.isConnected) el.classList.remove("is-busy"); }, 12000);
+}
+
+/* ---- «⚙️ Аврора в этом чате» (attachment_meta.aurora_panel) ---- */
+
+// Ближайший момент по расписанию: сервер присылает «следующий раз», а карточку могут открыть
+// и через день — тогда шагаем вперёд на период (час для проверки, сутки для подборки скидок).
+function auroraNextAt(iso, periodMs) {
+    let t = Date.parse(iso || "");
+    if (!Number.isFinite(t)) return null;
+    const now = Date.now();
+    if (t <= now) t += Math.ceil((now - t + 1) / periodMs) * periodMs;
+    return t;
+}
+
+function auroraWhenText(t) {
+    if (!t) return "";
+    const d = new Date(t), now = new Date();
+    const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const mins = Math.max(1, Math.round((t - Date.now()) / 60000));
+    const rel = mins < 60 ? `через ${mins} мин` : `через ${Math.round(mins / 60)} ч`;
+    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+    const day = d.toDateString() === now.toDateString() ? "сегодня" : d.toDateString() === tomorrow.toDateString() ? "завтра" : d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+    return `${day} в ${hm} · ${rel}`;
+}
+
+function auroraDateText(iso) {
+    const t = Date.parse(iso || "");
+    if (!Number.isFinite(t)) return "";
+    const days = Math.floor((Date.now() - t) / 86400000);
+    if (days <= 0) return "сегодня";
+    if (days === 1) return "вчера";
+    return new Date(t).toLocaleDateString("ru-RU", { day: "numeric", month: "short" }).replace(".", "");
+}
+
+function auroraSwitchHTML(on, cmdOn, cmdOff, label) {
+    return `<span class="aur-toggle">
+        <span class="aur-state ${on ? "on" : ""}">${on ? "Вкл" : "Выкл"}</span>
+        <button type="button" class="aur-switch${on ? " is-on" : ""}" role="switch" aria-checked="${on}" aria-label="${escapeHTML(label)}"
+            data-cmd="${escapeHTML(on ? cmdOff : cmdOn)}" onclick="auroraPress(event, this)"><span class="aur-knob"></span></button>
+    </span>`;
+}
+
+function buildAuroraPanelHTML(message) {
+    const p = message.attachment_meta?.aurora_panel || {};
+    const nextCheck = auroraNextAt(p.next?.check, 3600000);
+    const nextDeals = auroraNextAt(p.next?.deals, 86400000);
+    const apps = Array.isArray(p.apps) ? p.apps : [];
+    const max = Number(p.max_apps) || 10;
+    const chip = (pct) => `<button type="button" class="aur-chip${Number(p.min_discount) === pct ? " is-selected" : ""}" data-cmd="/скидки ${pct}" onclick="auroraPress(event, this)" ${p.discounts ? "" : "disabled"}>−${pct}%</button>`;
+    const action = (label, cmd, disabled = false) => `<button type="button" class="aur-action" data-cmd="${escapeHTML(cmd)}" onclick="auroraPress(event, this)" ${disabled ? "disabled" : ""}>${label}</button>`;
+
+    const freeSub = p.giveaways
+        ? `Пришлю сразу, как начнётся раздача. Проверяю каждый час — следующая проверка ${auroraWhenText(nextCheck)}`
+        : "Выключено — новые раздачи не присылаю";
+    const freeNow = Number.isFinite(Number(p.free_now)) && p.free_now !== null ? `<span class="aur-pill">Сейчас раздают: ${Number(p.free_now)}</span>` : "";
+    const dealsSub = p.discounts
+        ? `Подборка до ${Number(p.deals_per_day) || 10} игр от −${Number(p.min_discount) || 70}% · ${auroraWhenText(nextDeals)}`
+        : "Выключено — подборку не присылаю";
+    const newsSub = !p.news_on ? "Выключено — новости не присылаю (список игр сохранён)"
+        : apps.length ? `Новые официальные новости приходят в течение часа · следующая проверка ${auroraWhenText(nextCheck)}`
+        : "Добавьте игру — буду присылать её патчи и новости с пересказом";
+
+    const appRows = apps.map((a) => `
+        <div class="aur-app">
+            <img src="https://cdn.akamai.steamstatic.com/steam/apps/${Number(a.appid)}/capsule_184x69.jpg" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+            <span class="aur-app-copy">
+                <span class="aur-app-name">${escapeHTML(a.name || "")}</span>
+                <span class="aur-app-sub">${a.last ? `последняя новость: ${escapeHTML(auroraDateText(a.last))}` : "новостей пока нет"}</span>
+            </span>
+            <button type="button" class="aur-icon-btn" title="Последняя новость" aria-label="Последняя новость ${escapeHTML(a.name || "")}" data-cmd="/новости последняя #${Number(a.appid)}" onclick="auroraPress(event, this)">📰</button>
+            <button type="button" class="aur-icon-btn danger" title="Не следить" aria-label="Не следить за ${escapeHTML(a.name || "")}" data-cmd="/новости убрать #${Number(a.appid)}" onclick="auroraPress(event, this)">✕</button>
+        </div>`).join("");
+
+    return `
+        <div class="aur-panel${p.paused ? " is-paused" : ""}">
+            <div class="aur-head">
+                <span class="aur-title">⚙️ Аврора в этом чате</span>
+                <button type="button" class="aur-refresh" title="Обновить" aria-label="Обновить" data-cmd="/настройки" onclick="auroraPress(event, this)">⟳</button>
+            </div>
+            ${p.notice ? `<div class="aur-notice">${escapeHTML(p.notice)}</div>` : ""}
+            ${p.paused ? `<div class="aur-paused">⏸ Сейчас я ничего не присылаю в этот чат — включите нужное ниже</div>` : ""}
+
+            <section class="aur-sec${p.giveaways ? " is-on" : ""}">
+                <div class="aur-row">
+                    <span class="aur-row-icon">🎁</span>
+                    <span class="aur-row-copy"><b>Бесплатные игры</b><span>${escapeHTML(freeSub)}</span></span>
+                    ${auroraSwitchHTML(!!p.giveaways, "/раздачи вкл", "/раздачи выкл", "Бесплатные игры")}
+                </div>
+                <div class="aur-actions">${freeNow}${action("Показать сейчас", "/сейчас")}</div>
+            </section>
+
+            <section class="aur-sec${p.discounts ? " is-on" : ""}">
+                <div class="aur-row">
+                    <span class="aur-row-icon">🔥</span>
+                    <span class="aur-row-copy"><b>Скидки Steam</b><span>${escapeHTML(dealsSub)}</span></span>
+                    ${auroraSwitchHTML(!!p.discounts, "/скидки вкл", "/скидки выкл", "Скидки Steam")}
+                </div>
+                <div class="aur-chips${p.discounts ? "" : " is-disabled"}"><span class="aur-chips-label">Присылать скидки от:</span>${[50, 60, 70, 80, 90].map(chip).join("")}</div>
+                <div class="aur-actions">${action("Показать сейчас", "/скидки сейчас")}</div>
+            </section>
+
+            <section class="aur-sec${p.news_on ? " is-on" : ""}">
+                <div class="aur-row">
+                    <span class="aur-row-icon">📰</span>
+                    <span class="aur-row-copy"><b>Новости игр</b><span>${escapeHTML(newsSub)}</span></span>
+                    ${auroraSwitchHTML(!!p.news_on, "/новости вкл", "/новости выкл", "Новости игр")}
+                </div>
+                ${apps.length ? `<div class="aur-apps${p.news_on ? "" : " is-disabled"}">${appRows}</div>` : ""}
+                <div class="aur-actions">
+                    <span class="aur-pill">${apps.length} из ${max}</span>
+                    ${apps.length < max ? `<button type="button" class="aur-action" data-cmd="@input:/новости " onclick="auroraPress(event, this)">＋ Добавить игру</button>` : ""}
+                </div>
+            </section>
+        </div>`;
+}
+
+/* ---- Подсказка команд при вводе «/» в чате с Авророй (как меню команд бота в Telegram) ---- */
+
+const AURORA_COMMANDS = [
+    { c: "/настройки", d: "Что включено и когда я напишу" },
+    { c: "/сейчас", d: "Бесплатные игры прямо сейчас" },
+    { c: "/скидки", d: "Лучшие скидки прямо сейчас" },
+    { c: "/новости ", d: "Следить за игрой: /новости Название", arg: true },
+    { c: "/помощь", d: "Что я умею" },
+    { c: "/стоп", d: "Пауза — ничего не присылать" }
+];
+
+function auroraInCurrentChat() {
+    if (typeof currentChatId === "undefined" || !currentChatId || (typeof currentChatIsSecret !== "undefined" && currentChatIsSecret)) return false;
+    if (typeof currentChatType !== "undefined" && currentChatType === "group") {
+        return [...(currentChatMembersById?.values?.() || [])].some((u) => u?.username === "aurora_bot");
+    }
+    const row = typeof cachedChatRows !== "undefined" ? cachedChatRows.find((r) => r.chat_id === currentChatId) : null;
+    return row?.otherUser?.username === "aurora_bot";
+}
+
+(function auroraSlashMenu() {
+    const input = document.getElementById("input");
+    const host = input?.closest(".input");
+    if (!input || !host) return;
+    const menu = document.createElement("div");
+    menu.className = "aur-slash";
+    menu.hidden = true;
+    menu.setAttribute("role", "listbox");
+    menu.setAttribute("aria-label", "Команды Авроры");
+    host.appendChild(menu);
+
+    const hide = () => { menu.hidden = true; };
+    const run = (item) => {
+        hide();
+        if (item.arg) {
+            input.value = item.c;
+            input.focus();
+            if (typeof resizeComposer === "function") resizeComposer();
+            if (typeof updateComposerAction === "function") updateComposerAction();
+            return;
+        }
+        input.value = "";
+        if (typeof resizeComposer === "function") resizeComposer();
+        if (typeof updateComposerAction === "function") updateComposerAction();
+        // Как кнопка: команда уходит Авроре без сообщения в чате.
+        const fake = document.createElement("button");
+        fake.dataset.cmd = item.c;
+        auroraPress({ preventDefault() {}, stopPropagation() {} }, fake);
+    };
+
+    input.addEventListener("input", () => {
+        const v = input.value;
+        if (!/^\/[\p{L}]*$/u.test(v) || !auroraInCurrentChat()) return hide();
+        const q = v.slice(1).toLocaleLowerCase();
+        const items = AURORA_COMMANDS.filter((x) => x.c.slice(1).startsWith(q));
+        if (!items.length) return hide();
+        menu.innerHTML = `<div class="aur-slash-head">Команды Авроры</div>` + items.map((x, i) =>
+            `<button type="button" class="aur-slash-item" data-i="${AURORA_COMMANDS.indexOf(x)}" role="option"><b>${escapeHTML(x.c.trim())}</b><span>${escapeHTML(x.d)}</span></button>`).join("");
+        menu.hidden = false;
+    });
+    menu.addEventListener("mousedown", (e) => e.preventDefault());   // фокус остаётся в строке ввода
+    menu.addEventListener("click", (e) => {
+        const b = e.target.closest(".aur-slash-item");
+        if (b) run(AURORA_COMMANDS[Number(b.dataset.i)]);
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) { e.stopPropagation(); hide(); } });
+    input.addEventListener("blur", () => setTimeout(hide, 150));
+})();
+
 // «Скидки дня» — подборка Авроры одним сообщением (attachment_meta.deal_digest).
 function buildDealDigestHTML(message) {
     const items = Array.isArray(message.attachment_meta?.deal_digest) ? message.attachment_meta.deal_digest : [];
