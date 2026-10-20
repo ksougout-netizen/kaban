@@ -183,6 +183,16 @@ function auroraStaleHTML(iso, maxAgeMs, hint) {
     return `<div class="aur-stale">🕓 Данные на ${escapeHTML(when)} — ${escapeHTML(hint)}</div>`;
 }
 
+// «С 23:00 до 07:00 …» — в часовом поясе того, кто смотрит (окно задано в UTC на сервере).
+function auroraQuietText(p) {
+    const from = Number(p.quiet?.from_utc ?? 13), to = Number(p.quiet?.to_utc ?? 21), min = Number(p.check_minute ?? 0);
+    const at = (h) => { const d = new Date(); d.setUTCHours(h, 0, 0, 0); return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+    const at7 = (h) => { const d = new Date(); d.setUTCHours(h, min, 0, 0); return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+    return p.quiet_on
+        ? `С ${at(from)} до ${at(to)} раздачи и новости не присылаю — утром в ${at7(to)} пришлю всё накопившееся одним заходом`
+        : "Выключено — пишу в любое время, даже ночью";
+}
+
 function auroraSwitchHTML(on, cmdOn, cmdOff, label) {
     return `<span class="aur-toggle">
         <span class="aur-state ${on ? "on" : ""}">${on ? "Вкл" : "Выкл"}</span>
@@ -193,7 +203,13 @@ function auroraSwitchHTML(on, cmdOn, cmdOff, label) {
 
 function buildAuroraPanelHTML(message) {
     const p = message.attachment_meta?.aurora_panel || {};
-    const nextCheck = auroraNextAt(p.next?.check, 3600000);
+    let nextCheck = auroraNextAt(p.next?.check, 3600000);
+    // В тихие часы ближайшая проверка, которая что-то пришлёт, — утренняя.
+    if (p.quiet_on && nextCheck) {
+        const from = Number(p.quiet?.from_utc ?? 13), to = Number(p.quiet?.to_utc ?? 21);
+        const h = new Date(nextCheck).getUTCHours();
+        if (h >= from && h < to) { const d = new Date(nextCheck); d.setUTCHours(to, Number(p.check_minute ?? 0), 0, 0); nextCheck = d.getTime(); }
+    }
     const nextDeals = auroraNextAt(p.next?.deals, 86400000);
     const apps = Array.isArray(p.apps) ? p.apps : [];
     const max = Number(p.max_apps) || 10;
@@ -248,6 +264,8 @@ function buildAuroraPanelHTML(message) {
                     ${auroraSwitchHTML(!!p.discounts, "/скидки вкл", "/скидки выкл", "Скидки Steam")}
                 </div>
                 <div class="aur-chips${p.discounts ? "" : " is-disabled"}"><span class="aur-chips-label">Присылать скидки от:</span>${[50, 60, 70, 80, 90].map(chip).join("")}</div>
+                <div class="aur-chips${p.discounts ? "" : " is-disabled"}"><span class="aur-chips-label">Игр в подборке:</span>${(Array.isArray(p.deals_sizes) ? p.deals_sizes : [5, 10, 20]).map((n) =>
+                    `<button type="button" class="aur-chip${Number(p.deals_per_day) === Number(n) ? " is-selected" : ""}" data-cmd="/скидки игр ${Number(n)}" onclick="auroraPress(event, this)" ${p.discounts ? "" : "disabled"}>${Number(n)}</button>`).join("")}</div>
                 <div class="aur-actions">${action("Показать сейчас", "/скидки сейчас")}</div>
             </section>
 
@@ -263,6 +281,14 @@ function buildAuroraPanelHTML(message) {
                     ${apps.length < max ? `<button type="button" class="aur-action" data-cmd="@input:/новости " onclick="auroraPress(event, this)">＋ Добавить игру</button>` : ""}
                 </div>
             </section>
+
+            ${"quiet_on" in p ? `<section class="aur-sec${p.quiet_on ? " is-on" : ""}">
+                <div class="aur-row">
+                    <span class="aur-row-icon">🌙</span>
+                    <span class="aur-row-copy"><b>Тихие часы</b><span>${escapeHTML(auroraQuietText(p))}</span></span>
+                    ${auroraSwitchHTML(!!p.quiet_on, "/тихие вкл", "/тихие выкл", "Тихие часы")}
+                </div>
+            </section>` : ""}
             <div class="aur-foot">Эта карточка исчезнет через 15 минут после последнего нажатия · снова открыть: /настройки</div>
         </div>`;
 }
@@ -339,11 +365,14 @@ function auroraInCurrentChat() {
 // «Скидки дня» — подборка Авроры одним сообщением (attachment_meta.deal_digest).
 function buildDealDigestHTML(message) {
     const items = Array.isArray(message.attachment_meta?.deal_digest) ? message.attachment_meta.deal_digest : [];
-    const rows = items.map((x) => {
+    // Длинная подборка (20 игр) — сначала 10 строк, остальное по кнопке «Показать ещё», чтобы
+    // карточка не растягивала чат на два экрана.
+    const SHOW = 10;
+    const rows = items.map((x, i) => {
         const url = dealSafeUrl(x.url), img = dealSafeUrl(x.image);
         const rating = x.rating ? ` · ★ ${Number(x.rating)}%` : "";
         return `
-            <a class="deal-row" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">
+            <a class="deal-row${i >= SHOW ? " deal-row-more" : ""}" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">
                 ${img ? `<img src="${escapeHTML(img)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : `<span class="deal-row-ph">🔥</span>`}
                 <span class="deal-row-copy">
                     <span class="deal-row-title">${escapeHTML(x.title || "")}</span>
@@ -352,5 +381,8 @@ function buildDealDigestHTML(message) {
             </a>`;
     }).join("");
     const stale = auroraStaleHTML(message.attachment_meta?.checked_at || message.created_at, 24 * 3600000, "цены могли измениться, в Steam всегда актуальные");
-    return `<div class="deal-list deal-digest"><div class="deal-list-head">🔥 Скидки дня в Steam</div>${stale}${rows}</div>`;
+    const more = items.length > SHOW
+        ? `<button type="button" class="deal-more-btn" onclick="event.stopPropagation(); this.closest('.deal-digest').classList.add('is-expanded'); this.remove()">Показать ещё ${items.length - SHOW}</button>`
+        : "";
+    return `<div class="deal-list deal-digest"><div class="deal-list-head">🔥 Скидки дня в Steam · ${items.length}</div>${stale}${rows}${more}</div>`;
 }
