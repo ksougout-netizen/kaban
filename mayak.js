@@ -129,6 +129,75 @@ function buildMayakOutagesHTML(list, { inline = false } = {}) {
     return `<div class="mk-off${inline ? " is-inline" : ""}"><div class="mk-news-head">🏠 ${inline ? "По вашему адресу" : "Отключения по вашим адресам"}</div>${rows}<div class="mk-off-src">Данные: VL.ru · Отключения</div></div>`;
 }
 
+/* ---- транспорт: «как добраться» (attachment_meta.trip) и маршрут (attachment_meta.route_info) ---- */
+
+function mayakLegHTML(l) {
+    const when = l.next?.length ? `${l.next_day ? "сегодня уже нет · завтра с" : "ближайшие"} ≈ <b>${l.next.map(escapeHTML).join(", ")}</b>` : "";
+    const freq = l.frequent ? `ходит часто, каждые ~${Number(l.interval) || 5} мин` : l.interval ? `каждые ~${Number(l.interval)} мин` : l.per_day ? `редко: ${Number(l.per_day)} рейс. в день` : (!l.next?.length ? "расписания нет — уточняйте на остановке" : "");
+    return `
+        <div class="tr-leg">
+            <span class="tr-num t${Number(l.type) || 0}">${escapeHTML(l.icon || "🚌")} ${escapeHTML(l.num || "")}</span>
+            <div class="tr-leg-body">
+                <div class="tr-stops"><span class="tr-dot"></span>${escapeHTML(l.board || "")}<span class="tr-line"></span><span class="tr-dot end"></span>${escapeHTML(l.alight || "")}</div>
+                <div class="tr-meta">${escapeHTML(`${l.stops} ост. · ~${l.minutes} мин`)}${l.to_end ? ` · <span title="Направление">→ ${escapeHTML(l.to_end)}</span>` : ""}</div>
+                ${when || freq ? `<div class="tr-when">${[when, escapeHTML(freq)].filter(Boolean).join(" · ")}</div>` : ""}
+            </div>
+        </div>`;
+}
+
+function buildMayakTripHTML(t) {
+    if (!t) return "";
+    const options = Array.isArray(t.options) ? t.options : [];
+    const rail = Array.isArray(t.rail) ? t.rail : [];
+    const opts = options.map((o, k) => `
+        <div class="tr-option${k === 0 ? " is-best" : ""}">
+            <div class="tr-option-head">
+                <span>${o.legs.length > 1 ? "С пересадкой" : "Без пересадок"}</span>
+                <b>~${Number(o.minutes) || 0} мин в пути</b>
+            </div>
+            ${o.legs.map(mayakLegHTML).join(`<div class="tr-transfer">↓ пересадка на «${escapeHTML(o.legs[0]?.alight || "")}»</div>`)}
+        </div>`).join("");
+    const railIcon = { train: "🚆", express: "🚄", bus: "🚌" };
+    const railRows = rail.map((r) => {
+        const url = dealSafeUrl(r.url);
+        return `<a class="tr-rail-row"${url ? ` href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer"` : ""}>
+            <span class="tr-rail-time">${escapeHTML(r.dep || "")}<small>→ ${escapeHTML(r.arr || "")}</small></span>
+            <span class="tr-rail-copy"><span>${escapeHTML(railIcon[r.kind] || "🚏")} ${escapeHTML(r.name || "")}</span><small>${escapeHTML([r.num && `№${r.num}`, r.travel, r.price, r.day === "завтра" ? "завтра" : ""].filter(Boolean).join(" · "))}</small></span>
+        </a>`;
+    }).join("");
+    const maps = dealSafeUrl(t.maps);
+    const empty = !options.length && !rail.length;
+    return `
+        <div class="tr-card">
+            <div class="tr-head">
+                <span class="tr-icon">🧭</span>
+                <div class="tr-route"><span>${escapeHTML(t.from?.label || "")}</span><span class="tr-arrow">→</span><span>${escapeHTML(t.to?.label || "")}</span></div>
+            </div>
+            ${t.same ? `<div class="tr-empty">Это одна и та же остановка 🙂</div>` : ""}
+            ${opts}
+            ${empty && !t.same ? `<div class="tr-empty">Не нашёл прямых вариантов и вариантов с одной пересадкой 😕 Откройте маршрут в 2ГИС — там пешие участки и маршрутки.</div>` : ""}
+            ${railRows ? `<div class="tr-rail"><div class="tr-rail-head">🚆 Электрички и межгород</div>${railRows}</div>` : ""}
+            ${maps ? `<a class="tr-maps" href="${escapeHTML(maps)}" target="_blank" rel="noopener noreferrer">🗺 Открыть маршрут в 2ГИС</a>` : ""}
+            ${options.length ? `<div class="tr-note">${escapeHTML(t.note || "Время примерное.")}</div>` : ""}
+        </div>`;
+}
+
+function buildMayakRouteInfoHTML(list) {
+    return (Array.isArray(list) ? list : []).map((r) => `
+        <div class="tr-card">
+            <div class="tr-head"><span class="tr-num big t${Number(r.type) || 0}">${escapeHTML(r.icon || "🚌")} ${escapeHTML(r.num || "")}</span><div class="tr-route"><span>${escapeHTML(r.title || "")}</span></div></div>
+            ${(r.dirs || []).map((d) => `
+                <details class="tr-dir">
+                    <summary>
+                        <span class="tr-dir-name">${escapeHTML(d.from)} → ${escapeHTML(d.to)}</span>
+                        <span class="tr-dir-meta">${escapeHTML([`${(d.stops || []).length} ост.`, d.first && d.last ? `${d.first}–${d.last}` : "", d.frequent ? `ходит часто, каждые ~${d.interval || 5} мин` : d.interval ? `каждые ~${d.interval} мин` : "", !d.first && !d.frequent ? "расписания нет" : ""].filter(Boolean).join(" · "))}${d.next?.length ? ` · ближайшие ≈ <b>${d.next.map(escapeHTML).join(", ")}</b>` : ""}</span>
+                    </summary>
+                    <ol class="tr-dir-stops">${(d.stops || []).map((s) => `<li>${escapeHTML(s)}</li>`).join("")}</ol>
+                </details>`).join("")}
+            <div class="tr-note">Время примерное — по расписанию Bustime.</div>
+        </div>`).join("");
+}
+
 function buildMayakAlertHTML(message) {
     const a = message.attachment_meta?.alert || {};
     const url = dealSafeUrl(a.url);
@@ -165,6 +234,8 @@ function buildMayakMessageHTML(message) {
                 ${buildMayakNewsHTML(m.news_list)}
             </div>`;
     }
+    if (m.trip) return buildMayakTripHTML(m.trip);
+    if (m.route_info) return `<div class="mk-wrap">${buildMayakRouteInfoHTML(m.route_info)}</div>`;
     if (m.outages_summary) return `<div class="mk-wrap">${buildMayakOutagesHTML(m.outages_summary)}</div>`;
     if (m.week) return `<div class="mk-wrap">${typeof auroraStaleHTML === "function" ? auroraStaleHTML(m.checked_at || message.created_at, 12 * 3600000, "нажмите «Обновить»") : ""}${buildMayakWeekHTML(m.week)}</div>`;
     if (m.weather) return `<div class="mk-wrap">${stale}${buildMayakWeatherHTML(m.weather)}</div>`;
@@ -247,6 +318,17 @@ function buildMayakPanelHTML(message) {
                     ${(p.addresses || []).length < (Number(p.max_addresses) || 3) ? `<button type="button" class="aur-action" data-cmd="@input:/адрес " onclick="auroraPress(event, this)">＋ Добавить адрес</button>` : ""}
                 </div>
             </section>
+            <section class="aur-sec is-on">
+                <div class="aur-row">
+                    <span class="aur-row-icon">🧭</span>
+                    <span class="aur-row-copy"><b>Транспорт</b><span>Как добраться по городу: какие автобусы, где сесть и выйти, когда ближайший. Электрички и межгород — с VL.ru</span></span>
+                </div>
+                <div class="aur-actions">
+                    <button type="button" class="aur-action" data-cmd="@input:/маршрут " onclick="auroraPress(event, this)">🧭 Как добраться</button>
+                    <button type="button" class="aur-action" data-cmd="@input:/автобус " onclick="auroraPress(event, this)">🚌 Автобус №</button>
+                </div>
+            </section>
+
             <section class="aur-sec${p.quiet_on ? " is-on" : ""}">
                 <div class="aur-row">
                     <span class="aur-row-icon">🌙</span>
