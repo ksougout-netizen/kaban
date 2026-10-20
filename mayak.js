@@ -107,6 +107,28 @@ function buildMayakNewsHTML(list) {
     return `<div class="mk-news"><div class="mk-news-head">${escapeHTML(list.title || "📰 Новости")}</div>${rows || `<div class="mk-news-sub">Свежих новостей нет</div>`}</div>`;
 }
 
+// Отключения по адресам (attachment_meta.outages_summary): по дому — что и когда, или «всё в порядке».
+function buildMayakOutagesHTML(list, { inline = false } = {}) {
+    const houses = Array.isArray(list) ? list : [];
+    if (!houses.length) return "";
+    const rows = houses.map((h) => {
+        const items = (Array.isArray(h.outages) ? h.outages : []).map((o) => `
+            <div class="mk-off-item ${o.planned ? "planned" : "now"}">
+                <div class="mk-off-what">${escapeHTML(o.icon || "⚠️")} <b>${escapeHTML(o.status || "")} ${escapeHTML(o.gen || o.label || "")}</b></div>
+                <div class="mk-off-when">${escapeHTML([o.when, o.hint].filter(Boolean).join(" "))}</div>
+                ${o.reason ? `<div class="mk-off-sub">${escapeHTML(o.reason)}</div>` : ""}
+                ${o.org ? `<div class="mk-off-sub">${escapeHTML([o.org, o.phones].filter(Boolean).join(" · "))}</div>` : ""}
+            </div>`).join("");
+        const url = dealSafeUrl(h.url);
+        return `
+            <div class="mk-off-house">
+                <div class="mk-off-name">${url ? `<a href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">🏠 ${escapeHTML(h.name || "")}</a>` : `🏠 ${escapeHTML(h.name || "")}`}</div>
+                ${items || `<div class="mk-off-ok">✅ Отключений нет и не запланировано</div>`}
+            </div>`;
+    }).join("");
+    return `<div class="mk-off${inline ? " is-inline" : ""}"><div class="mk-news-head">🏠 ${inline ? "По вашему адресу" : "Отключения по вашим адресам"}</div>${rows}<div class="mk-off-src">Данные: VL.ru · Отключения</div></div>`;
+}
+
 function buildMayakAlertHTML(message) {
     const a = message.attachment_meta?.alert || {};
     const url = dealSafeUrl(a.url);
@@ -139,9 +161,11 @@ function buildMayakMessageHTML(message) {
                 ${stale}
                 ${buildMayakWeatherHTML(m.weather, { compact: true })}
                 ${m.mchs ? `<div class="mk-alert warn is-inline"><div class="mk-alert-top"><span class="mk-alert-badge">⚠️ МЧС</span></div><div class="mk-alert-text">${escapeHTML(m.mchs.text || "")}</div>${dealSafeUrl(m.mchs.url) ? `<a class="mk-alert-btn" href="${escapeHTML(dealSafeUrl(m.mchs.url))}" target="_blank" rel="noopener noreferrer">Прогноз МЧС</a>` : ""}</div>` : ""}
+                ${m.outages_summary ? buildMayakOutagesHTML(m.outages_summary, { inline: true }) : ""}
                 ${buildMayakNewsHTML(m.news_list)}
             </div>`;
     }
+    if (m.outages_summary) return `<div class="mk-wrap">${buildMayakOutagesHTML(m.outages_summary)}</div>`;
     if (m.week) return `<div class="mk-wrap">${typeof auroraStaleHTML === "function" ? auroraStaleHTML(m.checked_at || message.created_at, 12 * 3600000, "нажмите «Обновить»") : ""}${buildMayakWeekHTML(m.week)}</div>`;
     if (m.weather) return `<div class="mk-wrap">${stale}${buildMayakWeatherHTML(m.weather)}</div>`;
     if (m.news_list) return `<div class="mk-wrap">${stale}${buildMayakNewsHTML(m.news_list)}</div>`;
@@ -204,6 +228,25 @@ function buildMayakPanelHTML(message) {
                 <div class="aur-actions">${action("📰 Новости сейчас", "/новости")}</div>
             </section>
 
+            <section class="aur-sec${(p.addresses || []).length ? " is-on" : ""}">
+                <div class="aur-row">
+                    <span class="aur-row-icon">🏠</span>
+                    <span class="aur-row-copy"><b>Отключения по адресу</b><span>${escapeHTML((p.addresses || []).length ? "Вода, свет, тепло в ваших домах — предупрежу заранее, о каждом один раз" : "Укажите дом — предупрежу об отключении воды, света и тепла заранее")}</span></span>
+                </div>
+                ${(p.addresses || []).length ? `<div class="aur-apps">${p.addresses.map((a) => `
+                    <div class="aur-app mk-addr">
+                        <span class="aur-app-copy">
+                            <span class="aur-app-name">${escapeHTML(a.name || "")}</span>
+                            <span class="aur-app-sub">${a.outages === null || a.outages === undefined ? "проверяю каждый час" : Number(a.outages) ? `⚠️ отключений: ${Number(a.outages)}` : "✅ отключений нет"}</span>
+                        </span>
+                        <button type="button" class="aur-icon-btn danger" title="Убрать адрес" aria-label="Убрать ${escapeHTML(a.name || "")}" data-cmd="/адрес убрать #${escapeHTML(a.slug || "")}" onclick="auroraPress(event, this)">✕</button>
+                    </div>`).join("")}</div>` : ""}
+                <div class="aur-actions">
+                    <span class="aur-pill">${(p.addresses || []).length} из ${Number(p.max_addresses) || 3}</span>
+                    ${(p.addresses || []).length ? action("Проверить сейчас", "/отключения") : ""}
+                    ${(p.addresses || []).length < (Number(p.max_addresses) || 3) ? `<button type="button" class="aur-action" data-cmd="@input:/адрес " onclick="auroraPress(event, this)">＋ Добавить адрес</button>` : ""}
+                </div>
+            </section>
             <section class="aur-sec${p.quiet_on ? " is-on" : ""}">
                 <div class="aur-row">
                     <span class="aur-row-icon">🌙</span>
@@ -211,6 +254,6 @@ function buildMayakPanelHTML(message) {
                     ${sw(!!p.quiet_on, "/тихие вкл", "/тихие выкл", "Тихие часы")}
                 </div>
             </section>
-            <div class="aur-foot">Источники: Open-Meteo, VL.ru, ГУ МЧС по Приморскому краю · меню исчезнет через 15 минут после последнего нажатия</div>
+            <div class="aur-foot">Источники: Open-Meteo, VL.ru (новости и «Отключения»), ГУ МЧС по Приморскому краю · меню исчезнет через 15 минут после последнего нажатия</div>
         </div>`;
 }
