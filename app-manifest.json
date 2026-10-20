@@ -1,5 +1,5 @@
 {
- "version": "20261020-16",
+ "version": "20261020-17",
  "minShell": "1.0.0",
  "minAndroid": "1.0.0",
  "files": {
@@ -84,7 +84,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "51b2d91efe98815ea088f0d9fb5a9801b1bf463f5a5c701bccf6e9041c331ee9",
+   "sha256": "401561f05b15350cb184443f207b6331f20d69ccec3b040fa5a9f43b83617ac9",
    "size": 246956
   },
   "interactive-emoji.js": {
@@ -104,8 +104,8 @@
    "size": 2724
   },
   "mayak.js": {
-   "sha256": "1a9cc0f2f4db9703d7df4786cfba3154543e163eec0df9f5050ef0c4064902e1",
-   "size": 14024
+   "sha256": "1e254b0787a9101973e49441c641c332cebc773408d4dc4ac4dd5564589dc464",
+   "size": 14485
   },
   "noise.js": {
    "sha256": "54e5e58eacf9d7ded0f1069dcca9d0b61e957f12cf82e5cbe581a2c66c4c34a6",
@@ -144,8 +144,8 @@
    "size": 19712
   },
   "script-chats.js": {
-   "sha256": "a2fca9ba902004b17a2bf817d3ce8c5db77bebf71dc9d3bb7dc8a9be58ac7a31",
-   "size": 258973
+   "sha256": "c6ac7d176226f2676090076aaf8d82e56ae2f2a72518d006be0b0546df22a9dc",
+   "size": 259195
   },
   "script-core.js": {
    "sha256": "765f86dd6f1fa0d2cb91c2e9c6268b3a6eace44ae9c1230e3fcfa917fa9f28c1",

@@ -90,6 +90,12 @@ function buildMayakAlertHTML(message) {
         </div>`;
 }
 
+// «Доброе утро / день / вечер» — по времени, когда пришла сводка (её можно запросить и вечером).
+function mayakGreeting(iso) {
+    const h = new Date(iso).getHours();
+    return h >= 5 && h < 12 ? "☀️ Доброе утро" : h >= 12 && h < 18 ? "🌤 Добрый день" : h >= 18 && h < 23 ? "🌆 Добрый вечер" : "🌙 Доброй ночи";
+}
+
 // Сообщения Маяка: сводка (погода + МЧС + новости), отдельная погода, отдельные новости.
 function buildMayakMessageHTML(message) {
     const m = message.attachment_meta || {};
@@ -100,7 +106,7 @@ function buildMayakMessageHTML(message) {
         const day = new Date(message.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
         return `
             <div class="mk-brief">
-                <div class="mk-brief-head">☀️ Доброе утро · ${escapeHTML(day)}</div>
+                <div class="mk-brief-head">${escapeHTML(mayakGreeting(message.created_at))} · ${escapeHTML(day)}</div>
                 ${stale}
                 ${buildMayakWeatherHTML(m.weather, { compact: true })}
                 ${m.mchs ? `<div class="mk-alert warn is-inline"><div class="mk-alert-top"><span class="mk-alert-badge">⚠️ МЧС</span></div><div class="mk-alert-text">${escapeHTML(m.mchs.text || "")}</div>${dealSafeUrl(m.mchs.url) ? `<a class="mk-alert-btn" href="${escapeHTML(dealSafeUrl(m.mchs.url))}" target="_blank" rel="noopener noreferrer">Прогноз МЧС</a>` : ""}</div>` : ""}

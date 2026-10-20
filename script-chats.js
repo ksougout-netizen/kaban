@@ -3114,14 +3114,15 @@ async function openRealChat(chatId) {
         applyContactProfile({
             name: otherName,
             avatar: "🤖",
-            photo: null,
+            // Свой аватар бота (Аврора, Маяк) — как в списке чатов; без него — 🤖.
+            photo: meta?.otherUser?.avatar_url || null,
             username: meta?.otherUser?.username || "",
             bio: meta?.otherUser?.bio || "",
             isBot: true
         });
         const botStatusEl = document.querySelector(".person-status");
         if (botStatusEl) { botStatusEl.classList.remove("is-typing"); botStatusEl.textContent = botStatusText(meta?.otherUser); }
-        setContactMood("ИИ-бот", "none");
+        setContactMood(meta?.otherUser?.username === "gemini_ai" ? "ИИ-бот" : "Бот", "none");
 
         const botBlockButton = document.querySelector('[data-profile-toggle="blocked"]');
         if (botBlockButton) applyBlockUIState(botBlockButton, false);
