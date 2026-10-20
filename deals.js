@@ -80,7 +80,8 @@ function buildDealListHTML(message) {
                 </span>
             </a>`;
     }).join("");
-    return `<div class="deal-list"><div class="deal-list-head">🎁 Сейчас бесплатно</div>${rows || `<div class="deal-row-sub">Ничего не раздают</div>`}</div>`;
+    const stale = auroraStaleHTML(message.attachment_meta?.checked_at || message.created_at, 12 * 3600000, message.attachment_meta?.buttons ? "нажмите «Обновить»" : "список мог устареть");
+    return `<div class="deal-list"><div class="deal-list-head">🎁 Сейчас бесплатно</div>${stale}${rows || `<div class="deal-row-sub">Ничего не раздают</div>`}</div>`;
 }
 
 /* ---- Кнопки под сообщениями Авроры (как inline-кнопки Telegram) ----------------------------------
@@ -129,7 +130,12 @@ async function auroraPress(event, el) {
     } catch (error) {
         console.warn("Кнопка Авроры:", error);
         el.classList.remove("is-busy");
-        if (typeof toast === "function") toast(/aurora_button|function/i.test(String(error?.message)) ? "Кнопки Авроры ещё не включены на сервере" : "Не получилось — попробуйте ещё раз");
+        const why = String(error?.message || "");
+        if (typeof toast === "function") toast(
+            /not in this chat/i.test(why) ? "Авроры больше нет в этом чате — добавьте её снова"
+            : /not a participant/i.test(why) ? "Вы больше не участник этого чата"
+            : /aurora_button|function/i.test(why) ? "Кнопки Авроры ещё не включены на сервере"
+            : "Не получилось — попробуйте ещё раз");
         if (messageId && typeof updateRealMessageRow === "function") updateRealMessageRow(messageId, { force: true });
         return;
     }
@@ -167,6 +173,14 @@ function auroraDateText(iso) {
     if (days <= 0) return "сегодня";
     if (days === 1) return "вчера";
     return new Date(t).toLocaleDateString("ru-RU", { day: "numeric", month: "short" }).replace(".", "");
+}
+
+// Сообщение давно не обновлялось (карточку открыли через неделю) — честно пишем, на когда данные.
+function auroraStaleHTML(iso, maxAgeMs, hint) {
+    const t = Date.parse(iso || "");
+    if (!Number.isFinite(t) || Date.now() - t < maxAgeMs) return "";
+    const when = new Date(t).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).replace(".", "");
+    return `<div class="aur-stale">🕓 Данные на ${escapeHTML(when)} — ${escapeHTML(hint)}</div>`;
 }
 
 function auroraSwitchHTML(on, cmdOn, cmdOff, label) {
@@ -214,6 +228,7 @@ function buildAuroraPanelHTML(message) {
                 <span class="aur-title">⚙️ Аврора в этом чате</span>
                 <button type="button" class="aur-refresh" title="Обновить" aria-label="Обновить" data-cmd="/настройки" onclick="auroraPress(event, this)">⟳</button>
             </div>
+            ${auroraStaleHTML(p.updated_at || message.created_at, 6 * 3600000, "нажмите ⟳, чтобы обновить")}
             ${p.notice ? `<div class="aur-notice">${escapeHTML(p.notice)}</div>` : ""}
             ${p.paused ? `<div class="aur-paused">⏸ Сейчас я ничего не присылаю в этот чат — включите нужное ниже</div>` : ""}
 
@@ -248,6 +263,7 @@ function buildAuroraPanelHTML(message) {
                     ${apps.length < max ? `<button type="button" class="aur-action" data-cmd="@input:/новости " onclick="auroraPress(event, this)">＋ Добавить игру</button>` : ""}
                 </div>
             </section>
+            <div class="aur-foot">Эта карточка исчезнет через 15 минут после последнего нажатия · снова открыть: /настройки</div>
         </div>`;
 }
 
@@ -335,5 +351,6 @@ function buildDealDigestHTML(message) {
                 </span>
             </a>`;
     }).join("");
-    return `<div class="deal-list deal-digest"><div class="deal-list-head">🔥 Скидки дня в Steam</div>${rows}</div>`;
+    const stale = auroraStaleHTML(message.attachment_meta?.checked_at || message.created_at, 24 * 3600000, "цены могли измениться, в Steam всегда актуальные");
+    return `<div class="deal-list deal-digest"><div class="deal-list-head">🔥 Скидки дня в Steam</div>${stale}${rows}</div>`;
 }
