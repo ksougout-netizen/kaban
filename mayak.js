@@ -170,16 +170,70 @@ function buildMayakTripHTML(t) {
     return `
         <div class="tr-card">
             <div class="tr-head">
-                <span class="tr-icon">🧭</span>
+                <span class="tr-icon">${t.kind === "rail" ? "🚆" : "🧭"}</span>
                 <div class="tr-route"><span>${escapeHTML(t.from?.label || "")}</span><span class="tr-arrow">→</span><span>${escapeHTML(t.to?.label || "")}</span></div>
             </div>
             ${t.same ? `<div class="tr-empty">Это одна и та же остановка 🙂</div>` : ""}
             ${opts}
             ${empty && !t.same ? `<div class="tr-empty">Не нашёл прямых вариантов и вариантов с одной пересадкой 😕 Откройте маршрут в 2ГИС — там пешие участки и маршрутки.</div>` : ""}
-            ${railRows ? `<div class="tr-rail"><div class="tr-rail-head">🚆 Электрички и межгород</div>${railRows}</div>` : ""}
+            ${railRows ? `<div class="tr-rail">${t.kind === "rail" ? "" : `<div class="tr-rail-head">🚆 Электрички и межгород</div>`}${railRows}</div>` : ""}
+            ${t.kind === "rail" ? `<div class="tr-note">Данные: VL.ru · Транспорт. Нажмите на рейс — все остановки.</div>` : ""}
             ${maps ? `<a class="tr-maps" href="${escapeHTML(maps)}" target="_blank" rel="noopener noreferrer">🗺 Открыть маршрут в 2ГИС</a>` : ""}
             ${options.length ? `<div class="tr-note">${escapeHTML(t.note || "Время примерное.")}</div>` : ""}
         </div>`;
+}
+
+/* ---- аэропорт, аэроэкспресс, паромы ---- */
+
+function mayakFlightStatusClass(s) {
+    return /задерж|отмен/i.test(s || "") ? "bad" : /вылетел|прибыл/i.test(s || "") ? "done" : "ok";
+}
+
+function buildMayakFlightHTML(f) {
+    if (!f) return "";
+    const late = f.actual && f.actual !== f.sched;
+    return `
+        <div class="tr-card fl-card">
+            <div class="fl-top">
+                <span class="fl-dir">${f.dir === "departure" ? "🛫 Вылет" : "🛬 Прилёт"}</span>
+                <span class="fl-status ${mayakFlightStatusClass(f.status)}">${escapeHTML(f.status || "нет статуса")}</span>
+            </div>
+            <div class="fl-num">${escapeHTML(f.num || "")} <small>${escapeHTML(f.airline || "")}</small></div>
+            <div class="fl-route">${f.dir === "departure" ? `Владивосток → ${escapeHTML(f.city || "")}` : `${escapeHTML(f.city || "")} → Владивосток`}</div>
+            <div class="fl-times">
+                <div><small>${escapeHTML(f.day || "")} по расписанию</small><b class="${late ? "is-old" : ""}">${escapeHTML(f.sched || "—")}</b></div>
+                ${late ? `<div><small>фактически</small><b class="${f.delay ? "is-late" : ""}">${escapeHTML(f.actual)}</b>${f.delay ? `<em>+${Number(f.delay)} мин</em>` : ""}</div>` : ""}
+                ${f.terminal ? `<div><small>терминал</small><b>${escapeHTML(f.terminal)}</b></div>` : ""}
+            </div>
+            ${f.aircraft ? `<div class="tr-note">${escapeHTML(f.aircraft)}</div>` : ""}
+            ${f.tracking ? `<div class="fl-live">🔔 Слежу: карточка обновляется сама, о задержке и посадке напишу${f.dir === "arrival" ? ", а за ~40 минут до посадки — напомню выезжать" : ""}</div>` : ""}
+            <div class="tr-note">Данные: онлайн-табло аэропорта (VL.ru) · ${escapeHTML(mayakTimeText(f.checked_at))}</div>
+        </div>`;
+}
+
+function buildMayakBoardHTML(b) {
+    const items = Array.isArray(b?.items) ? b.items : [];
+    const rows = items.map((f) => `
+        <div class="fl-row">
+            <span class="fl-row-time">${escapeHTML(f.actual && f.actual !== f.sched ? f.actual : f.sched)}${f.actual && f.actual !== f.sched ? `<s>${escapeHTML(f.sched)}</s>` : ""}${f.day !== "сегодня" ? `<small>${escapeHTML(f.day)}</small>` : ""}</span>
+            <span class="fl-row-copy"><b>${escapeHTML(f.city || "")}</b><small>${escapeHTML([f.num, f.airline, f.terminal && `терм. ${f.terminal}`].filter(Boolean).join(" · "))}</small></span>
+            <span class="fl-status ${mayakFlightStatusClass(f.status)}">${escapeHTML(f.status || "")}</span>
+        </div>`).join("");
+    return `<div class="tr-card"><div class="tr-head"><span class="tr-icon">${b.dir === "departure" ? "🛫" : "🛬"}</span><div class="tr-route"><span>${b.dir === "departure" ? "Вылет из Владивостока" : "Прилёт во Владивосток"}${b.city ? ` · ${escapeHTML(b.city)}` : ""}</span></div></div>${rows || `<div class="tr-empty">Рейсов не нашёл</div>`}<div class="tr-note">Номер рейса из списка → «/рейс SU-5803» — карточка и слежка</div></div>`;
+}
+
+function buildMayakAeroexpressHTML(a) {
+    const col = (title, list) => `<div class="ae-col"><div class="tr-rail-head">${title}</div>${(list || []).map((r) => `<div class="tr-rail-row"><span class="tr-rail-time">${escapeHTML(r.dep)}<small>→ ${escapeHTML(r.arr)}</small></span><span class="tr-rail-copy"><span>№${escapeHTML(r.num)}</span><small>${escapeHTML([r.day === "завтра" ? "завтра" : "", r.days].filter(Boolean).join(" · "))}</small></span></div>`).join("") || `<div class="tr-empty">нет рейсов</div>`}</div>`;
+    return `<div class="tr-card"><div class="tr-head"><span class="tr-icon">🚄</span><div class="tr-route"><span>Аэроэкспресс · Владивосток ⇄ Кневичи</span></div></div>${col("В аэропорт", a?.to_airport)}${col("Из аэропорта", a?.from_airport)}<div class="tr-note">Данные: VL.ru · Транспорт</div></div>`;
+}
+
+function buildMayakFerriesHTML(f) {
+    const block = (title, list) => `<div class="tr-rail-head">${title}</div>${(list || []).map((r) => `
+        <div class="fe-route">
+            <b>${escapeHTML(r.route)}</b>
+            ${(r.variants || []).map((v) => `<div class="fe-var"><span class="fe-times">${(v.times || []).map((t) => `<span>${escapeHTML(t)}</span>`).join("")}</span><small>${escapeHTML([v.days, v.travel, v.price].filter(Boolean).join(" · "))}</small></div>`).join("")}
+        </div>`).join("")}`;
+    return `<div class="tr-card"><div class="tr-head"><span class="tr-icon">⛴</span><div class="tr-route"><span>Паромы и катера</span></div></div>${block("Из Владивостока", f?.out)}${block("Во Владивосток", f?.in)}<div class="tr-empty">☎️ Перед поездкой уточняйте по телефону <b>${escapeHTML(f?.phone || "")}</b> — в шторм рейсы отменяют</div></div>`;
 }
 
 function buildMayakRouteInfoHTML(list) {
@@ -234,6 +288,10 @@ function buildMayakMessageHTML(message) {
                 ${buildMayakNewsHTML(m.news_list)}
             </div>`;
     }
+    if (m.flight) return buildMayakFlightHTML(m.flight);
+    if (m.flight_board) return buildMayakBoardHTML(m.flight_board);
+    if (m.aeroexpress) return buildMayakAeroexpressHTML(m.aeroexpress);
+    if (m.ferries) return buildMayakFerriesHTML(m.ferries);
     if (m.trip) return buildMayakTripHTML(m.trip);
     if (m.route_info) return `<div class="mk-wrap">${buildMayakRouteInfoHTML(m.route_info)}</div>`;
     if (m.outages_summary) return `<div class="mk-wrap">${buildMayakOutagesHTML(m.outages_summary)}</div>`;
@@ -326,6 +384,10 @@ function buildMayakPanelHTML(message) {
                 <div class="aur-actions">
                     <button type="button" class="aur-action" data-cmd="@input:/маршрут " onclick="auroraPress(event, this)">🧭 Как добраться</button>
                     <button type="button" class="aur-action" data-cmd="@input:/автобус " onclick="auroraPress(event, this)">🚌 Автобус №</button>
+                    <button type="button" class="aur-action" data-cmd="/электричка" onclick="auroraPress(event, this)">🚆 Электрички</button>
+                    <button type="button" class="aur-action" data-cmd="/рейс" onclick="auroraPress(event, this)">✈️ Аэропорт</button>
+                    <button type="button" class="aur-action" data-cmd="/аэроэкспресс" onclick="auroraPress(event, this)">🚄 Аэроэкспресс</button>
+                    <button type="button" class="aur-action" data-cmd="/паром" onclick="auroraPress(event, this)">⛴ Паромы</button>
                 </div>
             </section>
 

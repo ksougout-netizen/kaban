@@ -1,5 +1,5 @@
 {
- "version": "20261021-2",
+ "version": "20261021-3",
  "minShell": "1.0.0",
  "minAndroid": "1.0.0",
  "files": {
@@ -36,8 +36,8 @@
    "size": 45738
   },
   "deals.js": {
-   "sha256": "4a915365656cf260e034617efe02ff72c9263310f7c6858e804ef3f9198180fc",
-   "size": 29443
+   "sha256": "78ab7d87b7fd17f6ccb9a08817437b3b328fbafc4cc4ab0d644f7496fa9bd1b2",
+   "size": 30009
   },
   "delight.js": {
    "sha256": "a419f3f08a969858f948db4edcb5131c3da58888e63f9d7d2baca5fcd4981a86",
@@ -84,7 +84,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "f6657ab0edfe1d8a2f5295a0459b76e2a2186d44654af38fa3e3be2cad8af0ff",
+   "sha256": "230b10462cfc30aa5b865e4639e5488ef08ec81781a3b1dfbf26e50e95eecf45",
    "size": 246914
   },
   "interactive-emoji.js": {
@@ -104,8 +104,8 @@
    "size": 2724
   },
   "mayak.js": {
-   "sha256": "6423224553b8dae8fd6a5ea605af47316e57d798b7e20839fe8fca546435a3fc",
-   "size": 27452
+   "sha256": "72f82ca14d92b2d74c71c7ac7a585dd929adc5970a46e820d034bc04aba8d4c2",
+   "size": 33830
   },
   "noise.js": {
    "sha256": "54e5e58eacf9d7ded0f1069dcca9d0b61e957f12cf82e5cbe581a2c66c4c34a6",
@@ -152,8 +152,8 @@
    "size": 457092
   },
   "script-messages.js": {
-   "sha256": "3412b1d1bb867e3170ccf6fe732b023a4cdc7fe8dea858bde001d92824a17479",
-   "size": 132667
+   "sha256": "4cc1402936e6491a2e3b43462a3f58914e2495471bbe36275bb6cc6388b45931",
+   "size": 132727
   },
   "script-ui.js": {
    "sha256": "c8ed27baf650b89a7022473c857fa4d418210e0fa1de1bd55be1ed19bf42e96a",
@@ -196,8 +196,8 @@
    "size": 24010
   },
   "style.css": {
-   "sha256": "7a1c55556e78339b225ddbef30dc5bd308a4aea6ad8e7a4f836502573b3b73ac",
-   "size": 526866
+   "sha256": "c376ce13fa8e1206d2f94b5e38f4de37a2261db2240dfd494ece1ccf6b1c820e",
+   "size": 529472
   },
   "supabaseClient.js": {
    "sha256": "96dfb90c703b96cdd96f0b7afd056f622616ae6a9c5ce760afd14c46b0056deb",

@@ -10670,6 +10670,36 @@ a.tr-rail-row[href]:hover { background: color-mix(in srgb, var(--accent) 12%, tr
 .tr-dir-meta b { color: #0284c7; }
 .tr-dir-stops { margin: 0 0 8px; padding: 0 12px 0 34px; font-size: 13px; line-height: 1.6; max-height: 260px; overflow-y: auto; }
 
+/* Аэропорт, аэроэкспресс, паромы */
+.fl-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.fl-dir { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.fl-status { flex: none; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 800; background: color-mix(in srgb, #22c55e 16%, transparent); color: #15803d; }
+.fl-status.bad { background: color-mix(in srgb, #ef4444 16%, transparent); color: #dc2626; }
+.fl-status.done { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--muted); }
+.fl-num { font-size: 22px; font-weight: 800; letter-spacing: .01em; }
+.fl-num small { font-size: 13px; font-weight: 600; color: var(--muted); }
+.fl-route { font-size: 14.5px; font-weight: 650; }
+.fl-times { display: flex; flex-wrap: wrap; gap: 8px; }
+.fl-times > div { display: flex; flex-direction: column; padding: 7px 11px; border-radius: 12px; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.fl-times small { font-size: 11px; color: var(--muted); }
+.fl-times b { font-size: 19px; }
+.fl-times b.is-old { text-decoration: line-through; color: var(--muted); font-size: 16px; }
+.fl-times b.is-late { color: #dc2626; }
+.fl-times em { font-size: 11.5px; font-style: normal; color: #dc2626; font-weight: 700; }
+.fl-live { padding: 8px 10px; border-radius: 11px; font-size: 12.5px; background: color-mix(in srgb, #0ea5e9 12%, transparent); }
+.fl-row { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 11px; background: color-mix(in srgb, var(--text) 4%, transparent); }
+.fl-row-time { display: flex; flex-direction: column; min-width: 50px; font-size: 15px; font-weight: 800; }
+.fl-row-time s, .fl-row-time small { font-size: 11px; font-weight: 500; color: var(--muted); }
+.fl-row-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 13px; }
+.fl-row-copy b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-row-copy small { font-size: 11.5px; color: var(--muted); }
+.ae-col { display: flex; flex-direction: column; gap: 4px; }
+.fe-route { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 12px; background: color-mix(in srgb, var(--text) 4%, transparent); font-size: 13.5px; }
+.fe-var { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.fe-times { display: flex; gap: 4px; }
+.fe-times span { padding: 2px 8px; border-radius: 8px; font-weight: 800; background: color-mix(in srgb, #0ea5e9 14%, transparent); }
+.fe-var small { font-size: 12px; color: var(--muted); }
+
 /* Отключения по адресу */
 .mk-off { width: min(360px, 74vw); display: flex; flex-direction: column; gap: 7px; padding: 12px; border-radius: 16px; background: var(--surface); color: var(--text); border: 1px solid color-mix(in srgb, var(--text) 9%, transparent); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
 .mk-off.is-inline { width: 100%; padding: 0; border: 0; box-shadow: none; background: none; }
