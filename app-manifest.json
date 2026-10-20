@@ -1,5 +1,5 @@
 {
- "version": "20261021-3",
+ "version": "20261021-4",
  "minShell": "1.0.0",
  "minAndroid": "1.0.0",
  "files": {
@@ -84,7 +84,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "230b10462cfc30aa5b865e4639e5488ef08ec81781a3b1dfbf26e50e95eecf45",
+   "sha256": "65562efb63a37ef40c9f807837fd452217029a379defb34ca70a77cdcfc84f28",
    "size": 246914
   },
   "interactive-emoji.js": {
@@ -104,8 +104,8 @@
    "size": 2724
   },
   "mayak.js": {
-   "sha256": "72f82ca14d92b2d74c71c7ac7a585dd929adc5970a46e820d034bc04aba8d4c2",
-   "size": 33830
+   "sha256": "a89fe6805cba230d91168970793edfe4006a7263acd4909b1ffb07d515987208",
+   "size": 37797
   },
   "noise.js": {
    "sha256": "54e5e58eacf9d7ded0f1069dcca9d0b61e957f12cf82e5cbe581a2c66c4c34a6",

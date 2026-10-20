@@ -301,6 +301,54 @@ function buildMayakMessageHTML(message) {
     return "";
 }
 
+/* ---- Места для Маяка ищет сама программа ----------------------------------------------------------
+   С облачного сервера Supabase карты (OpenStreetMap: Nominatim, Photon) отвечают плохо, а с телефона
+   и ПК — быстро. Поэтому перед отправкой «как добраться с … до …» в чат с Маяком программа находит оба
+   места и кладёт координаты в сообщение (attachment_meta.geo) — Маяку не нужно ходить на карту. */
+
+function mayakParseTrip(text) {
+    const t = String(text || "").replace(/@mayak_bot/gi, "").replace(/[?!.]+$/g, "").trim();
+    const dash = /^\/?(?:маршрут|доехать|добраться|путь)\s+(.+?)\s*(?:—|–|-|→|->|>)\s*(.+)$/i.exec(t);
+    if (dash) return { from: dash[1].trim(), to: dash[2].trim() };
+    const body = t.replace(/^\/?маршрут\s+/i, "")
+        .replace(/^(?:а\s+)?(?:как|чем|на\s+ч[её]м)\s+(?:мне\s+|нам\s+|можно\s+)?(?:добраться|доехать|проехать|попасть|ехать|уехать)\s*/i, "")
+        .replace(/^(?:добраться|доехать|проехать)\s+/i, "");
+    const m = /^(?:с|со|от|из)\s+(.+?)\s+(?:до|в|во|на|к)\s+(.+)$/i.exec(body);
+    return m ? { from: m[1].trim(), to: m[2].trim() } : null;
+}
+
+const MAYAK_BOX = { nominatim: "131.70,43.35,132.25,42.90", photon: "131.70,42.90,132.25,43.35" };
+async function mayakGeocode(text) {
+    const timeout = (ms) => new Promise((r) => setTimeout(() => r(null), ms));
+    const nominatim = fetch(`https://nominatim.openstreetmap.org/search?${new URLSearchParams({ format: "jsonv2", limit: "1", countrycodes: "ru", "accept-language": "ru", viewbox: MAYAK_BOX.nominatim, bounded: "1", q: text })}`)
+        .then((r) => r.ok ? r.json() : []).then((j) => (j[0] ? { lat: Number(j[0].lat), lon: Number(j[0].lon), name: j[0].name || "" } : null)).catch(() => null);
+    const photon = fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&bbox=${MAYAK_BOX.photon}&limit=1`)
+        .then((r) => r.ok ? r.json() : null).then((j) => { const f = j?.features?.[0]; return f ? { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: f.properties?.name || "" } : null; }).catch(() => null);
+    // Первый найденный ответ, но не дольше 3,5 секунды — без координат Маяк всё равно ответит.
+    return new Promise((resolve) => {
+        let left = 2;
+        const done = (v) => { if (v) resolve(v); else if (!--left) resolve(null); };
+        nominatim.then(done); photon.then(done); timeout(3500).then(() => resolve(null));
+    });
+}
+
+(function mayakGeoAssist() {
+    if (typeof KabanAPI === "undefined" || typeof KabanAPI.sendMessage !== "function" || KabanAPI.__mayakGeo) return;
+    const original = KabanAPI.sendMessage.bind(KabanAPI);
+    KabanAPI.__mayakGeo = true;
+    KabanAPI.sendMessage = async function (chatId, opts = {}) {
+        try {
+            const inMayakChat = typeof currentChatId !== "undefined" && chatId === currentChatId && typeof botsInCurrentChat === "function" && botsInCurrentChat().includes("mayak");
+            const q = inMayakChat && opts && (opts.type || "text") === "text" && !opts.encryptionIv && typeof opts.text === "string" ? mayakParseTrip(opts.text) : null;
+            if (q) {
+                const [a, b] = await Promise.all([mayakGeocode(q.from), mayakGeocode(q.to)]);
+                if (a || b) opts = { ...opts, attachmentMeta: { ...(opts.attachmentMeta || {}), geo: { from: a && { ...a, text: q.from }, to: b && { ...b, text: q.to } } } };
+            }
+        } catch (e) { console.warn("Маяк: не удалось найти места на карте", e); }
+        return original(chatId, opts);
+    };
+})();
+
 /* ---- «⚙️ Маяк в этом чате» (attachment_meta.mayak_panel) ---- */
 
 function buildMayakPanelHTML(message) {
