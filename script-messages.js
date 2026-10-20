@@ -1341,7 +1341,7 @@ function messageMentionsMe(message) {
 // Карточка Маяка (погода, новости, предупреждение, утренняя сводка) — рисуется без пузыря.
 function isMayakCard(message) {
     const m = message.attachment_meta;
-    return !!(m && m.bot === "mayak" && (m.weather || m.news_list || m.alert || m.brief));
+    return !!(m && m.bot === "mayak" && (m.weather || m.week || m.news_list || m.alert || m.brief));
 }
 
 function buildMessageRowInnerHTML(message, isMine) {

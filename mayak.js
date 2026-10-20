@@ -53,6 +53,35 @@ function buildMayakWeatherHTML(w, { compact = false } = {}) {
         </div>`;
 }
 
+// Прогноз на неделю (attachment_meta.week): строка на день, полоска температуры от минимума до
+// максимума недели, осадки, ветер; опасные дни отмечены.
+function buildMayakWeekHTML(wk) {
+    const days = Array.isArray(wk?.days) ? wk.days : [];
+    if (!days.length) return "";
+    const lo = Math.min(...days.map((d) => Number(d.min)).filter(Number.isFinite));
+    const hi = Math.max(...days.map((d) => Number(d.max)).filter(Number.isFinite));
+    const span = Math.max(1, hi - lo);
+    const rows = days.map((d) => {
+        const left = ((Number(d.min) - lo) / span) * 100, width = Math.max(6, ((Number(d.max) - Number(d.min)) / span) * 100);
+        const rain = Number(d.mm) > 0 || Number(d.pp) >= 40
+            ? `💧${Number(d.pp) >= 0 && d.pp !== null ? `${Number(d.pp)}%` : ""}${Number(d.mm) ? ` ${Number(d.mm)} мм` : ""}` : "";
+        const snow = Number(d.snow) >= 1 ? `❄️ ${Number(d.snow)} см` : "";
+        const wind = Number(d.gust) >= 15 ? `💨 ${Number(d.gust)} м/с` : "";
+        return `
+            <div class="wk-row${d.warn ? " is-warn" : ""}">
+                <span class="wk-day">${escapeHTML(d.label || d.date || "")}</span>
+                <span class="wk-icon" title="${escapeHTML(d.desc || "")}">${escapeHTML(d.icon || "")}</span>
+                <span class="wk-temps">
+                    <span class="wk-min">${escapeHTML(mayakSigned(d.min))}</span>
+                    <span class="wk-bar"><span style="left:${left.toFixed(1)}%;width:${Math.min(100 - left, width).toFixed(1)}%"></span></span>
+                    <span class="wk-max">${escapeHTML(mayakSigned(d.max))}</span>
+                </span>
+                <span class="wk-extra">${escapeHTML([d.warn ? "⚠️" : "", snow || rain, wind].filter(Boolean).join(" · ")) || "&nbsp;"}</span>
+            </div>`;
+    }).join("");
+    return `<div class="wk-card"><div class="wk-head">📅 ${escapeHTML(wk.city || "")} · на неделю</div>${rows}</div>`;
+}
+
 function mayakTimeText(iso) {
     const t = Date.parse(iso || "");
     if (!Number.isFinite(t)) return "";
@@ -113,6 +142,7 @@ function buildMayakMessageHTML(message) {
                 ${buildMayakNewsHTML(m.news_list)}
             </div>`;
     }
+    if (m.week) return `<div class="mk-wrap">${typeof auroraStaleHTML === "function" ? auroraStaleHTML(m.checked_at || message.created_at, 12 * 3600000, "нажмите «Обновить»") : ""}${buildMayakWeekHTML(m.week)}</div>`;
     if (m.weather) return `<div class="mk-wrap">${stale}${buildMayakWeatherHTML(m.weather)}</div>`;
     if (m.news_list) return `<div class="mk-wrap">${stale}${buildMayakNewsHTML(m.news_list)}</div>`;
     return "";
@@ -148,7 +178,7 @@ function buildMayakPanelHTML(message) {
                     <span class="aur-row-copy"><b>${escapeHTML(p.city_name || "Владивосток")}</b><span>${wn ? `Сейчас ${escapeHTML(wn.icon || "")} ${escapeHTML(mayakSigned(wn.temp))}, ${escapeHTML(String(wn.desc || "").toLowerCase())}` : "Город для погоды и предупреждений"}</span></span>
                 </div>
                 <div class="aur-chips"><span class="aur-chips-label">Город:</span>${cities}</div>
-                <div class="aur-actions">${action("🌦 Погода сейчас", "/погода")}</div>
+                <div class="aur-actions">${action("📅 На неделю", "/неделя")}${action("🌦 Погода сейчас", "/погода")}</div>
             </section>
 
             <section class="aur-sec${p.morning_on ? " is-on" : ""}">
