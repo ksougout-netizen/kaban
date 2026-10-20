@@ -1338,6 +1338,12 @@ function messageMentionsMe(message) {
     return new RegExp(`(^|[^\\w@])@${username.replace(/[^a-zA-Z0-9_]/g, "")}\\b`, "i").test(message.text);
 }
 
+// Карточка Маяка (погода, новости, предупреждение, утренняя сводка) — рисуется без пузыря.
+function isMayakCard(message) {
+    const m = message.attachment_meta;
+    return !!(m && m.bot === "mayak" && (m.weather || m.news_list || m.alert || m.brief));
+}
+
 function buildMessageRowInnerHTML(message, isMine) {
 
     const time = new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1382,6 +1388,10 @@ function buildMessageRowInnerHTML(message, isMine) {
             ? buildDealDigestHTML(message)
             : message.attachment_meta?.aurora_panel && typeof buildAuroraPanelHTML === "function"
             ? buildAuroraPanelHTML(message)  // «⚙️ Аврора в этом чате» с переключателями (deals.js)
+            : message.attachment_meta?.mayak_panel && typeof buildMayakPanelHTML === "function"
+            ? buildMayakPanelHTML(message)   // «⚙️ Маяк в этом чате» (mayak.js)
+            : isMayakCard(message) && typeof buildMayakMessageHTML === "function"
+            ? buildMayakMessageHTML(message) // погода, новости, предупреждения, сводка Маяка (mayak.js)
             : message.type === "text"
             ? `<span class="message-text">${renderFormattedText(message.text || "")}</span>`
             : buildAttachmentHTML(message) + buildCaptionHTML(message))
@@ -1400,7 +1410,7 @@ function buildMessageRowInnerHTML(message, isMine) {
     // сообщений) — обычный класс решает ту же задачу без этой цены.
     // has-block — в пузыре не текст, а «карточка» (игра, опрос, файл, голосовое):
     // время и галочки тогда встают отдельной строкой СПРАВА, а не прилипают слева под карточкой.
-    const isBlockBody = !message.deleted_at && (message.attachment_meta?.poll || message.attachment_meta?.game || message.attachment_meta?.deal || message.attachment_meta?.deal_list || message.attachment_meta?.deal_digest || message.attachment_meta?.aurora_panel || message.attachment_meta?.buttons || message.type !== "text");
+    const isBlockBody = !message.deleted_at && (message.attachment_meta?.poll || message.attachment_meta?.game || message.attachment_meta?.deal || message.attachment_meta?.deal_list || message.attachment_meta?.deal_digest || message.attachment_meta?.aurora_panel || message.attachment_meta?.mayak_panel || isMayakCard(message) || message.attachment_meta?.buttons || message.type !== "text");
     // ФОТО / ВИДЕО / АЛЬБОМ — как в Telegram: снимок занимает пузырь целиком (без рамки вокруг),
     // время и галочки — таблеткой поверх снимка; с подписью — снимок сверху, текст под ним.
     // media-only: нет подписи; media-bare: ещё и нет шапки (имя/ответ/пересылка) — пузыря как такового нет.
@@ -1413,7 +1423,7 @@ function buildMessageRowInnerHTML(message, isMine) {
             + (message.type === "video" ? " media-video" : "");
     const mentionClass = currentChatType === "group" && messageMentionsMe(message) ? " mentions-me" : "";
     // Карточки Авроры — без пузыря (у карточки свой фон): в синем пузыре подписи не читались.
-    const dealClass = !message.deleted_at && (message.attachment_meta?.deal || message.attachment_meta?.deal_list || message.attachment_meta?.deal_digest || message.attachment_meta?.aurora_panel) && typeof buildDealHTML === "function" ? " has-deal" : "";
+    const dealClass = !message.deleted_at && (message.attachment_meta?.deal || message.attachment_meta?.deal_list || message.attachment_meta?.deal_digest || message.attachment_meta?.aurora_panel || message.attachment_meta?.mayak_panel || isMayakCard(message)) && typeof buildDealHTML === "function" ? " has-deal" : "";
     const bubbleClass = (bodyText.includes('class="video-circle"') ? "message has-video-circle" : isBlockBody ? "message has-block" : "message") + mediaClass + mentionClass + dealClass;
 
     return `

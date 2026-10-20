@@ -2666,7 +2666,9 @@ function formatLastSeen(lastSeenIso) {
 // из базы (см. cachedChatRows). typing — временно перекрывает оба.
 // Подпись бота в шапке чата: у каждого своя.
 function botStatusText(user) {
-    return user?.username === "aurora_bot" ? "Раздачи, скидки и новости игр" : "ИИ-бот · Gemini";
+    return user?.username === "aurora_bot" ? "Раздачи, скидки и новости игр"
+        : user?.username === "mayak_bot" ? "Погода и новости Приморья"
+        : "ИИ-бот · Gemini";
 }
 
 function renderChatHeaderStatus({ online, lastSeen, typing }) {

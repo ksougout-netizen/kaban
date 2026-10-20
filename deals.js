@@ -115,6 +115,9 @@ async function auroraPress(event, el) {
     }
     if (!cmd.startsWith("/") || el.classList.contains("is-busy")) return;
     const messageId = el.closest(".message-row")?.dataset.messageId || null;
+    // Какому боту: сообщения Маяка помечены attachment_meta.bot = "mayak"; меню «/» передаёт data-bot.
+    const bot = el.dataset.bot || (messageId && typeof realMessagesById !== "undefined" ? realMessagesById.get(messageId)?.attachment_meta?.bot : null) || "aurora";
+    const botName = bot === "mayak" ? "Маяка" : "Авроры";
     // Сразу видно, что нажалось: переключатель перещёлкивается, кнопка «думает».
     el.classList.add("is-busy");
     if (el.classList.contains("aur-switch")) {
@@ -125,16 +128,16 @@ async function auroraPress(event, el) {
     }
     auroraPressedAt.set(el, Date.now());
     try {
-        const { error } = await getSupabaseClient().rpc("aurora_button", { p_chat: currentChatId, p_message: messageId, p_cmd: cmd });
+        const { error } = await getSupabaseClient().rpc(bot === "mayak" ? "mayak_button" : "aurora_button", { p_chat: currentChatId, p_message: messageId, p_cmd: cmd });
         if (error) throw error;
     } catch (error) {
-        console.warn("Кнопка Авроры:", error);
+        console.warn(`Кнопка ${botName}:`, error);
         el.classList.remove("is-busy");
         const why = String(error?.message || "");
         if (typeof toast === "function") toast(
-            /not in this chat/i.test(why) ? "Авроры больше нет в этом чате — добавьте её снова"
+            /not in this chat/i.test(why) ? `${bot === "mayak" ? "Маяка" : "Авроры"} больше нет в этом чате — добавьте снова`
             : /not a participant/i.test(why) ? "Вы больше не участник этого чата"
-            : /aurora_button|function/i.test(why) ? "Кнопки Авроры ещё не включены на сервере"
+            : /_button|function/i.test(why) ? `Кнопки ${botName} ещё не включены на сервере`
             : "Не получилось — попробуйте ещё раз");
         if (messageId && typeof updateRealMessageRow === "function") updateRealMessageRow(messageId, { force: true });
         return;
@@ -293,25 +296,39 @@ function buildAuroraPanelHTML(message) {
         </div>`;
 }
 
-/* ---- Подсказка команд при вводе «/» в чате с Авророй (как меню команд бота в Telegram) ---- */
+/* ---- Подсказка команд при вводе «/» в чате с ботами (как меню команд бота в Telegram) ---- */
 
-const AURORA_COMMANDS = [
-    { c: "/настройки", d: "Что включено и когда я напишу" },
-    { c: "/сейчас", d: "Бесплатные игры прямо сейчас" },
-    { c: "/скидки", d: "Лучшие скидки прямо сейчас" },
-    { c: "/новости ", d: "Следить за игрой: /новости Название", arg: true },
-    { c: "/помощь", d: "Что я умею" },
-    { c: "/стоп", d: "Пауза — ничего не присылать" }
-];
+const BOT_COMMANDS = {
+    aurora: { title: "Аврора · игры", items: [
+        { c: "/настройки", d: "Что включено и когда я напишу" },
+        { c: "/сейчас", d: "Бесплатные игры прямо сейчас" },
+        { c: "/скидки", d: "Лучшие скидки прямо сейчас" },
+        { c: "/новости ", d: "Следить за игрой: /новости Название", arg: true },
+        { c: "/помощь", d: "Что я умею" },
+        { c: "/стоп", d: "Пауза — ничего не присылать" }
+    ] },
+    mayak: { title: "Маяк · Приморье", items: [
+        { c: "/погода", d: "Погода сейчас и на день" },
+        { c: "/новости", d: "Главное во Владивостоке" },
+        { c: "/сводка", d: "Утренняя сводка прямо сейчас" },
+        { c: "/город ", d: "Другой город края: /город Находка", arg: true },
+        { c: "/настройки", d: "Что включено и когда я напишу" },
+        { c: "/помощь", d: "Что я умею" }
+    ] }
+};
+const BOT_USERNAMES = { aurora_bot: "aurora", mayak_bot: "mayak" };
 
-function auroraInCurrentChat() {
-    if (typeof currentChatId === "undefined" || !currentChatId || (typeof currentChatIsSecret !== "undefined" && currentChatIsSecret)) return false;
+// Какие боты есть в открытом чате: ["aurora", "mayak"].
+function botsInCurrentChat() {
+    if (typeof currentChatId === "undefined" || !currentChatId || (typeof currentChatIsSecret !== "undefined" && currentChatIsSecret)) return [];
     if (typeof currentChatType !== "undefined" && currentChatType === "group") {
-        return [...(currentChatMembersById?.values?.() || [])].some((u) => u?.username === "aurora_bot");
+        return [...new Set([...(currentChatMembersById?.values?.() || [])].map((u) => BOT_USERNAMES[u?.username]).filter(Boolean))];
     }
     const row = typeof cachedChatRows !== "undefined" ? cachedChatRows.find((r) => r.chat_id === currentChatId) : null;
-    return row?.otherUser?.username === "aurora_bot";
+    const b = BOT_USERNAMES[row?.otherUser?.username];
+    return b ? [b] : [];
 }
+const auroraInCurrentChat = () => botsInCurrentChat().includes("aurora");
 
 (function auroraSlashMenu() {
     const input = document.getElementById("input");
@@ -321,14 +338,16 @@ function auroraInCurrentChat() {
     menu.className = "aur-slash";
     menu.hidden = true;
     menu.setAttribute("role", "listbox");
-    menu.setAttribute("aria-label", "Команды Авроры");
+    menu.setAttribute("aria-label", "Команды ботов");
     host.appendChild(menu);
 
+    let shown = [];
     const hide = () => { menu.hidden = true; };
     const run = (item) => {
         hide();
         if (item.arg) {
-            input.value = item.c;
+            // В группе с двумя ботами набранная команда Маяку — с обращением, иначе её возьмёт Аврора.
+            input.value = item.bot === "mayak" && botsInCurrentChat().length > 1 ? `${item.c.trim()} @mayak_bot ` : item.c;
             input.focus();
             if (typeof resizeComposer === "function") resizeComposer();
             if (typeof updateComposerAction === "function") updateComposerAction();
@@ -337,26 +356,33 @@ function auroraInCurrentChat() {
         input.value = "";
         if (typeof resizeComposer === "function") resizeComposer();
         if (typeof updateComposerAction === "function") updateComposerAction();
-        // Как кнопка: команда уходит Авроре без сообщения в чате.
+        // Как кнопка: команда уходит нужному боту без сообщения в чате.
         const fake = document.createElement("button");
         fake.dataset.cmd = item.c;
+        fake.dataset.bot = item.bot;
         auroraPress({ preventDefault() {}, stopPropagation() {} }, fake);
     };
 
     input.addEventListener("input", () => {
         const v = input.value;
-        if (!/^\/[\p{L}]*$/u.test(v) || !auroraInCurrentChat()) return hide();
+        const bots = /^\/[\p{L}]*$/u.test(v) ? botsInCurrentChat() : [];
+        if (!bots.length) return hide();
         const q = v.slice(1).toLocaleLowerCase();
-        const items = AURORA_COMMANDS.filter((x) => x.c.slice(1).startsWith(q));
-        if (!items.length) return hide();
-        menu.innerHTML = `<div class="aur-slash-head">Команды Авроры</div>` + items.map((x, i) =>
-            `<button type="button" class="aur-slash-item" data-i="${AURORA_COMMANDS.indexOf(x)}" role="option"><b>${escapeHTML(x.c.trim())}</b><span>${escapeHTML(x.d)}</span></button>`).join("");
+        shown = [];
+        const html = bots.map((bot) => {
+            const items = BOT_COMMANDS[bot].items.filter((x) => x.c.slice(1).startsWith(q)).map((x) => ({ ...x, bot }));
+            if (!items.length) return "";
+            const head = `<div class="aur-slash-head">${escapeHTML(bots.length > 1 ? BOT_COMMANDS[bot].title : `Команды: ${BOT_COMMANDS[bot].title}`)}</div>`;
+            return head + items.map((x) => { shown.push(x); return `<button type="button" class="aur-slash-item" data-i="${shown.length - 1}" role="option"><b>${escapeHTML(x.c.trim())}</b><span>${escapeHTML(x.d)}</span></button>`; }).join("");
+        }).join("");
+        if (!shown.length) return hide();
+        menu.innerHTML = html;
         menu.hidden = false;
     });
     menu.addEventListener("mousedown", (e) => e.preventDefault());   // фокус остаётся в строке ввода
     menu.addEventListener("click", (e) => {
         const b = e.target.closest(".aur-slash-item");
-        if (b) run(AURORA_COMMANDS[Number(b.dataset.i)]);
+        if (b && shown[Number(b.dataset.i)]) run(shown[Number(b.dataset.i)]);
     });
     input.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) { e.stopPropagation(); hide(); } });
     input.addEventListener("blur", () => setTimeout(hide, 150));

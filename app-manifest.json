@@ -1,5 +1,5 @@
 {
- "version": "20261020-15",
+ "version": "20261020-16",
  "minShell": "1.0.0",
  "minAndroid": "1.0.0",
  "files": {
@@ -36,8 +36,8 @@
    "size": 45738
   },
   "deals.js": {
-   "sha256": "d161560bb93b6843c3e531530cccad808cebe53da83cda708d4a613b8a6533b9",
-   "size": 26820
+   "sha256": "4e4ee0fb23827a95fb915d990d5647787424989487b02ac6c7536ea2d536b2c0",
+   "size": 28897
   },
   "delight.js": {
    "sha256": "a419f3f08a969858f948db4edcb5131c3da58888e63f9d7d2baca5fcd4981a86",
@@ -84,8 +84,8 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "d0b542e72c6716adf5f71c2e83dc5f6fc127f8c92cd4949af97f9f12718ae9e7",
-   "size": 246908
+   "sha256": "51b2d91efe98815ea088f0d9fb5a9801b1bf463f5a5c701bccf6e9041c331ee9",
+   "size": 246956
   },
   "interactive-emoji.js": {
    "sha256": "50eb03166a26a732e6e758d77517750ca1ce2fe7274e0302e46bffd24345adaa",
@@ -98,6 +98,14 @@
   "manifest.json": {
    "sha256": "57c6f80bd3b04a43c50ea2bc4af987fbff264cede5f66c503c8353bf88a7589f",
    "size": 778
+  },
+  "mayak-avatar.svg": {
+   "sha256": "7f95ba833f2181724e9e4b321b850f9c1d4a6ab982a7a835f428fc0be4f8fca7",
+   "size": 2724
+  },
+  "mayak.js": {
+   "sha256": "1a9cc0f2f4db9703d7df4786cfba3154543e163eec0df9f5050ef0c4064902e1",
+   "size": 14024
   },
   "noise.js": {
    "sha256": "54e5e58eacf9d7ded0f1069dcca9d0b61e957f12cf82e5cbe581a2c66c4c34a6",
@@ -136,16 +144,16 @@
    "size": 19712
   },
   "script-chats.js": {
-   "sha256": "40d7af725ffb2600098d9b7c6a606a5ff5aea79e5b04f82d38c82560e2f850a9",
-   "size": 258872
+   "sha256": "a2fca9ba902004b17a2bf817d3ce8c5db77bebf71dc9d3bb7dc8a9be58ac7a31",
+   "size": 258973
   },
   "script-core.js": {
    "sha256": "765f86dd6f1fa0d2cb91c2e9c6268b3a6eace44ae9c1230e3fcfa917fa9f28c1",
    "size": 457092
   },
   "script-messages.js": {
-   "sha256": "d3b0fd9c66a12f3795df18b9929c86ed5d73af7381eda7ad57dbc24427569c7a",
-   "size": 131731
+   "sha256": "59cbcf59fadbe7bc001edc93f8358148101af29be34f919f003f638c922901b3",
+   "size": 132610
   },
   "script-ui.js": {
    "sha256": "c8ed27baf650b89a7022473c857fa4d418210e0fa1de1bd55be1ed19bf42e96a",
@@ -188,8 +196,8 @@
    "size": 24010
   },
   "style.css": {
-   "sha256": "8cfa55b3eb6d77ed7e181f0ced59aaa383433fe0c344f7d1564ff27c5b1e9f60",
-   "size": 514695
+   "sha256": "bd6a74bc078c74e26ee606b5da964bc25f3cce952d9249a76e92a04c48d31ca0",
+   "size": 520008
   },
   "supabaseClient.js": {
    "sha256": "96dfb90c703b96cdd96f0b7afd056f622616ae6a9c5ce760afd14c46b0056deb",
