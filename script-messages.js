@@ -1378,6 +1378,8 @@ function buildMessageRowInnerHTML(message, isMine) {
             ? buildDealHTML(message)       // раздача/скидка/новость от Авроры (deals.js)
             : message.attachment_meta?.deal_list && typeof buildDealListHTML === "function"
             ? buildDealListHTML(message)
+            : message.attachment_meta?.deal_digest && typeof buildDealDigestHTML === "function"
+            ? buildDealDigestHTML(message)
             : message.type === "text"
             ? `<span class="message-text">${renderFormattedText(message.text || "")}</span>`
             : buildAttachmentHTML(message) + buildCaptionHTML(message));
@@ -1394,7 +1396,7 @@ function buildMessageRowInnerHTML(message, isMine) {
     // сообщений) — обычный класс решает ту же задачу без этой цены.
     // has-block — в пузыре не текст, а «карточка» (игра, опрос, файл, голосовое):
     // время и галочки тогда встают отдельной строкой СПРАВА, а не прилипают слева под карточкой.
-    const isBlockBody = !message.deleted_at && (message.attachment_meta?.poll || message.attachment_meta?.game || message.attachment_meta?.deal || message.attachment_meta?.deal_list || message.type !== "text");
+    const isBlockBody = !message.deleted_at && (message.attachment_meta?.poll || message.attachment_meta?.game || message.attachment_meta?.deal || message.attachment_meta?.deal_list || message.attachment_meta?.deal_digest || message.type !== "text");
     // ФОТО / ВИДЕО / АЛЬБОМ — как в Telegram: снимок занимает пузырь целиком (без рамки вокруг),
     // время и галочки — таблеткой поверх снимка; с подписью — снимок сверху, текст под ним.
     // media-only: нет подписи; media-bare: ещё и нет шапки (имя/ответ/пересылка) — пузыря как такового нет.
@@ -1407,7 +1409,7 @@ function buildMessageRowInnerHTML(message, isMine) {
             + (message.type === "video" ? " media-video" : "");
     const mentionClass = currentChatType === "group" && messageMentionsMe(message) ? " mentions-me" : "";
     // Карточки Авроры — без пузыря (у карточки свой фон): в синем пузыре подписи не читались.
-    const dealClass = !message.deleted_at && (message.attachment_meta?.deal || message.attachment_meta?.deal_list) && typeof buildDealHTML === "function" ? " has-deal" : "";
+    const dealClass = !message.deleted_at && (message.attachment_meta?.deal || message.attachment_meta?.deal_list || message.attachment_meta?.deal_digest) && typeof buildDealHTML === "function" ? " has-deal" : "";
     const bubbleClass = (bodyText.includes('class="video-circle"') ? "message has-video-circle" : isBlockBody ? "message has-block" : "message") + mediaClass + mentionClass + dealClass;
 
     return `

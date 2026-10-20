@@ -10480,6 +10480,8 @@ body.reduce-motion .chat-area.chat-enter .messages { animation: none; }
 .deal-row-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .deal-row-title { font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .deal-row-sub { font-size: 11.5px; color: var(--muted); }
+.deal-row-badge { display: inline-block; padding: 0 5px; border-radius: 6px; background: #f97316; color: #fff; font-weight: 800; font-size: 11px; }
+.deal-digest .deal-row-sub b { color: var(--text); }
 .game-title { font-size: 14.5px; font-weight: 700; }
 .game-sub { margin: 2px 0 8px; font-size: 11.5px; opacity: .7; }
 .game-status { margin-top: 8px; font-size: 12.5px; font-weight: 600; text-align: center; }

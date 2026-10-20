@@ -82,3 +82,21 @@ function buildDealListHTML(message) {
     }).join("");
     return `<div class="deal-list"><div class="deal-list-head">🎁 Сейчас бесплатно</div>${rows || `<div class="deal-row-sub">Ничего не раздают</div>`}</div>`;
 }
+
+// «Скидки дня» — подборка Авроры одним сообщением (attachment_meta.deal_digest).
+function buildDealDigestHTML(message) {
+    const items = Array.isArray(message.attachment_meta?.deal_digest) ? message.attachment_meta.deal_digest : [];
+    const rows = items.map((x) => {
+        const url = dealSafeUrl(x.url), img = dealSafeUrl(x.image);
+        const rating = x.rating ? ` · ★ ${Number(x.rating)}%` : "";
+        return `
+            <a class="deal-row" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">
+                ${img ? `<img src="${escapeHTML(img)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : `<span class="deal-row-ph">🔥</span>`}
+                <span class="deal-row-copy">
+                    <span class="deal-row-title">${escapeHTML(x.title || "")}</span>
+                    <span class="deal-row-sub"><span class="deal-row-badge">−${Number(x.discount) || 0}%</span> <b>${escapeHTML(x.priceNew || "")}</b>${x.priceOld ? ` <s>${escapeHTML(x.priceOld)}</s>` : ""}${escapeHTML(rating)}</span>
+                </span>
+            </a>`;
+    }).join("");
+    return `<div class="deal-list deal-digest"><div class="deal-list-head">🔥 Скидки дня в Steam</div>${rows}</div>`;
+}

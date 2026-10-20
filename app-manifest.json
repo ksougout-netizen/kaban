@@ -1,5 +1,5 @@
 {
- "version": "20261020-8",
+ "version": "20261020-9",
  "minShell": "1.0.0",
  "minAndroid": "1.0.0",
  "files": {
@@ -36,8 +36,8 @@
    "size": 45738
   },
   "deals.js": {
-   "sha256": "36ef662ccba5a31fce19442d48d79864ffd7179df3113aa0f4df210f0b23e020",
-   "size": 5632
+   "sha256": "57ded4fc9418082644a0459d81710d82f2be5937cd02afe5fa8a8d0c3f2e0c10",
+   "size": 6926
   },
   "delight.js": {
    "sha256": "a419f3f08a969858f948db4edcb5131c3da58888e63f9d7d2baca5fcd4981a86",
@@ -84,7 +84,7 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "ba9ac10447ed0fa56f214446893a1ed641276c114419f374541755bba46e2dc9",
+   "sha256": "0d59efc0354c9f51195a06bb0a033d2877ec1a2ab9c8b5b47e112bfac1c13e01",
    "size": 246867
   },
   "interactive-emoji.js": {
@@ -144,8 +144,8 @@
    "size": 456685
   },
   "script-messages.js": {
-   "sha256": "49c0c5c5dca6596bf9fe01e92702183e79a72ee9195fd0e88baecf738282e975",
-   "size": 130879
+   "sha256": "ab727e70df4ae90d76bb57ea84301035d7d6f770cf503fb74f162c93d736610a",
+   "size": 131098
   },
   "script-ui.js": {
    "sha256": "e524d6b865e3e5ec100f492f975f16c563be0336c46e127ae3c27581d0196e96",
@@ -188,8 +188,8 @@
    "size": 24010
   },
   "style.css": {
-   "sha256": "989886bcc900d39ec84a293338e8edd13c620ac1c441c20b796c11860755c8c5",
-   "size": 505383
+   "sha256": "1f36f1a8a573e06a3b34f272964fc5d0181e961f8cd925388e6b8eb053bcd4be",
+   "size": 505584
   },
   "supabaseClient.js": {
    "sha256": "96dfb90c703b96cdd96f0b7afd056f622616ae6a9c5ce760afd14c46b0056deb",
