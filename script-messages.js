@@ -564,7 +564,7 @@ function renderReactionPicker() {
 }
 
 function jumpToReactionCategory(catId) {
-    document.getElementById(`reaction-section-${catId}`)?.scrollIntoView({ block: "start" });
+    scrollPanelToSection(document.getElementById(`reaction-section-${catId}`));   // не scrollIntoView — см. script-ui.js
 }
 
 function pickReactionFromPicker(emoji) {

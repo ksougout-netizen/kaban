@@ -433,8 +433,16 @@ function selectStickerPack(packId) {
     try { if (!emojiPopoverRendered) renderEmojiPopover(); } catch { /* построим при открытии */ }
 }, { timeout: 6000 });
 
+// Прокручиваем только саму панель: scrollIntoView прокручивал ещё и .chat-area (её слой обоев
+// шире области), и вся нижняя часть чата «уезжала» вверх с пустотой под строкой ввода.
+function scrollPanelToSection(section) {
+    const body = section?.closest(".emoji-popover-body");
+    if (!body) return;
+    body.scrollTop += section.getBoundingClientRect().top - body.getBoundingClientRect().top;
+}
+
 function jumpToEmojiCategory(catId) {
-    document.getElementById(`emoji-section-${catId}`)?.scrollIntoView({ block: "start" });
+    scrollPanelToSection(document.getElementById(`emoji-section-${catId}`));
 }
 
 function insertEmojiIntoComposer(emoji) {

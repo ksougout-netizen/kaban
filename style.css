@@ -10370,7 +10370,9 @@ body.reduce-motion .anim-glyph { animation: none !important; }
 .effect-replay:hover { transform: scale(1.3) rotate(-8deg); opacity: 1; }
 
 /* Живые обои: отдельный слой, который дрейфует и сдвигается за курсором. */
-.chat-area { isolation: isolate; overflow: hidden; }
+/* clip, а не hidden: слой обоев шире области (inset: -9%), и при hidden любой scrollIntoView/focus
+   внутри прокручивал саму .chat-area — низ чата «уезжал» вверх с пустотой под строкой ввода. */
+.chat-area { isolation: isolate; overflow: hidden; overflow: clip; }
 
 .chat-area.has-wallpaper > .chat-wallpaper-layer::before {
     content: "";

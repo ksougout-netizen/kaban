@@ -108,6 +108,9 @@ document.addEventListener("scroll", (event) => {
     const target = event.target;
     if (target === document) { if (window.scrollY || window.scrollX) window.scrollTo(0, 0); return; }
     if (target === document.documentElement || target === document.body) { target.scrollTop = 0; target.scrollLeft = 0; }
+    // Колонка чата тоже не прокручивается (обои шире неё — браузер мог сдвинуть её вверх). Подстраховка
+    // к overflow: clip в style.css — для движков без clip.
+    else if (target.classList?.contains("chat-area") || target.classList?.contains("content")) { target.scrollTop = 0; target.scrollLeft = 0; }
 }, true);
 window.addEventListener("focus", () => setAppHeight());
 

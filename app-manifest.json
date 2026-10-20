@@ -1,5 +1,5 @@
 {
- "version": "20261020-9",
+ "version": "20261020-10",
  "minShell": "1.0.0",
  "minAndroid": "1.0.0",
  "files": {
@@ -84,8 +84,8 @@
    "size": 4038
   },
   "index.html": {
-   "sha256": "0d59efc0354c9f51195a06bb0a033d2877ec1a2ab9c8b5b47e112bfac1c13e01",
-   "size": 246867
+   "sha256": "25a2d5161cd284ad64a635a87a48e54ad16eb70e2f98d48db9a798a0f199ba5a",
+   "size": 246908
   },
   "interactive-emoji.js": {
    "sha256": "50eb03166a26a732e6e758d77517750ca1ce2fe7274e0302e46bffd24345adaa",
@@ -140,16 +140,16 @@
    "size": 258872
   },
   "script-core.js": {
-   "sha256": "21812af2138feb2f19985a3f45d93858553c6a9b325f38051d68d41efd62138d",
-   "size": 456685
+   "sha256": "765f86dd6f1fa0d2cb91c2e9c6268b3a6eace44ae9c1230e3fcfa917fa9f28c1",
+   "size": 457092
   },
   "script-messages.js": {
-   "sha256": "ab727e70df4ae90d76bb57ea84301035d7d6f770cf503fb74f162c93d736610a",
-   "size": 131098
+   "sha256": "47d5782c5d876fb829c42db28719fba5370e9db51f773d08a5897c92ca475bcd",
+   "size": 131132
   },
   "script-ui.js": {
-   "sha256": "e524d6b865e3e5ec100f492f975f16c563be0336c46e127ae3c27581d0196e96",
-   "size": 304085
+   "sha256": "c8ed27baf650b89a7022473c857fa4d418210e0fa1de1bd55be1ed19bf42e96a",
+   "size": 304595
   },
   "selection.js": {
    "sha256": "18d7ddcb13153a4be78f17917f6f041855d3d0f65c27e2d7dae82076e7b49562",
@@ -188,8 +188,8 @@
    "size": 24010
   },
   "style.css": {
-   "sha256": "1f36f1a8a573e06a3b34f272964fc5d0181e961f8cd925388e6b8eb053bcd4be",
-   "size": 505584
+   "sha256": "56158f1192c1baeec4916249c43dd8d430e84f7d81411abe4e465cc454782a50",
+   "size": 505896
   },
   "supabaseClient.js": {
    "sha256": "96dfb90c703b96cdd96f0b7afd056f622616ae6a9c5ce760afd14c46b0056deb",
