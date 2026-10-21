@@ -45,6 +45,7 @@
         text: '<path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/>',
         emoji: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 14c.9 1.4 2.1 2.1 3.5 2.1s2.6-.7 3.5-2.1M9.2 9.8h.01M14.8 9.8h.01"/>',
         crop: '<path d="M7 3v14h14M3 7h14v14"/>',
+        adjust: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
         undo: '<path d="M9 7 4.5 11.5 9 16"/><path d="M5 11.5h8.5a5 5 0 0 1 0 10H11"/>',
         redo: '<path d="m15 7 4.5 4.5L15 16"/><path d="M19 11.5h-8.5a5 5 0 0 0 0 10H13"/>',
         rotate: '<path d="M20 11a8 8 0 1 0-2.3 5.6"/><path d="M20 4.5V11h-6.5"/>',
@@ -60,7 +61,10 @@
         { id: "blur", label: "Размытие", key: "B" },
         { id: "text", label: "Текст", key: "T" },
         { id: "emoji", label: "Эмодзи", key: "E" },
-        { id: "crop", label: "Кадрирование", short: "Кадр", key: "C" }
+        { id: "crop", label: "Кадрирование", short: "Кадр", key: "C" },
+        // Только на телефоне (на компьютере коррекция всегда видна в правой панели): яркость,
+        // контраст, насыщенность — по кнопке, а не постоянно под фото (поворот — в «Кадре»).
+        { id: "adjust", label: "Коррекция", key: "J" }
     ];
 
     const EMOJIS = ["😀", "😂", "🥹", "😍", "😎", "🥳", "😭", "😡", "🤔", "😱", "🙈", "👀",
@@ -1347,7 +1351,8 @@
         blur: "Проведите кистью по лицам, паролям, номерам — область скроется пикселизацией.",
         text: "Нажмите на фото и введите текст. Его можно двигать и масштабировать.",
         emoji: "Нажмите на эмодзи — оно появится на фото. Потом перетащите его и измените размер белым уголком или колесом мыши.",
-        crop: "Потяните рамку за края и углы. Пропорции можно зафиксировать."
+        crop: "Потяните рамку за края и углы. Пропорции можно зафиксировать.",
+        adjust: "Яркость, контраст и насыщенность фото."
     };
 
     function syncPanel() {
@@ -1360,6 +1365,9 @@
         const sizeMode = textMode || tool === "pen" || tool === "marker" || tool === "arrow" || tool === "blur";
 
         els.root.querySelectorAll(".pe-tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === tool));
+        // Для раскладки телефона: какие разделы панели показывать (style.css → .pe-backdrop[data-tool]).
+        els.root.dataset.tool = tool;
+        els.root.classList.toggle("pe-has-options", colorMode || sizeMode || tool === "emoji" || tool === "crop" || tool === "adjust");
         els.hint.textContent = HINTS[tool] || "";
         els.root.querySelector("#pe-sec-color").hidden = !colorMode;
         els.root.querySelector("#pe-sec-size").hidden = !sizeMode;

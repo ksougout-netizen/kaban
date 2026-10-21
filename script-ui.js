@@ -280,10 +280,12 @@ function thawEmojiGridsAfterOpen(popover) {
     const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 60));
     const body = document.getElementById("emoji-popover-body");
     let index = 0;
-    const thawAll = () => { rest.forEach((grid) => grid.classList.remove("cv-cold")); index = rest.length; };
+    // Обработчик прокрутки снимаем и тогда, когда всё оттаяло само: once снимал его только
+    // после прокрутки, и при каждом открытии панели без прокрутки копился ещё один.
+    const thawAll = () => { rest.forEach((grid) => grid.classList.remove("cv-cold")); index = rest.length; body?.removeEventListener("scroll", thawAll); };
     body?.addEventListener("scroll", thawAll, { once: true, passive: true });
     const step = () => {
-        if (index >= rest.length) return;
+        if (index >= rest.length) { body?.removeEventListener("scroll", thawAll); return; }
         if (!popover.classList.contains("open")) { thawAll(); return; }   // закрыли — как было
         rest[index++].classList.remove("cv-cold");
         idle(step, { timeout: 400 });
@@ -1954,7 +1956,7 @@ function applyContactProfile(profile) {
     for (const ch of profile.name || "") contactHue = (contactHue * 31 + ch.charCodeAt(0)) % 360;
     document.querySelectorAll(".contact-modal, .info.info-window").forEach((card) => {
         card.style.setProperty("--gh", String(contactHue));
-        card.style.setProperty("--gp", profile.photo ? `url(${profile.photo})` : "none");
+        setHeroPhoto(card, profile.photo);
         card.classList.toggle("has-photo", !!profile.photo);
     });
     const callAvatar = document.getElementById("call-avatar");
@@ -2304,10 +2306,14 @@ function toggleNewChatPopover() {
         return;
     }
 
-    const button = document.getElementById("new-chat-button");
-    const rect = button.getBoundingClientRect();
+    // Кнопки «+» в шапке больше нет — окно встаёт под кнопками шапки списка чатов.
+    const anchor = document.getElementById("new-chat-button") || document.querySelector(".brand-actions") || document.querySelector(".sidebar");
+    const rect = anchor.getBoundingClientRect();
     popover.style.top = `${rect.bottom + 8}px`;
     popover.style.left = `${Math.max(12, rect.right - 260)}px`;
+    // Открыли кликом (меню вкладки, палитра команд) — этот же клик, всплыв до документа,
+    // не должен тут же закрыть окно как «клик мимо».
+    popover._openEvent = window.event || null;
 
     document.getElementById("new-chat-search").value = "";
     filterNewChatResults();
@@ -2417,12 +2423,11 @@ function openNewGroupModal() {
     newGroupLastExtraQuery = null;
 
     document.getElementById("new-group-step-title").textContent = "Новая группа";
-    document.getElementById("new-group-next-btn").textContent = "Далее";
     document.getElementById("new-group-search").value = "";
     document.getElementById("new-group-step-members").hidden = false;
     document.getElementById("new-group-step-name").hidden = true;
     document.getElementById("new-group-title").value = "";
-    resetGroupAvatarPreview("new-group-avatar-preview", "👥");
+    resetGroupAvatarPreview("new-group-avatar-preview", "");
     renderNewGroupSelectedChips();
     // Сразу показываем список контактов, без ожидания ввода — печатать
     // ник нужно, только чтобы добавить того, с кем ещё не было чата.
@@ -2431,7 +2436,8 @@ function openNewGroupModal() {
     const backdrop = document.getElementById("new-group-backdrop");
     backdrop.classList.add("open");
     backdrop.setAttribute("aria-hidden", "false");
-    document.getElementById("new-group-search").focus();
+    // На телефоне клавиатуру сразу не открываем — она закрыла бы полсписка (как в Telegram).
+    if (!isPhoneWidth) document.getElementById("new-group-search").focus();
 
 }
 
@@ -2447,7 +2453,6 @@ async function openAddGroupMembersModal() {
     newGroupLastExtraQuery = null;
 
     document.getElementById("new-group-step-title").textContent = "Добавить участников";
-    document.getElementById("new-group-next-btn").textContent = "Добавить";
     document.getElementById("new-group-search").value = "";
     document.getElementById("new-group-step-members").hidden = false;
     document.getElementById("new-group-step-name").hidden = true;
@@ -2457,7 +2462,8 @@ async function openAddGroupMembersModal() {
     const backdrop = document.getElementById("new-group-backdrop");
     backdrop.classList.add("open");
     backdrop.setAttribute("aria-hidden", "false");
-    document.getElementById("new-group-search").focus();
+    // На телефоне клавиатуру сразу не открываем — она закрыла бы полсписка (как в Telegram).
+    if (!isPhoneWidth) document.getElementById("new-group-search").focus();
 
 }
 
@@ -2465,6 +2471,12 @@ async function openAddGroupMembersModal() {
 // (см. submitCreateGroup/goToGroupNameStep): закрываем без вопросов, это
 // не отмена, а естественное завершение сценария.
 function closeNewGroupModal(forceClose) {
+
+    // «Назад» (стрелка, свайп, системная кнопка) на шаге названия — к выбору участников.
+    if (!forceClose && !document.getElementById("new-group-step-name").hidden) {
+        backToGroupMembersStep();
+        return;
+    }
 
     if (!forceClose && (newGroupSelectedMembers.size > 0 || document.getElementById("new-group-title").value.trim())) {
         const message = newGroupMode === "add"
@@ -2496,15 +2508,42 @@ function filterNewGroupResults() {
     newGroupSearchTimer = setTimeout(runNewGroupSearch, 300);
 }
 
+// Строка как в Telegram: аватар (выбран — зелёная галочка на нём), имя, ниже @ник.
 function buildNewGroupResultRowHTML(user) {
     const selected = newGroupSelectedMembers.has(user.id);
     const av = avatarParts({ id: user.id, name: user.display_name || user.username, url: user.avatar_url, kind: user.is_bot && !user.avatar_url ? "bot" : "user" });
+    const sub = user.is_bot ? "бот" : (user.username ? "@" + user.username : "");
     return `
-        <button class="new-chat-result-row" type="button" data-user-id="${escapeHTML(user.id)}" data-user-name="${escapeHTML(user.display_name)}" onclick="toggleGroupMemberSelection(this.dataset.userId, this.dataset.userName)">
-            <span class="new-chat-result-avatar${av.cls}${selected ? " selected" : ""}${user.is_bot ? " chat-avatar-bot" : ""}"${av.style}>${av.inner}${selected ? `<span class="new-chat-result-check">✓</span>` : ""}</span>
-            <span>${escapeHTML(user.display_name || user.username || "Пользователь")} <span style="opacity:.6">@${escapeHTML(user.username || "")}</span></span>
+        <button class="new-chat-result-row ng-row${selected ? " selected" : ""}" type="button" aria-pressed="${selected}" data-user-id="${escapeHTML(user.id)}" data-user-name="${escapeHTML(user.display_name || user.username || "Пользователь")}" onclick="toggleGroupMemberSelection(this.dataset.userId, this.dataset.userName)">
+            <span class="new-chat-result-avatar${av.cls}${selected ? " selected" : ""}${user.is_bot ? " chat-avatar-bot" : ""}"${av.style}>${av.inner}<span class="ng-check" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6.5 12.5 3.7 3.7 7.3-8"/></svg></span></span>
+            <span class="ng-row-text">
+                <span class="ng-row-name">${escapeHTML(user.display_name || user.username || "Пользователь")}</span>
+                ${sub ? `<span class="ng-row-sub">${escapeHTML(sub)}</span>` : ""}
+            </span>
         </button>
     `;
+}
+
+// Данные выбранных (для аватаров в «фишках» и списка участников на втором шаге).
+const newGroupMemberInfo = new Map();
+function findNewGroupUser(userId) {
+    return getContactsFromChats().find((u) => u.id === userId)
+        || newGroupLastExtraUsers.find((u) => u.id === userId)
+        || newGroupMemberInfo.get(userId)
+        || null;
+}
+
+function newGroupMiniAvatarHTML(userId, name, cls) {
+    const user = findNewGroupUser(userId) || { id: userId, display_name: name };
+    const av = avatarParts({ id: userId, name: user.display_name || name, url: user.avatar_url, kind: user.is_bot && !user.avatar_url ? "bot" : "user" });
+    return `<span class="new-chat-result-avatar ${cls}${av.cls}${user.is_bot ? " chat-avatar-bot" : ""}"${av.style}>${av.inner}</span>`;
+}
+
+// Стёрли всё в поле и жмут ⌫ ещё раз — убираем последнего выбранного (как в Telegram).
+function newGroupSearchKeydown(event) {
+    if (event.key !== "Backspace" || event.target.value || !newGroupSelectedMembers.size) return;
+    const [lastId, lastName] = [...newGroupSelectedMembers.entries()].pop();
+    toggleGroupMemberSelection(lastId, lastName);
 }
 
 function getNewGroupExistingIds(me) {
@@ -2583,6 +2622,11 @@ function toggleGroupMemberSelection(userId, displayName) {
         newGroupSelectedMembers.delete(userId);
     } else {
         newGroupSelectedMembers.set(userId, displayName);
+        const user = findNewGroupUser(userId);
+        if (user) newGroupMemberInfo.set(userId, user);
+        // Выбрали из найденного — поиск сбрасываем, как в Telegram: дальше снова весь список.
+        const search = document.getElementById("new-group-search");
+        if (search.value) { search.value = ""; newGroupLastExtraQuery = null; }
     }
     renderNewGroupSelectedChips();
     rerenderNewGroupResults();
@@ -2592,17 +2636,25 @@ function renderNewGroupSelectedChips() {
 
     const box = document.getElementById("new-group-selected-chips");
     const nextBtn = document.getElementById("new-group-next-btn");
+    const count = newGroupSelectedMembers.size;
 
+    // «Фишка»: мини-аватар и имя; нажатие убирает человека из выбора.
     box.innerHTML = [...newGroupSelectedMembers.entries()].map(([userId, name]) => `
-        <span class="new-group-chip">
-            ${escapeHTML(name)}
-            <button type="button" data-user-id="${escapeHTML(userId)}" data-user-name="${escapeHTML(name)}" onclick="toggleGroupMemberSelection(this.dataset.userId, this.dataset.userName)" aria-label="Убрать ${escapeHTML(name)}">×</button>
-        </span>
+        <button type="button" class="new-group-chip" data-user-id="${escapeHTML(userId)}" data-user-name="${escapeHTML(name)}" onclick="toggleGroupMemberSelection(this.dataset.userId, this.dataset.userName)" aria-label="Убрать ${escapeHTML(name)}">
+            ${newGroupMiniAvatarHTML(userId, name, "ng-chip-avatar")}
+            <span class="ng-chip-name">${escapeHTML(String(name).split(" ")[0])}</span>
+            <span class="ng-chip-x" aria-hidden="true">×</span>
+        </button>
     `).join("");
+    box.hidden = !count;
 
-    nextBtn.disabled = newGroupSelectedMembers.size === 0;
+    nextBtn.disabled = count === 0;
+    nextBtn.classList.toggle("shown", count > 0);
     const baseLabel = newGroupMode === "add" ? "Добавить" : "Далее";
-    nextBtn.textContent = newGroupSelectedMembers.size ? `${baseLabel} (${newGroupSelectedMembers.size})` : baseLabel;
+    document.getElementById("new-group-next-label").textContent = count ? `${baseLabel} (${count})` : baseLabel;
+    document.getElementById("new-group-step-subtitle").textContent = count
+        ? `${count} ${pluralRu(count, "участник выбран", "участника выбрано", "участников выбрано")}`
+        : (newGroupMode === "add" ? "Выберите, кого добавить" : "Выберите участников");
 
 }
 
@@ -2610,6 +2662,7 @@ function resetGroupAvatarPreview(elId, placeholder) {
     const el = document.getElementById(elId);
     const input = el.querySelector("input[type=file]"); // забираем ДО textContent ниже — он стирает всех детей, включая сам input
     el.style.backgroundImage = "";
+    el.classList.remove("has-image");
     el.textContent = placeholder;
     if (input) el.appendChild(input);
 }
@@ -2628,6 +2681,7 @@ function selectGroupAvatarFile(input) {
         preview.style.backgroundImage = `url(${reader.result})`;
         preview.style.backgroundSize = "cover";
         preview.style.backgroundPosition = "center";
+        preview.classList.add("has-image");
     };
     reader.readAsDataURL(file);
 }
@@ -2657,6 +2711,15 @@ async function goToGroupNameStep() {
         return;
     }
 
+    // Второй шаг: фото и название, ниже — кого добавляем (как в Telegram).
+    const count = newGroupSelectedMembers.size;
+    document.getElementById("new-group-members-label").textContent = `${count} ${pluralRu(count, "участник", "участника", "участников")}`;
+    document.getElementById("new-group-members-preview").innerHTML = [...newGroupSelectedMembers.entries()].map(([userId, name]) => {
+        const user = findNewGroupUser(userId);
+        const sub = user?.is_bot ? "бот" : (user?.username ? "@" + user.username : "");
+        return `<div class="ng-member">${newGroupMiniAvatarHTML(userId, name, "")}<span class="ng-row-text"><span class="ng-row-name">${escapeHTML(name)}</span>${sub ? `<span class="ng-row-sub">${escapeHTML(sub)}</span>` : ""}</span></div>`;
+    }).join("");
+    document.getElementById("new-group-step-subtitle").textContent = "Название и фото";
     document.getElementById("new-group-step-members").hidden = true;
     document.getElementById("new-group-step-name").hidden = false;
     document.getElementById("new-group-title").focus();
@@ -2666,6 +2729,7 @@ async function goToGroupNameStep() {
 function backToGroupMembersStep() {
     document.getElementById("new-group-step-members").hidden = false;
     document.getElementById("new-group-step-name").hidden = true;
+    renderNewGroupSelectedChips();
 }
 
 async function submitCreateGroup() {
@@ -3010,7 +3074,7 @@ function renderGroupInfoModal() {
     let hue = 0;
     for (const ch of currentChatTitle || "") hue = (hue * 31 + ch.charCodeAt(0)) % 360;
     hero.style.setProperty("--gh", String(hue));
-    hero.style.setProperty("--gp", avatarUrl ? cssUrlValue(avatarUrl) : "none");
+    setHeroPhoto(hero, avatarUrl);
     hero.classList.toggle("has-photo", !!avatarUrl);
     avatarEl.style.backgroundImage = avatarUrl ? cssUrlValue(avatarUrl) : "";
     avatarEl.classList.toggle("has-photo", !!avatarUrl);
@@ -3469,8 +3533,18 @@ async function unbanGroupMemberAction(button) {
 
 /* ---- пригласительная ссылка ------------------------------------------- */
 
+// Адрес сайта для ссылок, которые отправляют другим людям. В приложении для Android страница
+// открыта с https://localhost, в программе для ПК — с file://: ссылка «https://localhost/#join=…»
+// у получателя никуда не вела.
+const KABAN_PUBLIC_URL = "https://ksougout-netizen.github.io/kaban/";
+function publicAppUrl() {
+    const { protocol, hostname } = window.location;
+    const local = !/^https?:$/.test(protocol) || hostname === "localhost" || hostname === "127.0.0.1" || hostname === "";
+    return local ? KABAN_PUBLIC_URL : window.location.href.split("#")[0];
+}
+
 function buildGroupInviteLink(code) {
-    return window.location.href.split("#")[0] + "#join=" + code;
+    return publicAppUrl() + "#join=" + code;
 }
 
 async function openGroupInviteModal(reset = false) {
@@ -4951,10 +5025,13 @@ function positionChatOnOpen(chatId, myId) {
 ["wheel", "touchstart", "keydown", "pointerdown"].forEach((type) => {
     document.getElementById("messages")?.addEventListener(type, releaseChatScrollHold, { passive: true });
 });
-// Запоминаем позицию по ходу прокрутки, не чаще раза в 200 мс (без нагрузки на каждый кадр).
+// Запоминаем позицию, когда лента остановилась (через 250 мс тишины), а не по ходу
+// прокрутки: поиск видимого сообщения (elementFromPoint) посреди инерции заставлял
+// браузер пересчитывать раскладку — пропуски кадров на слабом телефоне. При уходе из
+// чата позиция и так сохраняется сразу (openRealChat / backToChats).
 document.getElementById("messages")?.addEventListener("scroll", () => {
-    if (chatScrollSaveTimer) return;
-    chatScrollSaveTimer = setTimeout(() => { chatScrollSaveTimer = 0; captureChatScrollPosition(); }, 200);
+    clearTimeout(chatScrollSaveTimer);
+    chatScrollSaveTimer = setTimeout(() => { chatScrollSaveTimer = 0; captureChatScrollPosition(); }, 250);
 }, { passive: true });
 
 function updateScrollToBottomButton() {
@@ -5020,6 +5097,9 @@ messageList.addEventListener("scroll", () => {
 // loadOlderMessages. Порог в пикселях, а не "scrollTop === 0", чтобы
 // сработать чуть заранее и не заставлять ждать после уже полного докрутки.
 messageList.addEventListener("scroll", () => {
+    // Сначала дешёвые флаги: чтение scrollTop посреди дорисовки ленты заставляло браузер
+    // раскладывать её прямо в обработчике прокрутки.
+    if (isLoadingOlderMessages || !hasMoreMessages) return;
     if (messageList.scrollTop < 200) loadOlderMessages();
 }, { passive: true });
 
@@ -5470,33 +5550,93 @@ document
 
     });
 
+/* Запись как в Telegram: одна кнопка. Короткое нажатие — смена «голосовое ⇄ кружок»,
+   удержание — запись выбранного (влево — отмена, вверх — закрепить и писать без рук).
+   Выбор запоминается. Вторая кнопка остаётся в разметке, но скрыта (data-record-mode
+   на .input), поэтому вся логика записи (startRecording и т. д.) не меняется. */
+const RECORD_HOLD_MS = 200;          // дольше — это запись, короче — смена режима
+const RECORD_MODE_KEY = "kaban-record-mode";
+let pendingRecordPress = null;       // { button, event, x, y, timer } — нажали, ещё не ясно: тап или удержание
+
+function currentRecordMode() {
+    return document.querySelector(".input")?.dataset.recordMode === "video" ? "video" : "audio";
+}
+
+function applyRecordMode(mode, { animate = false } = {}) {
+    const bar = document.querySelector(".input");
+    if (!bar) return;
+    bar.dataset.recordMode = mode;
+    const shown = bar.querySelector(`.record-button[data-record-mode="${mode}"]`);
+    if (animate && shown) {
+        shown.classList.remove("record-swap-in");
+        void shown.offsetWidth;
+        shown.classList.add("record-swap-in");
+    }
+}
+
+function toggleRecordMode() {
+    const next = currentRecordMode() === "audio" ? "video" : "audio";
+    applyRecordMode(next, { animate: true });
+    try { localStorage.setItem(RECORD_MODE_KEY, next); } catch { /* приватный режим — просто не запомним */ }
+    if (navigator.vibrate) { try { navigator.vibrate(8); } catch { /* нет API */ } }
+    // Подсказка — как в Telegram, но только первые разы, дальше не мешает.
+    let hints = 0;
+    try { hints = Number(localStorage.getItem("kaban-record-hints") || 0); localStorage.setItem("kaban-record-hints", String(hints + 1)); } catch { /* ничего */ }
+    if (hints < 3) toast(next === "video" ? "Удерживайте, чтобы записать кружок. Нажмите — голосовое" : "Удерживайте, чтобы записать голосовое. Нажмите — кружок");
+}
+
+try { applyRecordMode(localStorage.getItem(RECORD_MODE_KEY) === "video" ? "video" : "audio"); } catch { applyRecordMode("audio"); }
+
+function cancelPendingRecordPress() {
+    if (!pendingRecordPress) return;
+    clearTimeout(pendingRecordPress.timer);
+    pendingRecordPress = null;
+}
+
 document.querySelectorAll(".record-button").forEach((button) => {
 
     button.setAttribute("aria-pressed", "false");
 
     button.addEventListener("pointerdown", (event) => {
         if (event.button !== undefined && event.button !== 0) return;
-        startRecording(button, event);
+        // Идёт закреплённая запись — нажатие на кнопку её завершает (pointerup ниже).
+        if (activeRecording) return;
+        if (currentChatIsSecret) { toast("Голосовые и видео-кружки в секретных чатах пока не поддерживаются"); return; }
+        event.preventDefault();
+        try { button.setPointerCapture(event.pointerId); } catch { /* палец уже отпущен */ }
+        cancelPendingRecordPress();
+        const press = { button, event, x: event.clientX, y: event.clientY };
+        press.timer = setTimeout(() => {
+            if (pendingRecordPress !== press) return;
+            pendingRecordPress = null;
+            startRecording(button, event);   // те же координаты старта — жесты «влево/вверх» считаются от них
+        }, RECORD_HOLD_MS);
+        pendingRecordPress = press;
     });
 
     button.addEventListener("pointermove", (event) => {
+        const press = pendingRecordPress;
+        if (press?.button === button) {
+            // Палец уехал до начала записи — это не нажатие на кнопку (прокрутка, промах).
+            if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 16) cancelPendingRecordPress();
+            return;
+        }
         handleRecordingPointerMove(button, event);
     });
 
     button.addEventListener("pointerup", (event) => {
-        const state = activeRecording;
-        // Быстрое нажатие (короче 0,4 с) — не «забыли удержать», а запись без
-        // удержания: сразу закрепляем её, дальше кнопки «удалить» / «отправить».
-        // Раньше короткий тап просто выдавал «удерживайте кнопку дольше» — на
-        // компьютере держать мышь минуту неудобно.
-        if (state && state.button === button && !state.locked && !state.cancelArmed && event.pointerId !== -1 && Date.now() - state.pressedAt < 400) {
-            lockRecording(state);
+        if (pendingRecordPress?.button === button) {
+            // Отпустили раньше порога — это тап: меняем режим.
+            cancelPendingRecordPress();
+            toggleRecordMode();
             return;
         }
+        const state = activeRecording;
         stopRecording(event.pointerId, state?.button === button && state?.cancelArmed);
     });
 
     button.addEventListener("pointercancel", (event) => {
+        if (pendingRecordPress?.button === button) { cancelPendingRecordPress(); return; }
         // Системная отмена указателя (например, свайп открыл системное меню) —
         // если в этот момент жест уже был на грани отмены, безопаснее
         // трактовать это как отмену записи, а не как "отпустили — отправляем".
@@ -5737,7 +5877,8 @@ document.addEventListener("click", (event) => {
 
     if (
         !event.target.closest("#new-chat-popover") &&
-        !event.target.closest("#new-chat-button")
+        !event.target.closest("#new-chat-button") &&
+        document.getElementById("new-chat-popover")._openEvent !== event
     ) {
         closeNewChatPopover();
     }
@@ -5781,7 +5922,11 @@ function setSidebarWidth(width, options = {}) {
 
     const clamped = clampSidebarWidth(width);
 
-    document.documentElement.style.setProperty("--sidebar-w", `${clamped}px`);
+    // Та же ширина — не трогаем переменную: её запись пересчитывает стили всего документа
+    // (на телефоне это ~2000 элементов при каждом появлении клавиатуры).
+    const value = `${clamped}px`;
+    if (document.documentElement.style.getPropertyValue("--sidebar-w") === value && !options.persist) return clamped;
+    document.documentElement.style.setProperty("--sidebar-w", value);
     sidebarResizer.setAttribute("aria-valuenow", String(clamped));
     sidebarResizer.setAttribute("aria-valuemin", String(SIDEBAR_MIN_WIDTH));
     sidebarResizer.setAttribute("aria-valuemax", String(Math.round(getSidebarMaxWidth())));
@@ -5920,6 +6065,10 @@ window.addEventListener("resize", () => {
             }
         });
 
+        // На телефоне список чатов всегда во всю ширину, а resize здесь — это клавиатура:
+        // чтение ширины и запись --sidebar-w давали пересчёт стилей всего документа (~150 мс
+        // на слабом телефоне) при каждом её появлении и скрытии.
+        if (isPhoneWidth) return;
         const currentSidebarWidth = document.querySelector(".sidebar").getBoundingClientRect().width;
         setSidebarWidth(currentSidebarWidth);
 
@@ -5932,7 +6081,9 @@ initializeSettings();
 filterSharedItems();
 updateContactModalStats();
 updateMessageGrouping();
-updateScrollToBottomButton();
+// В кадре, а не посреди загрузки скриптов: чтение scrollHeight здесь раскладывало всю страницу
+// (а следующие скрипты тут же её снова меняли) — ~0,2 с к запуску на слабом телефоне.
+requestAnimationFrame(updateScrollToBottomButton);
 
 
 /* ВХОД / РЕГИСТРАЦИЯ: включается только когда в supabaseClient.js вписаны
@@ -6525,10 +6676,18 @@ observeAnimEmojiIn(document.getElementById("emoji-popover"));
     const bar = document.getElementById("chat-folders");
     if (!bar) return;
 
+    // Не чаще раза в кадр и в самом кадре: вкладки перерисовываются при каждом обновлении списка
+    // чатов (и при запуске), а чтение scrollWidth сразу после этого раскладывало всю страницу
+    // посреди скрипта — ~0,2 с к запуску на слабом телефоне.
+    let edgesFrame = 0;
     const syncEdges = () => {
-        const max = bar.scrollWidth - bar.clientWidth;
-        bar.classList.toggle("fade-left", bar.scrollLeft > 4);
-        bar.classList.toggle("fade-right", max - bar.scrollLeft > 4);
+        if (edgesFrame) return;
+        edgesFrame = requestAnimationFrame(() => {
+            edgesFrame = 0;
+            const max = bar.scrollWidth - bar.clientWidth;
+            bar.classList.toggle("fade-left", bar.scrollLeft > 4);
+            bar.classList.toggle("fade-right", max - bar.scrollLeft > 4);
+        });
     };
 
     bar.addEventListener("wheel", (event) => {
@@ -6584,10 +6743,13 @@ observeAnimEmojiIn(document.getElementById("emoji-popover"));
         const key = active ? (active.dataset.folder || active.dataset.folderId || active.textContent) : null;
         if (!active || drag || key === lastActiveFolder) return;
         lastActiveFolder = key;
-        const left = active.getBoundingClientRect().left - bar.getBoundingClientRect().left + bar.scrollLeft;
-        const right = left + active.offsetWidth;
-        if (left < bar.scrollLeft + 28) bar.scrollTo({ left: Math.max(0, left - 28), behavior: "smooth" });
-        else if (right > bar.scrollLeft + bar.clientWidth - 28) bar.scrollTo({ left: right - bar.clientWidth + 28, behavior: "smooth" });
+        requestAnimationFrame(() => {
+            if (!active.isConnected) return;
+            const left = active.getBoundingClientRect().left - bar.getBoundingClientRect().left + bar.scrollLeft;
+            const right = left + active.offsetWidth;
+            if (left < bar.scrollLeft + 28) bar.scrollTo({ left: Math.max(0, left - 28), behavior: "smooth" });
+            else if (right > bar.scrollLeft + bar.clientWidth - 28) bar.scrollTo({ left: right - bar.clientWidth + 28, behavior: "smooth" });
+        });
     }).observe(bar, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "hidden"] });
     syncEdges();
 })();

@@ -391,6 +391,9 @@ const KabanExclusiveWindows = (() => {
         if (!open) { wasOpen.delete(changedId); return; }
         if (wasOpen.has(changedId)) return;
         wasOpen.add(changedId);
+        // Телефон: страницы складываются стопкой, как в Telegram (phone-pages.js) — профиль поверх
+        // «Настроек», медиа поверх карточки; «назад» возвращает на предыдущую, а не к списку чатов.
+        if (typeof isPhoneWidth !== "undefined" && isPhoneWidth) return;
         const closers = (typeof SHEET_CLOSE_BY_BACKDROP_ID !== "undefined" && SHEET_CLOSE_BY_BACKDROP_ID) || {};
         for (const id of IDS) {
             if (id === changedId) continue;
@@ -442,7 +445,10 @@ const KabanSharedMedia = (() => {
         // function-объявления верхнего уровня — свойства window; переприсваиваем так же, как openRealChat ниже.
         globalThis[name] = function (...args) {
             const result = original.apply(this, args);
-            refresh();
+            // Строки истории (quiet: открытие чата, подгрузка старых) — «Медиа» обновит сам
+            // показ истории одним разом; иначе при дорисовке кусками оно перестраивалось
+            // после каждого куска.
+            if (!(name === "appendRealMessageRow" && args[2]?.quiet)) refresh();
             return result;
         };
     });

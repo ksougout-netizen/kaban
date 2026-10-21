@@ -346,8 +346,20 @@
     let barsBase = [16, 16, 16];
     let barsPainted = "";
     function syncSystemBars() {
-        const bg = getComputedStyle(document.body).backgroundColor || "rgb(16,16,16)";
-        barsBase = (bg.match(/\d+/g) || [16, 16, 16]).slice(0, 3).map(Number);
+        // Цвет — из переменной темы (--bg), а не из фона страницы: у фона плавный переход,
+        // и в момент смены темы getComputedStyle отдавал ещё прежний цвет — полосы
+        // отставали на одну тему (тёмная тема с белой строкой состояния и наоборот).
+        const styles = getComputedStyle(document.body);
+        // Сверху у всех экранов — шапка цвета панели (--surface): без шва со строкой состояния.
+        const varBg = styles.getPropertyValue("--surface").trim() || styles.getPropertyValue("--bg").trim();
+        const hex = /^#([0-9a-f]{6}|[0-9a-f]{3})$/i.test(varBg) ? varBg : "";
+        if (hex) {
+            const full = hex.length === 4 ? "#" + [...hex.slice(1)].map((c) => c + c).join("") : hex;
+            barsBase = [1, 3, 5].map((i) => parseInt(full.slice(i, i + 2), 16));
+        } else {
+            const bg = styles.backgroundColor || "rgb(16,16,16)";
+            barsBase = (bg.match(/\d+/g) || [16, 16, 16]).slice(0, 3).map(Number);
+        }
         barsPainted = "";
         paintSystemBars();
     }
@@ -357,17 +369,56 @@
     function paintSystemBars() {
         let rgb = barsBase;
         const call = document.getElementById("call-backdrop");
-        if (call?.classList.contains("open")) {
+        // Карточка собеседника на телефоне: строка состояния — цвета её шапки (как в Telegram),
+        // без шва между системной полосой и цветным фоном профиля.
+        const profile = document.querySelector("#info-modal-backdrop.open .info-window");
+        if (profile && document.documentElement.classList.contains("phone-device") && !profile.classList.contains("has-photo") && !call?.classList.contains("open")) {
+            const gh = parseFloat(getComputedStyle(profile).getPropertyValue("--gh")) || 210;
+            const h = ((gh % 360) + 360) % 360, s = 0.72, l = 0.62;
+            const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+            const f = (n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+            rgb = [f(0), f(8), f(4)];
+        } else if (call?.classList.contains("open")) {
             const g = getComputedStyle(call.querySelector(".call-dialog") || call).backgroundImage.match(/rgba?\(([^)]+)\)/);
             rgb = g ? g[1].split(",").slice(0, 3).map((n) => Number(n)) : [24, 24, 40];
-        } else if (typeof anyOverlayOpen === "function" && anyOverlayOpen()) {
+        } else if (typeof anyOverlayOpen === "function" && anyOverlayOpen() && dimmingOverlayOpen()) {
             rgb = barsBase.map((c) => Math.round(c * 0.6));   // ~ затемнение подложек окон
         }
         const hex = "#" + rgb.map((n) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0")).join("");
-        if (hex === barsPainted) return;
-        barsPainted = hex;
-        const light = (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) > 140;
-        Native.setSystemBars({ color: hex, darkIcons: light }).catch(() => {});
+        const nav = chatNavColor(rgb !== barsBase);
+        const key = hex + "|" + (nav || "");
+        if (key === barsPainted) return;
+        barsPainted = key;
+        const isLight = (c) => (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) > 140;
+        const light = isLight(rgb);
+        const opts = { color: hex, darkIcons: light };
+        if (nav) { opts.navColor = nav; opts.navDarkIcons = isLight([1, 3, 5].map((i) => parseInt(nav.slice(i, i + 2), 16))); }
+        Native.setSystemBars(opts).catch(() => {});
+    }
+    // Открытый чат на телефоне: нижняя полоса Android (под полем ввода) — цвета низа обоев,
+    // будто обои уходят под неё (поле ввода «парит» на обоях, см. style.css). Иначе — как верх.
+    function chatNavColor(overlayed) {
+        if (overlayed || !document.documentElement.classList.contains("phone-device")) return null;
+        if (!document.body.classList.contains("chat-selected") || document.body.classList.contains("m-page-open")) return null;
+        try {
+            const own = typeof getChatWallpaperId === "function" && typeof currentChatId !== "undefined" ? getChatWallpaperId(currentChatId) : null;
+            const wp = findWallpaper(own || appSettings.chatWallpaper || "default");
+            if (wp?.bottom) return wp.bottom;
+            const bg = getComputedStyle(document.body).getPropertyValue("--bg").trim();
+            return /^#[0-9a-f]{6}$/i.test(bg) ? bg : null;
+        } catch { return null; }
+    }
+    // Полноэкранные страницы (phone-pages.js) без затемнения — строка состояния остаётся цвета
+    // страницы. Темнеет, только если открыто что-то ещё (шторка, меню, диалог).
+    function dimmingOverlayOpen() {
+        if (!document.body.classList.contains("m-page-open")) return true;
+        if (document.getElementById("reaction-bar") || document.getElementById("message-context-menu")?.classList.contains("open")) return true;
+        for (const el of document.querySelectorAll(OVERLAY_SEL)) {
+            if (el.classList.contains("m-page") || el.hidden || !el.getClientRects().length) continue;
+            const cs = getComputedStyle(el);
+            if (cs.visibility !== "hidden" && parseFloat(cs.opacity) > 0.01 && cs.display !== "none") return true;
+        }
+        return false;
     }
     let overlayTimer = 0;
     const OVERLAY_SEL = '[id$="-backdrop"], [id$="-popover"], [class*="backdrop"], #message-context-menu';
@@ -382,18 +433,32 @@
     }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "hidden"] });
     // Только при смене темы: getComputedStyle на каждую смену класса body (открыть чат,
     // звонок…) заставлял браузер пересчитывать стили посреди анимации.
-    let barsDark = null;
+    let barsDark = null, barsChat = null;
     new MutationObserver(() => {
         const dark = document.body.classList.contains("dark");
+        // Открыли/закрыли чат или страницу поверх — меняется цвет нижней полосы (chatNavColor).
+        const chat = document.body.classList.contains("chat-selected") + "|" + document.body.classList.contains("m-page-open");
+        if (chat !== barsChat) { barsChat = chat; requestAnimationFrame(paintSystemBars); }
         if (dark === barsDark) return;
         barsDark = dark;
         requestAnimationFrame(syncSystemBars);
     }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
     setTimeout(syncSystemBars, 300);
+    // Темы Telegram меняют цвет фона и внутри одного режима (светлая → светлая) — тоже перекрашиваем.
+    let themeBarsFrame = 0;
+    document.addEventListener("kaban-theme", () => {
+        if (!themeBarsFrame) themeBarsFrame = requestAnimationFrame(() => { themeBarsFrame = 0; syncSystemBars(); });
+    });
     // Поворот экрана / смена темы системы: SystemBars из Capacitor заново ставит подложку
     // из темы приложения (тёмную) — возвращаем цвет под текущую тему KABAN.
     let barsTimer = 0;
     window.addEventListener("resize", () => { clearTimeout(barsTimer); barsTimer = setTimeout(syncSystemBars, 400); });
+
+    // Телефон закреплён вертикально (MainActivity), но полноэкранное видео/трансляцию можно повернуть.
+    // В старых сборках приложения метода нет — тогда просто ничего не меняется.
+    document.addEventListener("fullscreenchange", () => {
+        Native.setRotationAllowed?.({ allow: !!document.fullscreenElement })?.catch?.(() => {});
+    });
 
     /* ---------- разрешения: чтобы звонки правда доходили ---------- */
 

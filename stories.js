@@ -47,6 +47,13 @@ let storyRealtimeUnsub = null;
 let storyRefreshDebounce = null;
 let storyLastRefreshAt = 0;
 
+// Вход по сохранённой сессии бывает быстрее, чем загрузится этот файл: тогда
+// applyRealSessionState (script-ui.js) не находил startStories и истории не
+// загружались вовсе до перезапуска. Догоняем: вход уже был — запускаем сами.
+setTimeout(() => {
+    if (typeof myRealUserId !== "undefined" && myRealUserId && !storyRefreshTimer && !storiesUnavailable) startStories();
+}, 0);
+
 function scheduleStoriesRefresh(delay = 300) {
     clearTimeout(storyRefreshDebounce);
     storyRefreshDebounce = setTimeout(() => refreshStories(), delay);
@@ -84,6 +91,9 @@ async function refreshStories() {
     } catch (error) {
         console.warn("Не удалось загрузить истории", error);
         renderStoryNavButton();
+        // Сбой сети или сессия ещё не восстановлена (сразу после запуска) — повторим скоро,
+        // а не через полминуты опроса.
+        if (storyRefreshTimer) scheduleStoriesRefresh(3000);
         return;
     }
 
@@ -123,14 +133,20 @@ function renderStoriesBar() {
     renderStoryNavButton();
     if (!bar) return;
 
-    if (!storyFeed) { bar.hidden = true; bar.innerHTML = ""; bar._html = null; return; }
+    if (!storyFeed || storiesUnavailable || !myRealUserId) { bar.hidden = true; bar.innerHTML = ""; bar._html = null; return; }
 
-    // Своя история (добавить / посмотреть) живёт в нижнем баре — здесь только
-    // истории собеседников. Нет ни одной — полосу не показываем вовсе.
+    // Как в Telegram: первым кружком — «Моя история» (нет истории — аватар с «+», тап — новая;
+    // есть — кольцо, тап — посмотреть или добавить ещё), дальше истории собеседников.
     const others = storyGroups.filter((g) => g.user.id !== myRealUserId);
-    if (!others.length) { bar.hidden = true; bar.innerHTML = ""; bar._html = null; return; }
+    const mine = storyGroups.find((g) => g.user.id === myRealUserId);
+    const me = typeof cachedMyProfile !== "undefined" && cachedMyProfile ? cachedMyProfile : { id: myRealUserId, display_name: "Я" };
+    const own = `
+        <button type="button" class="story-item story-mine${mine ? (mine.unseen ? " unseen" : " seen") : " empty"}" onclick="storyNavTap(this)" aria-label="${mine ? "Моя история: посмотреть или добавить" : "Добавить историю"}">
+            <span class="story-ring">${storyAvatarHTML(me)}${mine ? "" : '<span class="story-plus" aria-hidden="true">+</span>'}</span>
+            <span class="story-name">Моя история</span>
+        </button>`;
 
-    const html = others.map((group) => `
+    const html = own + others.map((group) => `
         <button type="button" class="story-item${group.unseen ? " unseen" : " seen"}" data-user-id="${escapeHTML(group.user.id)}" onclick="openStoryViewer(this.dataset.userId)">
             <span class="story-ring">${storyAvatarHTML(group.user)}</span>
             <span class="story-name">${escapeHTML((group.user.display_name || "Контакт").split(" ")[0])}</span>
@@ -142,8 +158,8 @@ function renderStoriesBar() {
 
 }
 
-// Кнопка «История» в нижнем баре: видна, когда истории доступны в базе; кольцо —
-// если у меня сейчас есть активная история.
+// Кнопка «История» в нижнем баре (в прежней раскладке; сейчас своя история — первым
+// кружком в полосе историй): видна, когда истории доступны в базе.
 function renderStoryNavButton() {
     const button = document.getElementById("bottom-nav-story");
     if (!button) return;

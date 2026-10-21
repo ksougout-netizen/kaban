@@ -119,6 +119,59 @@ function isMissingRpcError(error) {
         || /could not find the function|does not exist/i.test(error?.message || "");
 }
 
+// Каналы realtime с постоянной темой (listen:<чат>, gcall:<чат>, presence:<чат>…). db.channel()
+// с темой, канал которой ещё есть в списке клиента, возвращает ТОТ ЖЕ, уже подписанный канал —
+// и .on() бросает «cannot add callbacks after subscribe()». Такой канал оставался, когда открытие
+// отменяли, не дождавшись подписки (вышел из чата и сразу вернулся), или подписка не успевала
+// за таймаут: «слушать вместе» в этом чате ломалось до перезапуска, а канал висел открытым.
+// Перед созданием убираем остаток (обычно он уходит из списка сразу).
+const CHANNEL_FREE_WAIT_MS = 4000;
+function staleChannel(db, topic) {
+    return db.getChannels().find((channel) => channel.topic === "realtime:" + topic) || null;
+}
+async function waitChannelTopicFree(db, topic) {
+    const stale = staleChannel(db, topic);
+    if (!stale) return;
+    const removal = db.removeChannel(stale).catch(() => {});
+    if (staleChannel(db, topic) !== stale) return;
+    await Promise.race([removal, new Promise((resolve) => setTimeout(resolve, CHANNEL_FREE_WAIT_MS))]);
+    // Сервер так и не ответил — старый канал больше не нужен никому, убираем его локально.
+    if (staleChannel(db, topic) === stale) { try { stale.teardown(); } catch { /* уже разобран */ } db.realtime._remove(stale); }
+}
+// Разовая отправка в чужой «почтовый ящик» (call-inbox:<id>, file-inbox:<id>…): тема общая у
+// всех отправок этому человеку, поэтому по очереди — иначе вторая, начатая, пока первая ещё
+// подключается (два файла подряд, повтор offer звонка), получала канал первой, а первая
+// закрывала его из-под второй.
+const inboxSendQueues = new Map();
+function sendToInbox(db, topic, event, payload) {
+    const previous = inboxSendQueues.get(topic) || Promise.resolve();
+    const run = previous.catch(() => {}).then(async () => {
+        // Канал этой темы подключён и живёт (свой же «ящик» — отправка самому себе) — шлём
+        // через него и не закрываем: это чужая постоянная подписка, а не остаток прошлой отправки.
+        const live = staleChannel(db, topic);
+        if (live && live.state === "joined") { await live.send({ type: "broadcast", event, payload }); return; }
+        await waitChannelTopicFree(db, topic);
+        const channel = db.channel(topic);
+        try {
+            await waitForChannelSubscribed(channel);
+            await channel.send({ type: "broadcast", event, payload });
+        } finally {
+            db.removeChannel(channel).catch(() => {}); // и при ошибке тоже — иначе канал оставался подписанным
+        }
+    });
+    inboxSendQueues.set(topic, run);
+    run.catch(() => {}).then(() => { if (inboxSendQueues.get(topic) === run) inboxSendQueues.delete(topic); });
+    return run;
+}
+// Синхронный вариант для API, которые сразу возвращают ручку: тема свободна — create() сейчас
+// же (как раньше), иначе — когда освободится. Возвращает функцию отмены.
+function whenChannelTopicFree(db, topic, create) {
+    if (!staleChannel(db, topic)) { create(); return () => {}; }
+    let cancelled = false;
+    waitChannelTopicFree(db, topic).then(() => { if (!cancelled) create(); });
+    return () => { cancelled = true; };
+}
+
 // Best-effort удаление файла из Storage по его публичной ссылке (вместо
 // того, чтобы отдельно хранить путь) — используется везде, где старый файл
 // заменяется новым (аватар, вложение удалённого сообщения) и его больше
@@ -1391,7 +1444,10 @@ const KabanAPI = {
     async getStoryFeed() {
         const db = getSupabaseClient();
         const me = await KabanAuth.getCurrentUser();
-        if (!me) return null;
+        // Сессия ещё восстанавливается (первые секунды после запуска) — это временно, а не
+        // «историй в базе нет»: раньше здесь возвращался null, и лента историй отключалась
+        // до перезапуска программы.
+        if (!me) throw new Error("Сессия ещё не готова");
 
         const { data: stories, error } = await db
             .from("stories")
@@ -1501,19 +1557,27 @@ const KabanAPI = {
         const me = await KabanAuth.getCurrentUser();
         if (!me) throw new Error("Нужно войти в аккаунт");
 
+        await waitChannelTopicFree(db, `listen:${chatId}`);
         const channel = db.channel(`listen:${chatId}`, { config: { broadcast: { self: true }, presence: { key: me.id } } });
 
         channel
             .on("broadcast", { event: "listen" }, ({ payload }) => onEvent?.(payload))
             .on("presence", { event: "sync" }, () => onPresence?.(Object.keys(channel.presenceState())));
 
-        await new Promise((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error("Нет связи с сервером")), 9000);
-            channel.subscribe((status) => {
-                if (status === "SUBSCRIBED") { clearTimeout(timer); resolve(); }
-                else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") { clearTimeout(timer); reject(new Error("Канал недоступен")); }
+        try {
+            await new Promise((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error("Нет связи с сервером")), 9000);
+                channel.subscribe((status) => {
+                    if (status === "SUBSCRIBED") { clearTimeout(timer); resolve(); }
+                    else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") { clearTimeout(timer); reject(new Error("Канал недоступен")); }
+                });
             });
-        });
+        } catch (error) {
+            // Не подключились — канал не оставляем висеть (раньше он подключался позже сам и
+            // так и оставался открытым до перезапуска, а следующая попытка получала его же).
+            db.removeChannel(channel).catch(() => {});
+            throw error;
+        }
 
         return {
             send: (payload) => channel.send({ type: "broadcast", event: "listen", payload }),
@@ -1586,6 +1650,7 @@ const KabanAPI = {
         const me = await KabanAuth.getCurrentUser();
         if (!me) throw new Error("Нужно войти в аккаунт");
 
+        await waitChannelTopicFree(db, `vroom:${chatId}:${roomId}`);
         const channel = db.channel(`vroom:${chatId}:${roomId}`, { config: { broadcast: { self: false }, presence: { key: me.id } } });
 
         channel
@@ -1597,16 +1662,24 @@ const KabanAPI = {
             });
 
         let closing = false;
-        await new Promise((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error("Нет связи с сервером")), 9000);
-            let subscribed = false;
-            channel.subscribe((status) => {
-                if (status === "SUBSCRIBED") { subscribed = true; clearTimeout(timer); resolve(); }
-                else if (!subscribed && (status === "CHANNEL_ERROR" || status === "TIMED_OUT")) { clearTimeout(timer); reject(new Error("Канал недоступен")); }
-                // Канал оборвался уже после подключения (сервер закрыл, сеть) — пусть владелец переподключится.
-                else if (subscribed && !closing && (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT")) onDrop?.(status);
+        try {
+            await new Promise((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error("Нет связи с сервером")), 9000);
+                let subscribed = false;
+                channel.subscribe((status) => {
+                    if (status === "SUBSCRIBED") { subscribed = true; clearTimeout(timer); resolve(); }
+                    else if (!subscribed && (status === "CHANNEL_ERROR" || status === "TIMED_OUT")) { clearTimeout(timer); reject(new Error("Канал недоступен")); }
+                    // Канал оборвался уже после подключения (сервер закрыл, сеть) — пусть владелец переподключится.
+                    else if (subscribed && !closing && (status === "CLOSED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT")) onDrop?.(status);
+                });
             });
-        });
+        } catch (error) {
+            // Не подключились — канал не оставляем: иначе он подключился бы позже сам и висел,
+            // а повторная попытка войти в комнату получила бы его же.
+            closing = true;
+            db.removeChannel(channel).catch(() => {});
+            throw error;
+        }
 
         return {
             send: (payload) => channel.send({ type: "broadcast", event: "sig", payload }),
@@ -1786,30 +1859,35 @@ const KabanAPI = {
     // список подключённых, из которого просто берём user_id из track().
     subscribeToPresence(chatId, { onSync, onTyping } = {}) {
         const db = getSupabaseClient();
-        const channel = db.channel(`presence:${chatId}`);
+        let channel = null;
 
-        channel
-            .on("presence", { event: "sync" }, () => {
-                const state = channel.presenceState();
-                const onlineUserIds = Object.values(state)
-                    .flat()
-                    .map((presence) => presence.user_id)
-                    .filter(Boolean);
-                onSync?.(onlineUserIds);
-            })
-            .on("broadcast", { event: "typing" }, ({ payload }) => onTyping?.(payload.userId))
-            .subscribe(async (status) => {
-                if (status !== "SUBSCRIBED") return;
-                const me = await KabanAuth.getCurrentUser();
-                if (me) await channel.track({ user_id: me.id, online_at: new Date().toISOString() });
-            });
+        // Вышли из чата и сразу вернулись — канал прошлого открытия ещё закрывается.
+        const cancel = whenChannelTopicFree(db, `presence:${chatId}`, () => {
+            channel = db.channel(`presence:${chatId}`);
+            const ch = channel;
+            ch
+                .on("presence", { event: "sync" }, () => {
+                    const state = ch.presenceState();
+                    const onlineUserIds = Object.values(state)
+                        .flat()
+                        .map((presence) => presence.user_id)
+                        .filter(Boolean);
+                    onSync?.(onlineUserIds);
+                })
+                .on("broadcast", { event: "typing" }, ({ payload }) => onTyping?.(payload.userId))
+                .subscribe(async (status) => {
+                    if (status !== "SUBSCRIBED") return;
+                    const me = await KabanAuth.getCurrentUser();
+                    if (me) await ch.track({ user_id: me.id, online_at: new Date().toISOString() });
+                });
+        });
 
         return {
             sendTyping: async () => {
                 const me = await KabanAuth.getCurrentUser();
-                channel.send({ type: "broadcast", event: "typing", payload: { userId: me?.id } });
+                channel?.send({ type: "broadcast", event: "typing", payload: { userId: me?.id } });
             },
-            unsubscribe: () => db.removeChannel(channel)
+            unsubscribe: () => { cancel(); return channel ? db.removeChannel(channel) : Promise.resolve(); }
         };
     },
 
@@ -1858,14 +1936,7 @@ const KabanAPI = {
     // требует, дальнейший обмен (answer/ice/end) идёт через canal самого
     // звонка (joinCallChannel), а не через этот.
     async sendCallOffer(calleeId, offerPayload) {
-        const db = getSupabaseClient();
-        const channel = db.channel(`call-inbox:${calleeId}`);
-        try {
-            await waitForChannelSubscribed(channel);
-            await channel.send({ type: "broadcast", event: "offer", payload: offerPayload });
-        } finally {
-            db.removeChannel(channel); // и при ошибке тоже — иначе канал оставался подписанным
-        }
+        await sendToInbox(getSupabaseClient(), `call-inbox:${calleeId}`, "offer", offerPayload);
     },
 
     // Канал конкретного звонка — им пользуются ОБЕ стороны после того, как
@@ -1927,14 +1998,7 @@ const KabanAPI = {
     },
 
     async sendScreenOffer(viewerId, offerPayload) {
-        const db = getSupabaseClient();
-        const channel = db.channel(`screen-inbox:${viewerId}`);
-        try {
-            await waitForChannelSubscribed(channel);
-            await channel.send({ type: "broadcast", event: "offer", payload: offerPayload });
-        } finally {
-            db.removeChannel(channel);
-        }
+        await sendToInbox(getSupabaseClient(), `screen-inbox:${viewerId}`, "offer", offerPayload);
     },
 
     joinScreenChannel(streamId, { onAnswer, onIceCandidate, onEnd } = {}) {
@@ -1978,14 +2042,7 @@ const KabanAPI = {
     },
 
     async sendGroupCallInvite(userId, payload) {
-        const db = getSupabaseClient();
-        const channel = db.channel(`gcall-inbox:${userId}`);
-        try {
-            await waitForChannelSubscribed(channel);
-            await channel.send({ type: "broadcast", event: "invite", payload });
-        } finally {
-            db.removeChannel(channel);
-        }
+        await sendToInbox(getSupabaseClient(), `gcall-inbox:${userId}`, "invite", payload);
     },
 
     // Войти в комнату звонка: onSignal — адресные сообщения, onParticipants —
@@ -2012,7 +2069,11 @@ const KabanAPI = {
         // оставался мёртвым — меня не было в списке участников у остальных, сигналы
         // не ходили, и переподключение соединений было невозможно. Теперь канал
         // пересоздаётся, а своё присутствие объявляется заново.
-        const open = () => {
+        // Тема gcall:<чат> — та же, что у наблюдателя баннера «Идёт звонок» и у прошлой попытки
+        // при переподключении: остаток, если он есть, убираем (см. waitChannelTopicFree).
+        const open = async () => {
+            await waitChannelTopicFree(db, `gcall:${chatId}`);
+            if (left) throw new Error("Звонок уже покинут");
             const ch = db.channel(`gcall:${chatId}`, { config: { presence: { key: myUserId }, broadcast: { self: false } } });
             channel = ch;
             ch.on("broadcast", { event: "signal" }, ({ payload }) => { if (channel === ch) onSignal?.(payload); })
@@ -2048,7 +2109,7 @@ const KabanAPI = {
             if (left) return;
             const old = channel;
             channel = null;
-            try { db.removeChannel(old); } catch {}
+            if (old) db.removeChannel(old).catch(() => {});
             const delay = [700, 2000, 4000, 8000][Math.min(retry++, 3)];
             reopenTimer = setTimeout(attempt, delay);
         };
@@ -2079,18 +2140,22 @@ const KabanAPI = {
     // открытой группе), сами в неё не входя.
     watchGroupCallRoom(chatId, onChange) {
         const db = getSupabaseClient();
-        const channel = db.channel(`gcall:${chatId}`, { config: { presence: { key: `watch-${Math.random().toString(36).slice(2)}` } } });
-        channel
-            .on("presence", { event: "sync" }, () => {
-                const participants = new Map();
-                Object.entries(channel.presenceState()).forEach(([key, metas]) => {
-                    const meta = metas[metas.length - 1];
-                    if (meta && meta.userId) participants.set(meta.userId, meta);
-                });
-                onChange?.(participants);
-            })
-            .subscribe();
-        return () => db.removeChannel(channel);
+        let channel = null;
+        // Только что покинули звонок в этой группе — его канал (та же тема) ещё закрывается.
+        const cancel = whenChannelTopicFree(db, `gcall:${chatId}`, () => {
+            channel = db.channel(`gcall:${chatId}`, { config: { presence: { key: `watch-${Math.random().toString(36).slice(2)}` } } });
+            channel
+                .on("presence", { event: "sync" }, () => {
+                    const participants = new Map();
+                    Object.entries(channel.presenceState()).forEach(([key, metas]) => {
+                        const meta = metas[metas.length - 1];
+                        if (meta && meta.userId) participants.set(meta.userId, meta);
+                    });
+                    onChange?.(participants);
+                })
+                .subscribe();
+        });
+        return () => { cancel(); if (channel) db.removeChannel(channel).catch(() => {}); };
     },
 
     /* ------------------------------------------------------------------
@@ -2113,14 +2178,7 @@ const KabanAPI = {
     },
 
     async sendFileOffer(receiverId, offerPayload) {
-        const db = getSupabaseClient();
-        const channel = db.channel(`file-inbox:${receiverId}`);
-        try {
-            await waitForChannelSubscribed(channel);
-            await channel.send({ type: "broadcast", event: "offer", payload: offerPayload });
-        } finally {
-            db.removeChannel(channel);
-        }
+        await sendToInbox(getSupabaseClient(), `file-inbox:${receiverId}`, "offer", offerPayload);
     },
 
     // onReoffer/sendReoffer — для переподключения после обрыва P2P-связи

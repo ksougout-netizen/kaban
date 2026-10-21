@@ -49,6 +49,65 @@ function cssUrlValue(rawUrl) {
     return `url("${url.replace(/["'\\()\s]/g, (ch) => encodeURIComponent(ch))}")`;
 }
 
+// Размытый фон шапки профиля (--gp) из фото. Фото с резкими краями (рисунки, SVG-аватары ботов),
+// растянутое в 3–4 раза, после размытия давало «ступеньки» и квадраты. Как в Telegram: фото
+// сначала уменьшаем до 24×24 (цвета усредняются, краёв не остаётся), шапка растягивает и
+// размывает уже его — гладкое цветовое поле у любой картинки. Пока уменьшенное не готово
+// (или картинку нельзя прочитать — чужой сервер без CORS), стоит само фото, как раньше.
+const heroPhotoCache = new Map();
+function setHeroPhoto(el, rawUrl) {
+    if (!el) return;
+    const url = rawUrl ? String(rawUrl) : "";
+    el.dataset.heroSrc = url;
+    if (!url) { el.style.setProperty("--gp", "none"); return; }
+    if (heroPhotoCache.has(url)) { el.style.setProperty("--gp", `url("${heroPhotoCache.get(url)}")`); return; }
+    const direct = cssUrlValue(url);
+    el.style.setProperty("--gp", direct !== "none" ? direct : `url(${url})`);
+    const img = new Image();
+    if (!/^(data|blob):/i.test(url)) img.crossOrigin = "anonymous";
+    img.onload = () => {
+        try {
+            // 1) 16×16 — усреднённые цвета без краёв.
+            const size = 16, tiny = document.createElement("canvas");
+            tiny.width = tiny.height = size;
+            const tctx = tiny.getContext("2d");
+            tctx.imageSmoothingEnabled = true;
+            tctx.imageSmoothingQuality = "high";
+            const w = img.naturalWidth, h = img.naturalHeight;
+            // Квадратные и SVG (у SVG без размеров «естественные» 150×150 условны, и вырезка
+            // по ним рисовала один пиксель) — целиком; прямоугольные фото — серединой по меньшей стороне.
+            if (!w || !h || w === h || /\.svg(\?|#|$)|^data:image\/svg/i.test(url)) tctx.drawImage(img, 0, 0, size, size);
+            else { const side = Math.min(w, h); tctx.drawImage(img, (w - side) / 2, (h - side) / 2, side, side, 0, 0, size, size); }
+            // Пустая (прозрачная) копия — значит, нарисовать не вышло: оставляем само фото.
+            const tinyData = tctx.getImageData(0, 0, size, size).data;
+            let opaque = 0;
+            for (let i = 3; i < tinyData.length; i += 4) if (tinyData[i] > 200) opaque++;
+            if (opaque < size * size * 0.5) return;
+            // 2) 96×96 с размытием уже здесь: растянутые 16 пикселей не дают «квадратов»
+            //    (размытия шапки на них не хватало). Края — с запасом, чтобы не просвечивали.
+            const out = 96, canvas = document.createElement("canvas");
+            canvas.width = canvas.height = out;
+            const ctx = canvas.getContext("2d");
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.filter = "blur(7px)";
+            ctx.drawImage(tiny, -12, -12, out + 24, out + 24);
+            ctx.filter = "none";
+            // 3) Лёгкий шум против цветовых «ступенек» в плавных тёмных переходах.
+            const frame = ctx.getImageData(0, 0, out, out), px = frame.data;
+            for (let i = 0; i < px.length; i += 4) {
+                const n = (Math.random() - 0.5) * 5;
+                px[i] += n; px[i + 1] += n; px[i + 2] += n; px[i + 3] = 255;
+            }
+            ctx.putImageData(frame, 0, 0);
+            const small = canvas.toDataURL("image/png");
+            heroPhotoCache.set(url, small);
+            if (el.dataset.heroSrc === url) el.style.setProperty("--gp", `url("${small}")`);
+        } catch { /* картинку нельзя прочитать — остаётся само фото */ }
+    };
+    img.src = url;
+}
+
 // Аватар без фото — как в Telegram: градиентный круг с инициалами, у каждого
 // человека/группы СВОЙ постоянный цвет (по id). Раньше был бежевый квадрат с 👤.
 const AVATAR_GRADIENTS = [
@@ -100,6 +159,13 @@ let currentChatTitle = "";
 let currentChatIsSecret = false;
 
 setAppHeight();
+
+// «Телефонная» ширина (≤ 650 px) — одним флагом, который обновляет сам браузер. Чтение
+// window.innerWidth в обработчиках касаний посреди прокрутки могло заставить браузер
+// синхронно пересчитать раскладку (микрофризы на слабом телефоне).
+const PHONE_WIDTH_QUERY = window.matchMedia("(max-width: 650px)");
+let isPhoneWidth = PHONE_WIDTH_QUERY.matches;
+PHONE_WIDTH_QUERY.addEventListener?.("change", (event) => { isPhoneWidth = event.matches; });
 
 // Интерфейс по высоте окна, ему нечего прокручивать. Но браузер сам сдвигает html/body,
 // когда фокус или scrollIntoView попадает на элемент вне видимой области (из-за этого всё
@@ -193,6 +259,8 @@ const appSettings = {
     bubbleFill: "solid",
     bubbleIn: "neutral",
     chatWallpaper: "default",
+    // Выбранная тема Telegram (TG_THEMES) или null — тогда цвета собираются из акцента.
+    themePreset: null,
     animatedEmoji: true,
     messageEffects: true,
     autoEffects: true,
@@ -262,10 +330,52 @@ const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
    пузырей и обои. Форма пузырей и хвостик остаются как у пользователя.
    Всё считается теми же computeThemeTokens, что и ручной выбор, поэтому
    контраст текста на пузырях и читаемость акцента гарантированы так же. */
+/* Шесть тем «как в Telegram» (на телефоне — только они): полный набор цветов задан вручную
+   (vars), а не выводится из акцента — так пузыри, фон, панели и галочки подобраны друг под
+   друга, как у Telegram. pair — тема для переключателя «Тёмная тема». На компьютере после
+   них идут прежние темы, собираемые из акцента. */
+const TG_THEMES = [
+    { id: "classic", label: "Классика", dark: false, pair: "night", wallpaper: "tg-classic", vars: {
+        "--bg": "#f1f1f4", "--surface": "#ffffff", "--surface2": "#f1f1f4", "--border": "#e5e5ea", "--text": "#0f0f10", "--muted": "#8a8f98",
+        "--accent": "#3390ec", "--accent-text": "#ffffff", "--accent-wash": "#e6f1fd",
+        "--bubble-out": "#effedd", "--bubble-out-solid": "#effedd", "--bubble-out-text": "#0f1a0b", "--bubble-out-read": "#4fae4e",
+        "--bubble-in": "#ffffff", "--bubble-in-text": "#0f0f10" } },
+    { id: "day", label: "День", dark: false, pair: "dark", wallpaper: "tg-day", vars: {
+        "--bg": "#f4f5f7", "--surface": "#ffffff", "--surface2": "#f1f3f6", "--border": "#e3e6ea", "--text": "#0f1115", "--muted": "#8b939e",
+        "--accent": "#2f86ea", "--accent-text": "#ffffff", "--accent-wash": "#e5f0fd",
+        "--bubble-out": "linear-gradient(160deg, #46a0f6, #2a7de8)", "--bubble-out-solid": "#2f86ea", "--bubble-out-text": "#ffffff", "--bubble-out-read": "#d6eaff",
+        "--bubble-in": "#ffffff", "--bubble-in-text": "#0f1115" } },
+    { id: "sakura", label: "Сакура", dark: false, pair: "dark", wallpaper: "tg-sakura", vars: {
+        "--bg": "#fbf3f6", "--surface": "#ffffff", "--surface2": "#f8eef2", "--border": "#f0dfe6", "--text": "#1c1216", "--muted": "#9a8a91",
+        "--accent": "#e0457b", "--accent-text": "#ffffff", "--accent-wash": "#fde7ef",
+        "--bubble-out": "#ffe2ec", "--bubble-out-solid": "#ffe2ec", "--bubble-out-text": "#2a1219", "--bubble-out-read": "#e0457b",
+        "--bubble-in": "#ffffff", "--bubble-in-text": "#1c1216" } },
+    { id: "night", label: "Ночь", dark: true, pair: "classic", wallpaper: "tg-night", vars: {
+        "--bg": "#0e1621", "--surface": "#17212b", "--surface2": "#202b36", "--border": "#0b121a", "--text": "#f5f7fa", "--muted": "#7d8b99",
+        "--accent": "#5ea7ec", "--accent-text": "#ffffff", "--accent-wash": "#1d3247",
+        "--bubble-out": "#2b5278", "--bubble-out-solid": "#2b5278", "--bubble-out-text": "#ffffff", "--bubble-out-read": "#7ec4ff",
+        "--bubble-in": "#182533", "--bubble-in-text": "#f5f7fa" } },
+    { id: "dark", label: "Тёмная", dark: true, pair: "day", wallpaper: "tg-dark", vars: {
+        "--bg": "#0f0f10", "--surface": "#1c1c1e", "--surface2": "#262628", "--border": "#0a0a0b", "--text": "#f5f5f7", "--muted": "#8d8d93",
+        "--accent": "#8b7cf0", "--accent-text": "#ffffff", "--accent-wash": "#2a2540",
+        "--bubble-out": "linear-gradient(160deg, #8a76ee, #6c5bd8)", "--bubble-out-solid": "#7766e0", "--bubble-out-text": "#ffffff", "--bubble-out-read": "#e2dcff",
+        "--bubble-in": "#232325", "--bubble-in-text": "#f5f5f7" } },
+    { id: "forest", label: "Лес", dark: true, pair: "classic", wallpaper: "tg-forest", vars: {
+        "--bg": "#0c1411", "--surface": "#13201a", "--surface2": "#1b2a22", "--border": "#09110d", "--text": "#eef5f1", "--muted": "#7f978a",
+        "--accent": "#42c58a", "--accent-text": "#06140d", "--accent-wash": "#183427",
+        "--bubble-out": "#21704c", "--bubble-out-solid": "#21704c", "--bubble-out-text": "#ffffff", "--bubble-out-read": "#a6f0cb",
+        "--bubble-in": "#18261f", "--bubble-in-text": "#eef5f1" } }
+];
+const TG_THEME_VAR_NAMES = [...new Set(TG_THEMES.flatMap((t) => Object.keys(t.vars)))];
+
+// Телефон (сенсорный экран узкой ширины): только темы Telegram, только узоры на обоях, без
+// живых обоев, стекла, глянца и атмосферы — плавность и чистый вид важнее эффектов.
+const IS_PHONE_DEVICE = isPhoneWidth && window.matchMedia("(pointer: coarse)").matches;
+document.documentElement.classList.toggle("phone-device", IS_PHONE_DEVICE);
+
 const THEME_PRESETS = [
-    { id: "classic",   label: "Классика",  dark: false, accent: "default", tint: 0, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" },
-    { id: "night",     label: "Ночь",      dark: true,  accent: "default", tint: 0, fill: "solid",    bubbleIn: "neutral", wallpaper: "default" },
-    { id: "ocean",     label: "Океан",     dark: false, accent: "#0ea5e9", tint: 2, fill: "gradient", bubbleIn: "neutral", wallpaper: "default" },
+    ...TG_THEMES.map((t) => ({ ...t, accent: "default", tint: 0, fill: "solid", bubbleIn: "neutral" })),
+    { id: "ocean",    label: "Океан",     dark: false, accent: "#0ea5e9", tint: 2, fill: "gradient", bubbleIn: "neutral", wallpaper: "default" },
     { id: "mint",      label: "Мята",      dark: false, accent: "#10b981", tint: 2, fill: "solid",    bubbleIn: "tint",    wallpaper: "default" },
     { id: "sunset",    label: "Закат",     dark: false, accent: "#f97316", tint: 2, fill: "gradient", bubbleIn: "neutral", wallpaper: "sunset" },
     { id: "sakura",    label: "Сакура",    dark: false, accent: "#ec4899", tint: 2, fill: "gradient", bubbleIn: "tint",    wallpaper: "default" },
@@ -282,7 +392,8 @@ const THEME_PRESETS = [
 ];
 
 function themePresetMatches(preset) {
-    return !!appSettings.darkMode === preset.dark
+    if (preset.vars) return appSettings.themePreset === preset.id;
+    return !appSettings.themePreset && !!appSettings.darkMode === preset.dark
         && String(appSettings.accentColor || "default").toLowerCase() === preset.accent
         && (appSettings.tintLevel || 0) === preset.tint
         && appSettings.bubbleFill === preset.fill
@@ -297,6 +408,8 @@ function currentThemePreset() {
 function applyThemePreset(id) {
     const preset = THEME_PRESETS.find((p) => p.id === id);
     if (!preset) return;
+    // Тема Telegram — готовый набор цветов (applyThemeTokens), прежние — из акцента.
+    appSettings.themePreset = preset.vars ? preset.id : null;
     appSettings.darkMode = preset.dark;
     appSettings.accentColor = preset.accent;
     appSettings.tintLevel = preset.tint;
@@ -315,10 +428,25 @@ function renderThemePresets() {
     const grid = document.getElementById("theme-preset-grid");
     if (!grid) return;
 
-    grid.innerHTML = THEME_PRESETS.map((preset) => {
+    // Телефон — только шесть тем Telegram.
+    const presets = IS_PHONE_DEVICE ? THEME_PRESETS.filter((p) => p.vars) : THEME_PRESETS;
+    grid.classList.toggle("tg-presets", IS_PHONE_DEVICE);
+    grid.innerHTML = presets.map((preset) => {
+        if (preset.vars) {
+            // Превью темы Telegram: её обои с узором, входящий и свой пузырь — как в чате.
+            const wp = findWallpaper(preset.wallpaper);
+            const pattern = wp.pattern ? `<span class="wp-tile-pattern" style="--wpp:${wp.pattern.replace(/"/g, "&quot;")};--wpp-ink:${wp.ink || "currentColor"};opacity:${(wp.amount || 11) / 100 * 2.2}"></span>` : "";
+            return `
+            <button type="button" class="theme-preset tg" data-preset="${preset.id}" onclick="applyThemePreset('${preset.id}')" aria-label="Тема «${preset.label}»" title="${preset.label}">
+                <span class="theme-preset-screen" style="background:${wp.css || preset.vars["--bg"]}">${pattern}
+                    <span class="theme-preset-bubble in" style="background:${preset.vars["--bubble-in"]}"></span>
+                    <span class="theme-preset-bubble out" style="background:${preset.vars["--bubble-out"]}"></span>
+                </span>
+                <span class="theme-preset-name">${preset.label}</span>
+            </button>`;
+        }
         const hex = HEX_COLOR_RE.test(preset.accent) ? preset.accent : DEFAULT_ACCENT_HEX;
         const t = computeThemeTokens(hex, preset.dark, { bubbleFill: preset.fill, bubbleIn: preset.bubbleIn, tintLevel: preset.tint });
-        // Тёмная «Ночь»/светлая «Классика» без выбранного цвета рисуются штатным CSS — берём те же базовые цвета.
         const screen = preset.tint ? t["--tint-main"] : (preset.dark ? "#101010" : "#f5f5f3");
         const incoming = preset.bubbleIn === "tint" ? t["--bubble-in"] : (preset.dark ? "#2c2c2e" : "#e9e9eb");
         return `
@@ -500,6 +628,33 @@ function saveSettings() {
 function applyThemeTokens() {
 
     const body = document.body;
+
+    // Тема Telegram: её готовый набор цветов. Переключатель «Тёмная тема» ведёт на парную тему.
+    let tg = appSettings.themePreset ? TG_THEMES.find((t) => t.id === appSettings.themePreset) : null;
+    if (tg && tg.dark !== !!appSettings.darkMode) {
+        const pair = TG_THEMES.find((t) => t.id === tg.pair);
+        if (pair) {
+            if ((appSettings.chatWallpaper || "default") === tg.wallpaper) appSettings.chatWallpaper = pair.wallpaper;
+            appSettings.themePreset = pair.id;
+            tg = pair;
+            saveSettings();
+            if (typeof currentChatId !== "undefined" && currentChatId && typeof applyChatWallpaper === "function") applyChatWallpaper(currentChatId);
+        }
+    }
+    if (tg) {
+        body.dataset.accent = "custom";
+        body.dataset.tgTheme = tg.id;
+        body.removeAttribute("data-tint");
+        THEME_VAR_NAMES.forEach((name) => body.style.removeProperty(name));
+        Object.entries(tg.vars).forEach(([name, value]) => body.style.setProperty(name, value));
+        return;
+    }
+    // Вышли из темы Telegram — её цвета снимаем (иначе остались бы поверх штатных).
+    if (body.dataset.tgTheme) {
+        TG_THEME_VAR_NAMES.forEach((name) => body.style.removeProperty(name));
+        delete body.dataset.tgTheme;
+    }
+
     const accentIsHex = HEX_COLOR_RE.test(appSettings.accentColor || "");
     const untouched = !accentIsHex
         && (appSettings.tintLevel || 0) === 0
@@ -563,6 +718,8 @@ function applySettings() {
         });
 
     syncThemeColorSelection();
+    // Сменилась тема (цвет фона) — системные полосы Android перекрашиваются следом (android-app.js).
+    document.dispatchEvent(new Event("kaban-theme"));
 
     // Анимации эмодзи выключили — оживлённые экземпляры возвращаются к символам.
     if (typeof animatedEmojiEnabled === "function" && !animatedEmojiEnabled()) {
@@ -573,6 +730,7 @@ function applySettings() {
 
 
 function setThemeColor(id) {
+    appSettings.themePreset = null;   // свой цвет — уже не готовая тема
     appSettings.accentColor = id;
     applySettings();
     saveSettings();
@@ -586,6 +744,8 @@ function setDarkMode(dark) {
 
 // Один обработчик для всех сегментных переключателей и тумблеров окна «Оформление».
 function setThemeOption(key, value) {
+    // Подкраска фона и заливка пузырей — ручная настройка цвета: готовая тема снимается.
+    if (key === "tintLevel" || key === "bubbleFill" || key === "bubbleIn") appSettings.themePreset = null;
     appSettings[key] = value;
     applySettings();
     saveSettings();
@@ -645,6 +805,7 @@ async function pickThemeFromPhoto(input) {
     if (!file) return;
     try {
         const hex = await dominantColorFromImage(file);
+        appSettings.themePreset = null;
         appSettings.accentColor = hex;
         if (!appSettings.tintLevel) appSettings.tintLevel = 2;
         applySettings();
@@ -755,15 +916,56 @@ const PATTERN_WALLPAPERS = [
 }));
 WALLPAPERS.splice(1, 0, ...PATTERN_WALLPAPERS);
 
+/* Обои тем Telegram: густой узор из всех значков (как фирменный узор Telegram) поверх мягкого
+   четырёхцветного градиента; у каждой темы свой цвет узора (ink) и его плотность (amount, %). */
+const TG_SPOTS = [
+    [22, 20, -12, .8], [70, 30, 18, .7], [122, 18, -6, .75], [176, 28, 22, .8], [224, 16, -20, .7],
+    [44, 66, 8, .75], [98, 72, -18, .8], [150, 64, 12, .7], [204, 70, -8, .78],
+    [18, 112, 20, .72], [70, 118, -10, .8], [124, 110, 26, .74], [178, 118, -16, .8], [230, 112, 10, .7],
+    [44, 160, -20, .78], [98, 166, 12, .72], [152, 158, -8, .8], [206, 164, 18, .74],
+    [20, 208, 6, .76], [72, 214, -16, .72], [124, 206, 14, .8], [178, 214, -22, .74], [228, 206, 8, .78]
+];
+const TG_DOODLES = ["heart", "star", "planet", "note", "paw", "daisy", "rocket", "coin", "leaf", "moon", "headphones",
+    "fish", "sparkle", "gamepad", "cherry", "notes", "tulip", "dice", "icecream", "ring", "yarn", "donut", "pizza"];
+function tgDoodlePattern() {
+    const body = TG_SPOTS.map(([x, y, r, s], i) => `<g transform='translate(${x} ${y}) rotate(${r}) scale(${s})'>${DOODLE[TG_DOODLES[i % TG_DOODLES.length]]}</g>`).join("");
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>${body}</svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+const TG_PATTERN = tgDoodlePattern();
+// Тот же узор — лёгким слоем на цветной шапке профиля (style.css → --profile-pattern).
+document.documentElement.style.setProperty("--profile-pattern", TG_PATTERN);
+const meshGradient = (c, base) => `radial-gradient(at 12% 8%, ${c[0]} 0, transparent 58%), radial-gradient(at 92% 18%, ${c[1]} 0, transparent 58%), radial-gradient(at 8% 92%, ${c[2]} 0, transparent 58%), radial-gradient(at 88% 88%, ${c[3]} 0, transparent 62%), ${base}`;
+const TG_WALLPAPERS = [
+    { id: "tg-classic", label: "Классика", css: meshGradient(["#dbddbb", "#6ba587", "#d5d88d", "#88b884"], "#b3c592"), ink: "#24451f", amount: 22 },
+    { id: "tg-day", label: "День", css: meshGradient(["#d9e8f7", "#a9c8ec", "#e4ecf6", "#b9d1ee"], "#c7daf1"), ink: "#1f4a80", amount: 16 },
+    { id: "tg-sakura", label: "Сакура", css: meshGradient(["#ffd6e4", "#f5a8c4", "#fde4ec", "#f2b9cf"], "#f6c6d7"), ink: "#8a2a52", amount: 15 },
+    { id: "tg-night", label: "Ночь", css: meshGradient(["#1f3046", "#132233", "#22344b", "#0f1b28"], "#172636"), ink: "#9ec5ee", amount: 9 },
+    { id: "tg-dark", label: "Тёмная", css: meshGradient(["#2a2340", "#141418", "#1e1a2e", "#0d0d10"], "#151519"), ink: "#b9aaff", amount: 8 },
+    { id: "tg-forest", label: "Лес", css: meshGradient(["#1d4433", "#0f2219", "#173a2a", "#0a1711"], "#11261c"), ink: "#9fe6c4", amount: 9 }
+].map((w) => {
+    // Цвет низа обоев (для полосы навигации Android под полем ввода): смесь нижних точек градиента.
+    const c = [...w.css.matchAll(/#[0-9a-f]{6}/gi)].map((m) => m[0]);
+    const bottom = mixHex(mixHex(c[2], c[3], 0.5), c[4], 0.35);
+    return { ...w, pattern: TG_PATTERN, tg: true, bottom };
+});
+WALLPAPERS.splice(1, 0, ...TG_WALLPAPERS);
+
+// Телефон: в выборе обоев — только узоры (и «без обоев»), как в Telegram.
+function visibleWallpapers() {
+    return WALLPAPERS.filter((w) => !w.hidden && (!IS_PHONE_DEVICE || w.id === "default" || w.pattern));
+}
+
 function findWallpaper(id) {
     return WALLPAPERS.find((w) => w.id === id) || WALLPAPERS[0];
 }
 
 function wallpaperTileHTML(wallpaper, selected, onclick, label) {
     const style = wallpaper && wallpaper.css ? `background:${wallpaper.css}` : "";
+    const ink = wallpaper?.ink ? `;--wpp-ink:${wallpaper.ink};opacity:${Math.min(1, (wallpaper.amount || 11) / 100 * 2.2)}` : "";
     return `
         <button type="button" class="wp-tile${selected ? " selected" : ""}" onclick="${onclick}">
-            <span class="wp-tile-preview${wallpaper && wallpaper.css ? "" : " plain"}" style="${style}">${wallpaper?.pattern ? `<span class="wp-tile-pattern" style="--wpp:${wallpaper.pattern.replace(/"/g, "&quot;")}"></span>` : ""}</span>
+            <span class="wp-tile-preview${wallpaper && wallpaper.css ? "" : " plain"}" style="${style}">${wallpaper?.pattern ? `<span class="wp-tile-pattern" style="--wpp:${wallpaper.pattern.replace(/"/g, "&quot;")}${ink}"></span>` : ""}</span>
             <span class="wp-tile-label">${label}</span>
         </button>`;
 }
@@ -783,11 +985,12 @@ function renderThemeColorGrid() {
 
     const wallpapers = document.getElementById("theme-wallpaper-grid");
     if (wallpapers) {
-        wallpapers.innerHTML = WALLPAPERS.filter((w) => !w.hidden)
+        const list = visibleWallpapers();
+        wallpapers.innerHTML = list
             .map((w) => wallpaperTileHTML(w, false, `setGlobalWallpaper('${w.id}')`, w.label))
             .join("");
         wallpapers.querySelectorAll(".wp-tile").forEach((tile, index) => {
-            tile.dataset.wallpaper = WALLPAPERS.filter((w) => !w.hidden)[index].id;
+            tile.dataset.wallpaper = list[index].id;
         });
     }
 
@@ -891,6 +1094,25 @@ function initializeSettings() {
             if (typeof savedSettings[name] === "string") appSettings[name] = savedSettings[name];
         });
         if (Number.isInteger(savedSettings.tintLevel)) appSettings.tintLevel = savedSettings.tintLevel;
+        if (typeof savedSettings.themePreset === "string" && TG_THEMES.some((t) => t.id === savedSettings.themePreset)) {
+            appSettings.themePreset = savedSettings.themePreset;
+        }
+        // Телефон: живые обои, стекло, глянец и атмосфера выключены всегда (в настройках их нет),
+        // темы — только Telegram: прежнюю (из акцента) один раз меняем на ближайшую по режиму,
+        // обои без узора — на узор этой темы.
+        if (IS_PHONE_DEVICE) {
+            Object.assign(appSettings, LITE_SETTINGS);
+            if (!appSettings.themePreset) {
+                const tg = TG_THEMES.find((t) => t.id === (appSettings.darkMode ? "night" : "classic"));
+                appSettings.themePreset = tg.id;
+                appSettings.accentColor = "default";
+                appSettings.tintLevel = 0;
+                appSettings.bubbleFill = "solid";
+                appSettings.bubbleIn = "neutral";
+                if (!findWallpaper(appSettings.chatWallpaper || "default").pattern) appSettings.chatWallpaper = tg.wallpaper;
+                saveSettings();
+            }
+        }
         // Слабый телефон, настройки сохранены ещё до облегчения — выключаем тяжёлое один раз;
         // включит обратно сам — так и останется.
         if (LITE_DEVICE && !appSettings.liteDefaults) {
@@ -7266,7 +7488,15 @@ function toggleChatSearch() {
 }
 
 
+// Подсветка совпадений — через CSS Custom Highlight API: диапазоны без правки DOM. Вставка <mark>
+// в текст каждого совпадения заставляла заново раскладывать (и «шейпить») все найденные
+// сообщения — 0,2–0,5 с на нажатие в чате с карточками на слабом телефоне. Нет API — <mark>.
+const CHAT_SEARCH_HIGHLIGHT_API = typeof CSS !== "undefined" && !!CSS.highlights && typeof Highlight === "function";
+let chatSearchRanges = [];
+
 function clearSearchHighlights() {
+
+    if (CHAT_SEARCH_HIGHLIGHT_API) { CSS.highlights.delete("chat-search"); chatSearchRanges = []; }
 
     // normalize() нужен только там, где реально были подсветки (они дробили
     // текстовый узел на куски) — прежний вариант вызывал его для КАЖДОГО
@@ -7296,6 +7526,21 @@ function highlightSearchText(message, query) {
             node.textContent.toLocaleLowerCase().includes(lowerQuery)) {
             textNodes.push(node);
         }
+    }
+
+    if (CHAT_SEARCH_HIGHLIGHT_API) {
+        textNodes.forEach((node) => {
+            const lowerText = node.textContent.toLocaleLowerCase();
+            for (let index = lowerText.indexOf(lowerQuery); index !== -1; index = lowerText.indexOf(lowerQuery, index + query.length)) {
+                // Строчные буквы бывают длиннее заглавных (İ) — не выходим за конец узла.
+                if (index + query.length > node.length) break;
+                const range = new Range();
+                range.setStart(node, index);
+                range.setEnd(node, index + query.length);
+                chatSearchRanges.push(range);
+            }
+        });
+        return;
     }
 
     textNodes.forEach((node) => {
@@ -7338,6 +7583,12 @@ function updateChatSearch() {
         return;
     }
 
+    // История ещё дорисовывается кусками — ищем по всей загруженной, а не по уже нарисованной.
+    if (typeof pendingHistoryFill !== "undefined" && pendingHistoryFill) {
+        flushPendingHistory();
+        rows.splice(0, rows.length, ...document.querySelectorAll("#messages .message-row"));
+    }
+
     const lowerQuery = query.toLocaleLowerCase();
     chatSearchMatches = rows.filter((row) =>
         row.querySelector(".message")?.textContent.toLocaleLowerCase().includes(lowerQuery)
@@ -7352,6 +7603,7 @@ function updateChatSearch() {
             highlightSearchText(row.querySelector(".message"), query);
         }
     });
+    if (CHAT_SEARCH_HIGHLIGHT_API && chatSearchRanges.length) CSS.highlights.set("chat-search", new Highlight(...chatSearchRanges));
 
     if (chatSearchMatches.length) {
         chatSearchIndex = 0;
@@ -7690,6 +7942,7 @@ function setRecordingStatus(state, text) {
 
     if (!state) {
         status.classList.remove("visible", "audio-recording", "video-recording");
+        document.body.classList.remove("recording-video");
         preview.pause();
         preview.srcObject = null;
         return;
@@ -7698,6 +7951,8 @@ function setRecordingStatus(state, text) {
     status.classList.add("visible");
     status.classList.toggle("audio-recording", state.mode === "audio");
     status.classList.toggle("video-recording", state.mode === "video");
+    // Кружок на телефоне — крупно по центру над затемнённым чатом (как в Telegram), см. style.css.
+    document.body.classList.toggle("recording-video", state.mode === "video");
     // В панели — только время («00:07»); подписи вроде «Подключаем камеру…» — целиком.
     const timeOnly = /(\d\d:\d\d)\s*$/.exec(text);
     label.textContent = timeOnly ? timeOnly[1] : text;

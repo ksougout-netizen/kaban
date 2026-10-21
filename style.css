@@ -294,6 +294,9 @@ body {
     margin-left: 14px;
 }
 
+/* Телефон: кнопки шапки — у правого края, как в Telegram. */
+html.phone-device .brand-actions { margin-left: auto; margin-right: -8px; }
+
 .brand-actions .icon-btn {
     display: grid;
     place-items: center;
@@ -569,6 +572,70 @@ body {
     transition: none;
     will-change: transform;
 }
+
+/* Свайп по чату как в Telegram: цветные кнопки под строкой (script-chats.js → chatSwipeActions). */
+#real-chat-list { position: relative; overflow-x: clip; }
+/* Горизонтальный жест по строке — наш (свайп), браузер забирает только вертикальную прокрутку. */
+#real-chat-list .real-chat { touch-action: pan-y; }
+/* Долгое нажатие открывает меню чата — без выделения текста (зелёные маркеры Android) и системного меню. */
+#real-chat-list .real-chat,
+#contacts-list .chat,
+#contacts-search-results .chat,
+#calls-list > *,
+.bottom-nav-item,
+.chat-swipe-actions {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+}
+.real-chat.chat-swipe-settle { transition: transform .34s cubic-bezier(.2,.85,.25,1); }
+/* Сенсорный экран: интерфейс не выделяется долгим нажатием (как в нативных приложениях) —
+   иначе Android выделял ближайшее слово где угодно, даже в невидимом тосте внизу экрана
+   (зелёные маркеры поверх меню чата). Поля ввода выделяются как обычно; текст сообщения
+   копируется через меню сообщения. */
+@media (pointer: coarse) {
+    body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    input, textarea, [contenteditable="true"], [contenteditable=""] { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+}
+.toast { -webkit-user-select: none; user-select: none; }
+.real-chat.chat-swiping,
+.real-chat.chat-swipe-open { position: relative; z-index: 1; background: var(--surface); }
+.chat-swipe-actions {
+    position: absolute;
+    z-index: 0;
+    width: 0;
+    display: flex;
+    overflow: hidden;
+    pointer-events: auto;
+}
+.chat-swipe-actions.side-left { flex-direction: row; }
+.chat-swipe-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 0;
+    background: var(--c);
+    color: #fff;
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: pointer;
+    transition: flex-grow .22s var(--ease-ios, ease);
+}
+.chat-swipe-btn svg { flex: none; }
+.chat-swipe-actions.is-narrow:not(.is-full) .chat-swipe-btn span { display: none; }
+.chat-swipe-btn:active { filter: brightness(.9); }
+/* Дотянули до конца: главная кнопка занимает всю ширину — отпустить и сработает. */
+.chat-swipe-actions.is-full .chat-swipe-btn:not(.is-primary) { flex-grow: 0.0001; padding: 0; }
+.chat-swipe-actions.is-full .chat-swipe-btn.is-primary { flex-grow: 1; }
 
 .real-chat.chat-swipe-armed.chat-swipe-left {
     background: color-mix(in srgb, var(--red) 16%, var(--surface));
@@ -3145,6 +3212,27 @@ body[data-tint] .sidebar {
 .search-hidden {
     display: none !important;
 }
+/* Строки ленты, не подходящие под поиск по чату, не убираем (display: none), а схлопываем:
+   после display: none браузер при каждом новом запросе заново строил раскладку всех
+   вернувшихся строк — 0,2–0,4 с на нажатие на слабом телефоне. content-visibility: hidden
+   хранит раскладку содержимого, строка просто становится нулевой высоты. */
+#messages .message-row.search-hidden {
+    display: flex !important;
+    content-visibility: hidden;
+    contain-intrinsic-size: none;
+    height: 0;
+    min-height: 0;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    border: 0;
+    overflow: hidden;
+}
+/* Панель чата, уехавшая за край на телефоне, «спит» — см. sleepHiddenChat в phone-pages.js. */
+@media (max-width: 650px) {
+    .main.panel-asleep { content-visibility: hidden; }
+}
 
 .search-current .message {
     outline: 1px solid var(--accent);
@@ -3169,6 +3257,12 @@ body[data-tint] .sidebar {
     border-radius: 2px;
     background: color-mix(in srgb, var(--green) 28%, var(--surface));
     color: inherit;
+}
+/* То же через CSS Custom Highlight API (updateChatSearch) — без вставки <mark> в текст.
+   Полупрозрачный цвет, а не переменные темы: ::highlight берёт их от корня документа, а тема
+   задаёт их ниже — в тёмной теме подсветка выходила светлой под белым текстом. */
+::highlight(chat-search) {
+    background-color: rgba(52, 199, 89, .38);
 }
 
 /* CONTENT */
@@ -4495,7 +4589,15 @@ body:not(.chat-selected) .pinned-bar { display: none; }
     transform: translateY(6px) scale(.96);
     transform-origin: bottom left;
     transition: opacity .16s ease, transform .2s cubic-bezier(.2,.85,.25,1), visibility .2s;
+    /* Пунктов больше, чем помещается над полем ввода на телефоне (особенно с клавиатурой):
+       не выше свободного места, остальное — прокруткой внутри меню. */
+    max-height: calc(var(--app-height, 100dvh) - 190px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
 }
+.attach-menu::-webkit-scrollbar { display: none; }
 
 .attach-menu.open {
     opacity: 1;
@@ -4826,6 +4928,19 @@ body:not(.chat-selected) .pinned-bar { display: none; }
 .input .record-button[hidden] {
     display: none;
 }
+
+/* Одна кнопка записи, как в Telegram: видна только кнопка выбранного режима
+   (тап по ней переключает «голосовое ⇄ кружок», удержание — запись; script-ui.js). */
+.input[data-record-mode="audio"] .record-button[data-record-mode="video"],
+.input[data-record-mode="video"] .record-button[data-record-mode="audio"] {
+    display: none;
+}
+.input .record-button.record-swap-in svg { animation: record-swap-in .28s cubic-bezier(.2,.85,.25,1.25); }
+@keyframes record-swap-in {
+    from { transform: scale(.35) rotate(-80deg); opacity: 0; }
+    to { transform: none; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .input .record-button.record-swap-in svg { animation: none; } }
 
 .input .record-button svg {
     width: 19px;
@@ -9602,6 +9717,10 @@ body.bubble-no-tail .theme-preview-msg.out { border-bottom-right-radius: var(--b
 }
 
 *::-webkit-scrollbar { width: 10px; height: 10px; }
+/* Телефон: полосы прокрутки здесь — для мыши; на сенсоре они занимали 10 px справа в каждом
+   прокручиваемом окне (профиль, настройки, списки не доходили до края). scrollbar-width в
+   Android WebView 124 не поддерживается, поэтому на телефоне их просто нет. */
+html.phone-device *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
 *::-webkit-scrollbar-track { background: transparent; margin: 8px 0; }
 *::-webkit-scrollbar-corner { background: transparent; }
 *::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
@@ -10686,6 +10805,25 @@ a.tr-rail-row[href]:hover { background: color-mix(in srgb, var(--accent) 12%, tr
 .fl-times b.is-old { text-decoration: line-through; color: var(--muted); font-size: 16px; }
 .fl-times b.is-late { color: #dc2626; }
 .fl-times em { font-size: 11.5px; font-style: normal; color: #dc2626; font-weight: 700; }
+.fl-legs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: start; gap: 6px; padding: 10px 11px; border-radius: 14px; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.fl-pt { display: flex; flex-direction: column; min-width: 0; }
+.fl-pt-to { align-items: flex-end; text-align: right; }
+.fl-pt-city { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; max-width: 100%; }
+@media (max-width: 480px) { .fl-pt-city { font-size: 12px; } .fl-legs { padding: 10px 9px; gap: 4px; } }
+.fl-pt b { font-size: 22px; font-weight: 800; line-height: 1.15; }
+.fl-pt b.is-late { color: #dc2626; }
+.fl-pt b.is-early { color: #15803d; }
+.fl-pt s { font-size: 12px; color: var(--muted); }
+.fl-pt small { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.fl-pt .fl-pt-vvo { color: var(--text); font-weight: 650; }
+.fl-mid { display: flex; flex-direction: column; align-items: center; gap: 2px; padding-top: 20px; width: clamp(54px, 15vw, 96px); }
+.fl-plane { font-size: 15px; }
+.fl-line { width: 100%; height: 0; border-top: 2px dashed color-mix(in srgb, var(--text) 25%, transparent); }
+.fl-mid small { font-size: 11px; font-weight: 700; color: var(--muted); text-align: center; line-height: 1.25; }
+.fl-extra b span { white-space: nowrap; }
+.fl-delay { font-size: 12.5px; font-weight: 700; color: #dc2626; }
+.fl-extra { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; padding: 7px 10px; border-radius: 11px; background: color-mix(in srgb, var(--text) 4%, transparent); }
+.fl-extra > span { color: var(--muted); }
 .fl-live { padding: 8px 10px; border-radius: 11px; font-size: 12.5px; background: color-mix(in srgb, #0ea5e9 12%, transparent); }
 .fl-row { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 11px; background: color-mix(in srgb, var(--text) 4%, transparent); }
 .fl-row-time { display: flex; flex-direction: column; min-width: 50px; font-size: 15px; font-weight: 800; }
@@ -12027,7 +12165,34 @@ body.recording-active .recording-status.video-recording ~ .record-lock-hint { bo
 @media (max-width: 650px) {
     .recording-status, .recording-status.video-recording { left: 10px; right: 10px; }
     .rec-stage { width: 168px; height: 168px; }
+
+    /* Кружок при записи — как в Telegram: крупный, по центру области сообщений, чат под ним
+       затемнён. Панель «Проведите для отмены» и замок остаются у кнопки записи внизу.
+       position: fixed здесь считается от .main (у неё transform) — на телефоне это весь экран. */
+    .recording-status.video-recording .rec-stage {
+        --rec-size: min(78vw, 330px, calc(var(--app-height, 100dvh) - 230px));
+        position: fixed;
+        left: 50%;
+        top: calc(76px + (var(--app-height, 100dvh) - 76px - 84px) / 2);
+        width: var(--rec-size);
+        height: var(--rec-size);
+        translate: -50% -50%;
+        z-index: 30;
+    }
+    body.recording-video .chat-area::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: 20;
+        background: rgba(0, 0, 0, .5);
+        pointer-events: none;
+        animation: rec-dim-in .2s ease both;
+    }
+    body.recording-video .input { z-index: 25; }
+    body.recording-video .recording-status { z-index: 26; }
+    body.recording-active .recording-status.video-recording ~ .record-lock-hint { bottom: calc(76px + 52px + 14px); z-index: 27; }
 }
+@keyframes rec-dim-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* ============================================================================
    НИЖНИЙ БАР при узкой боковой панели: кнопки сжимаются, подписи прячутся,
@@ -12450,6 +12615,11 @@ body.messages-left .message-row:not(.system-message) .message-reactions { left: 
 body.dark .chat-area.has-pattern > .chat-wallpaper-layer::after { --wpp-strength: 9%; }
 body[data-pattern-strength="1"] .chat-area.has-pattern > .chat-wallpaper-layer::after { --wpp-strength: 6%; }
 body[data-pattern-strength="3"] .chat-area.has-pattern > .chat-wallpaper-layer::after { --wpp-strength: 17%; }
+/* Узоры тем Telegram: свой цвет узора (--wpp-ink) и плотность (--wpp-amount) — script-chats.js. */
+.chat-area.has-pattern.has-ink > .chat-wallpaper-layer::after { background: color-mix(in srgb, var(--wpp-ink) var(--wpp-amount, 14%), transparent); }
+body[data-pattern-strength="1"] .chat-area.has-pattern.has-ink > .chat-wallpaper-layer::after { background: color-mix(in srgb, var(--wpp-ink) calc(var(--wpp-amount, 14%) * .6), transparent); }
+body[data-pattern-strength="3"] .chat-area.has-pattern.has-ink > .chat-wallpaper-layer::after { background: color-mix(in srgb, var(--wpp-ink) calc(var(--wpp-amount, 14%) * 1.5), transparent); }
+.wp-tile-pattern[style*="--wpp-ink"] { background: var(--wpp-ink); }
 .wp-tile-preview { position: relative; overflow: hidden; }
 .wp-tile-pattern {
     position: absolute; inset: 0;
@@ -14377,3 +14547,868 @@ body.reduce-motion .ix-layer { display: none; }
 .listen-issue-actions:empty { display: none; }
 .listen-issue-btn { display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; text-decoration: none; cursor: pointer; }
 .listen-issue-btn:hover { background: color-mix(in srgb, var(--text) 16%, transparent); }
+
+/* ============================================================================
+   ПОЛНОЭКРАННЫЕ СТРАНИЦЫ НА ТЕЛЕФОНЕ (как в Telegram) — разметку помечает phone-pages.js:
+   .m-page (окно-страница), .m-page-panel (его панель), .m-back (кнопка «назад»), .m-tab-page
+   (вкладка нижней панели). Страница выезжает справа на весь экран, «назад» — стрелка слева,
+   закрытие свайпом вправо. Вкладки (Профиль, Настройки) — на весь экран с панелью вкладок снизу.
+   ========================================================================= */
+@media (max-width: 650px) {
+    :root .m-page {
+        position: fixed !important;
+        inset: 0 !important;
+        display: block !important;
+        padding: 0 !important;
+        background: transparent !important;
+        -webkit-backdrop-filter: none !important;
+        backdrop-filter: none !important;
+        opacity: 1 !important;
+        transition: visibility 0s linear .32s !important;
+        overflow: hidden;
+    }
+    :root .m-page.open { transition: none !important; }
+
+    :root .m-page > .m-page-panel {
+        position: absolute !important;
+        inset: 0 !important;
+        width: 100% !important;
+        max-width: none !important;
+        height: 100% !important;
+        max-height: none !important;
+        margin: 0 !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: -10px 0 28px rgba(0,0,0,.14) !important;
+        background: var(--surface) !important;
+        overflow-y: auto !important;
+        overscroll-behavior: contain;
+        padding-top: env(safe-area-inset-top) !important;
+        padding-bottom: calc(18px + env(safe-area-inset-bottom)) !important;
+        transform: translate3d(100%, 0, 0) !important;
+        transition: transform .32s cubic-bezier(.2,.85,.25,1) !important;
+        will-change: transform;
+    }
+    :root .m-page.open > .m-page-panel { transform: none !important; }
+    :root .m-page > .m-page-panel.m-dragging,
+    :root .m-page .m-dragging { transition: none !important; }
+    :root .m-page > .m-page-panel::before { display: none !important; }   /* ручка шторки не нужна */
+
+    /* Вкладки нижней панели: без выезда справа — просто появляются, как смена вкладки. */
+    :root .m-tab-page { opacity: 0 !important; transition: opacity .14s ease, visibility 0s linear .14s !important; }
+    :root .m-tab-page.open { opacity: 1 !important; transition: opacity .14s ease !important; }
+    :root .m-tab-page > .m-page-panel { transform: none !important; transition: none !important; box-shadow: none !important; }
+    body.m-tab-on .m-tab-page.open > .m-page-panel { padding-bottom: calc(96px + env(safe-area-inset-bottom)) !important; }
+    body.m-tab-on .bottom-nav { z-index: 97; transform: translateX(-50%); pointer-events: auto; }
+    body.m-page-open:not(.m-tab-on) .bottom-nav { transform: translate(-50%, calc(100% + 22px)); pointer-events: none; }
+    body.m-instant .m-page, body.m-instant .m-page-panel { transition: none !important; }
+
+    /* Кнопка «назад»: стрелка влево вместо крестика. */
+    :root .m-page .m-back {
+        position: relative;
+        flex: none;
+        display: inline-grid !important;
+        place-items: center;
+        width: 42px !important;
+        height: 42px !important;
+        min-width: 42px;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        border-radius: 50% !important;
+        background: transparent !important;
+        color: var(--text) !important;
+        font-size: 0 !important;
+        line-height: 0 !important;
+        box-shadow: none !important;
+    }
+    :root .m-page .m-back > * { display: none !important; }
+    :root .m-page .m-back::before {
+        content: "" !important;
+        display: block !important;
+        position: static !important;
+        width: 24px;
+        height: 24px;
+        background: currentColor !important;
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19 12H5M11 18l-6-6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19 12H5M11 18l-6-6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+        transform: none !important;
+    }
+    :root .m-page .m-back:active { background: color-mix(in srgb, var(--text) 10%, transparent) !important; }
+    :root .m-tab-page .m-page-panel > .m-back,
+    body.m-tab-on .m-tab-page .settings-dialog:not(.is-subpage) .settings-close { display: none !important; }
+
+    /* Шапка страницы: «назад» слева, заголовок крупно, прилипает к верху при прокрутке. */
+    :root .m-page .forward-modal-header,
+    :root .m-page .shared-media-header,
+    :root .m-page .settings-header {
+        position: sticky;
+        top: calc(-1 * env(safe-area-inset-top));
+        z-index: 5;
+        display: flex !important;
+        align-items: center;
+        justify-content: flex-start !important;
+        gap: 6px;
+        min-height: 56px;
+        margin: 0 0 8px !important;
+        padding: 0 10px 0 6px !important;
+        background: var(--surface);
+        font-size: 19px !important;
+        font-weight: 700 !important;
+        letter-spacing: -.01em;
+        text-align: left;
+    }
+    :root .m-page .forward-modal-header > .m-back,
+    :root .m-page .shared-media-header > .m-back,
+    :root .m-page .settings-header > .m-back { order: -1; }
+    :root .m-page .forward-modal-header > span,
+    :root .m-page .shared-media-title,
+    :root .m-page .settings-title { flex: 1; min-width: 0; font-size: 19px !important; font-weight: 700 !important; text-align: left !important; }
+    :root .m-page .shared-media-header:has(.shared-media-back:not([hidden])) .shared-media-close { display: none !important; }
+    :root .m-page .saved-messages-mark { order: 0; }
+    :root .m-page .settings-dialog.is-subpage .settings-close { display: none !important; }
+
+    /* Окна с отступами по краям: шапка во всю ширину. */
+    :root .m-page > .forward-modal:not(.group-profile) { padding-left: 16px !important; padding-right: 16px !important; }
+    :root .m-page > .forward-modal:not(.group-profile) > .forward-modal-header { margin-left: -16px !important; margin-right: -16px !important; }
+
+    /* Небольшие карточки (безопасность, QR, заблокированные…): «назад» и заголовок наверху. */
+    :root .m-page > .safety-modal { padding: calc(env(safe-area-inset-top) + 64px) 18px 24px !important; }
+    :root .m-page > .safety-modal > .m-back { position: absolute !important; top: calc(env(safe-area-inset-top) + 7px) !important; left: 6px !important; right: auto !important; }
+    :root .m-page > .safety-modal > .safety-modal-title {
+        position: absolute; top: env(safe-area-inset-top); left: 54px; right: 16px; height: 56px;
+        display: flex; align-items: center; margin: 0; font-size: 19px; font-weight: 700; text-align: left;
+    }
+
+    /* Страницы с цветной шапкой (профиль, карточка собеседника, группа): «назад» поверх шапки слева. */
+    :root .m-page .contact-modal-close.m-back,
+    :root .m-page .info-window-close.m-back,
+    :root .m-page .group-hero-close.m-back,
+    :root .m-page .profile-screen .m-back {
+        position: absolute !important;
+        top: calc(env(safe-area-inset-top) + 8px) !important;
+        left: 8px !important;
+        right: auto !important;
+        z-index: 6;
+        color: #fff !important;
+        background: rgba(0,0,0,.18) !important;
+    }
+    :root .m-page > .contact-modal { padding-top: calc(env(safe-area-inset-top) + 8px) !important; }
+
+    /* Скрытая кнопка остаётся скрытой (display выше — с !important), фокус-рамка — только с клавиатуры. */
+    :root .m-page .m-back[hidden] { display: none !important; }
+    :root .m-page .m-back:focus { outline: none !important; box-shadow: none !important; }   /* на телефоне фокус ставит код, не клавиатура */
+    /* Вкладка — без «назад»: уйти можно вкладками снизу. */
+    body.m-tab-on .m-tab-page .m-back:not(#settings-back) { display: none !important; }
+
+    /* Одна прокрутка на всю страницу, а не окно в окне (профиль, карточка собеседника). */
+    :root .m-page .profile-screen .info-columns,
+    :root .m-page .info-window-scroll,
+    :root .m-page .info-window-right { height: auto !important; max-height: none !important; overflow: visible !important; }
+    :root .m-page > .info-window { display: block !important; opacity: 1 !important; }
+    :root .m-page .info-window-drag { display: none !important; }
+    :root .m-page .info-window-left { padding-top: calc(env(safe-area-inset-top) + 52px) !important; }
+}
+
+/* ============================================================================
+   НИЖНЯЯ ПАНЕЛЬ — как в новом Telegram (iOS 26, «жидкое стекло», .tg-tabbar):
+   закруглённая стеклянная капсула парит над контентом; четыре вкладки — значок 28 px и
+   подпись 10 px; неактивные серые, активная — акцентного цвета на светлой «пилюле»,
+   которая плавно переезжает между вкладками (.tg-tab-pill, script-chats.js); у «Настроек»
+   аватар; счётчики — красные «капсулы», как у iOS.
+   ========================================================================= */
+:root {
+    --tabbar-h: 62px;
+    --tabbar-gap: 10px;
+    --tabbar-gray: #8e8e93;
+    --tabbar-glass: rgba(255, 255, 255, .58);
+    --tabbar-edge: rgba(255, 255, 255, .65);
+    --tabbar-pill: rgba(118, 118, 128, .16);
+    --tabbar-shadow: 0 10px 30px rgba(20, 30, 45, .16), 0 1px 3px rgba(20, 30, 45, .08);
+}
+body.dark {
+    --tabbar-gray: #8d8e93;
+    --tabbar-glass: rgba(28, 28, 30, .55);
+    --tabbar-edge: rgba(255, 255, 255, .12);
+    --tabbar-pill: rgba(255, 255, 255, .11);
+    --tabbar-shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
+}
+
+.bottom-nav.tg-tabbar {
+    left: calc(12px + env(safe-area-inset-left));
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    width: calc(var(--sidebar-w, 320px) - 24px);
+    max-width: 520px;
+    height: var(--tabbar-h);
+    padding: 4px;
+    gap: 0;
+    border: .5px solid var(--tabbar-edge);
+    border-radius: calc(var(--tabbar-h) / 2);
+    /* В тон темы: стекло — цвет панели темы, полупрозрачный; сквозь него видно прокручиваемые чаты. */
+    background: color-mix(in srgb, var(--surface) 58%, transparent);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    backdrop-filter: blur(22px) saturate(180%);
+    box-shadow: var(--tabbar-shadow), inset 0 1px 0 rgba(255, 255, 255, .45);
+    transform: none;
+    container-type: normal;
+    overflow: hidden;
+    isolation: isolate;
+}
+body.dark .bottom-nav.tg-tabbar { box-shadow: var(--tabbar-shadow), inset 0 1px 0 rgba(255, 255, 255, .08); }
+/* Где размытие не работает или дорого (слабый телефон) — стекло плотнее, чтобы подписи читались. */
+html.lite-device .bottom-nav.tg-tabbar { background: color-mix(in srgb, var(--surface) 94%, transparent); -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+/* «Пилюля» под активной вкладкой — едет к нажатой. */
+.tg-tab-pill {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 0;
+    z-index: 0;
+    width: 0;
+    border-radius: calc((var(--tabbar-h) - 8px) / 2);
+    background: var(--tabbar-pill);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform .42s cubic-bezier(.2, 1.15, .3, 1), width .42s cubic-bezier(.2, 1.15, .3, 1), opacity .2s ease;
+}
+.tg-tab-pill.ready { opacity: 1; }
+.tg-tab-pill.instant { transition: none; }
+
+.tg-tabbar .bottom-nav-item {
+    z-index: 1;
+    justify-content: center;
+    gap: 1px;
+    padding: 0;
+    border-radius: calc((var(--tabbar-h) - 8px) / 2);
+    background: none !important;
+    color: var(--tabbar-gray);
+    transform: none !important;
+    transition: color .2s ease, opacity .15s ease;
+}
+.tg-tabbar .bottom-nav-item:active { opacity: .55; }
+.tg-tabbar .bottom-nav-item.active { color: var(--accent); }
+.tg-tabbar .bottom-nav-icon { position: relative; height: 28px; align-items: center; }
+.tg-tabbar .bottom-nav-icon svg { width: 28px; height: 28px; }
+.tg-tabbar .bottom-nav-label { display: block; font-size: 10px; font-weight: 500; letter-spacing: .1px; line-height: 12px; }
+.tg-tabbar .bottom-nav-avatar { width: 26px; height: 26px; font-size: 11px; box-shadow: none; }
+.tg-tabbar .bottom-nav-item:hover .bottom-nav-avatar { box-shadow: none; }
+.tg-tabbar .bottom-nav-item.active .bottom-nav-avatar { box-shadow: 0 0 0 1.5px var(--surface), 0 0 0 3px var(--accent); }
+.tg-tabbar .bottom-nav-dot {
+    top: 2px;
+    right: auto;
+    left: calc(50% + 5px);
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border: 0;
+    background: #ff3b30;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 18px;
+}
+@media (max-width: 220px) { .tg-tabbar .bottom-nav-label { display: none; } }
+
+/* Истории и архив прячутся, как в Telegram (pull-reveal.js): истории свёрнуты в стопку
+   мини-аватаров в шапке, архив — над списком; «потянуть вниз» разворачивает. */
+.stories-bar { max-height: 140px; transition: max-height .32s cubic-bezier(.2,.85,.25,1), opacity .25s ease, padding .32s cubic-bezier(.2,.85,.25,1); overflow-y: hidden; }
+.stories-bar.is-collapsed { max-height: 0 !important; padding-top: 0; padding-bottom: 0; opacity: 0; pointer-events: none; }
+.stories-bar.pull-dragging, .archive-shortcut.pull-dragging, .archive-shortcut.no-anim { transition: none !important; }
+
+.stories-stack {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 8px;
+    padding: 2px 4px 2px 2px;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    cursor: pointer;
+    animation: stories-stack-in .25s cubic-bezier(.2,.85,.25,1.2);
+}
+.stories-stack[hidden] { display: none; }
+.stories-stack-item {
+    width: 26px;
+    height: 26px;
+    margin-left: -9px;
+    padding: 1.5px;
+    border-radius: 50%;
+    background: var(--border);
+    box-shadow: 0 0 0 2px var(--surface);
+}
+.stories-stack-item:first-child { margin-left: 0; }
+.stories-stack-item.unseen { background: conic-gradient(from 200deg, var(--accent), #ec4899, #f59e0b, var(--accent)); }
+.stories-stack-item .story-avatar { width: 100%; height: 100%; font-size: 10px; border: 1.5px solid var(--surface); box-sizing: border-box; }
+@keyframes stories-stack-in { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+
+.archive-shortcut {
+    height: 64px;
+    overflow: hidden;
+    transition: height .3s cubic-bezier(.2,.85,.25,1), opacity .25s ease, padding .3s ease;
+}
+.archive-shortcut.is-collapsed { height: 0 !important; padding-top: 0; padding-bottom: 0; opacity: 0; }
+.archive-shortcut-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; }
+.archive-shortcut-copy .archive-shortcut-title { font-size: 14px; font-weight: 600; flex: none; }
+.archive-shortcut-names { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
+.archive-shortcut .archive-shortcut-icon { flex-basis: 48px; width: 48px; height: 48px; }
+.archive-shortcut-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 30%, transparent); color: var(--text); font-size: 11.5px; font-weight: 600; line-height: 20px; text-align: center; }
+
+/* ТЕЛЕФОН: оформление как в Telegram — шесть тем и узоры на обоях; живые обои, матовое стекло,
+   глянец и атмосфера в чате выключены и в настройках не показываются (script-core.js →
+   IS_PHONE_DEVICE). В «Темах и цветах» — только темы, обои-узоры и яркость узора. */
+html.phone-device .settings-option:has(input[name="liveWallpapers"]),
+html.phone-device .settings-option:has(input[name="sidebarFrost"]),
+html.phone-device .settings-option:has(input[name="sidebarGloss"]),
+html.phone-device .settings-option:has(input[name="seasonalAtmosphere"]),
+html.phone-device #atmo-picker,
+html.phone-device .theme-studio > :is(.theme-mode, .theme-default-accent, .theme-vivid-grid, .theme-custom-row, .theme-seg, .theme-seg-label, .theme-switch-row),
+html.phone-device .theme-studio > .group-members-head:is(:has(+ .theme-mode), :has(+ .theme-default-accent), :has(+ .theme-seg), :has(+ .theme-seg-label)) { display: none !important; }
+html.phone-device canvas.wow-season, html.phone-device .atmo-canvas { display: none !important; }
+
+/* Сетка шести тем: крупные превью с обоями и узором, как выбор темы в Telegram. */
+.theme-preset-grid.tg-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 10px; }
+.theme-preset.tg .theme-preset-screen { position: relative; height: 112px; overflow: hidden; }
+.theme-preset.tg .theme-preset-screen .wp-tile-pattern { -webkit-mask-size: 70px 70px; mask-size: 70px 70px; }
+.theme-preset.tg .theme-preset-bubble { z-index: 1; height: 17px; border-radius: 9px; box-shadow: 0 1px 1.5px rgba(0,0,0,.12); }
+.theme-preset.tg .theme-preset-bubble.in { left: 9px; top: 26px; width: 62%; border-bottom-left-radius: 3px; }
+.theme-preset.tg .theme-preset-bubble.out { right: 9px; bottom: 26px; width: 55%; border-bottom-right-radius: 3px; }
+.theme-preset.tg.selected .theme-preset-screen { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+
+/* «Моя история» — первым кружком в полосе историй (как в Telegram): подпись целиком. */
+.story-item.story-mine { width: 76px; }
+.story-item.story-mine .story-name { max-width: 76px; }
+
+/* Тап по активной вкладке «Чаты» привёл к непрочитанному чату — короткая подсветка строки. */
+.real-chat.chat-flash { animation: chat-flash 1.1s ease; }
+@keyframes chat-flash { 0%, 35% { background: color-mix(in srgb, var(--accent) 16%, transparent); } 100% { background: transparent; } }
+
+/* Как в Telegram: списки доходят до самого низа и прокручиваются ПОД стеклянной панелью
+   (через неё видно чаты), а запас снизу внутри прокрутки — чтобы последний чат можно было
+   докрутить над панелью. Раньше список обрывался над панелью — под стеклом была пустота. */
+#sidebar-chats-view, #sidebar-contacts-view, #sidebar-calls-view { padding-bottom: 0 !important; }
+#real-chat-list, #sidebar-contacts-scroll, .sidebar-contacts-scroll, #calls-list {
+    padding-bottom: calc(var(--tabbar-h) + 28px + env(safe-area-inset-bottom)) !important;
+    scroll-padding-bottom: calc(var(--tabbar-h) + 28px + env(safe-area-inset-bottom));
+}
+
+@media (max-width: 650px) {
+    .bottom-nav.tg-tabbar {
+        left: calc(var(--tabbar-gap) + env(safe-area-inset-left));
+        right: calc(var(--tabbar-gap) + env(safe-area-inset-right));
+        width: auto;
+        max-width: none;
+        bottom: calc(8px + env(safe-area-inset-bottom));
+        transform: none;
+        transition: transform .3s cubic-bezier(.2,.85,.25,1), opacity .2s ease;
+    }
+    body.chat-selected .bottom-nav.tg-tabbar,
+    body.m-page-open:not(.m-tab-on) .bottom-nav.tg-tabbar { transform: translateY(calc(100% + 24px)); pointer-events: none; }
+    body.m-tab-on .bottom-nav.tg-tabbar { transform: none; pointer-events: auto; }
+    body.m-tab-on .m-tab-page.open > .m-page-panel { padding-bottom: calc(var(--tabbar-h) + 26px + env(safe-area-inset-bottom)) !important; }
+    .toast { bottom: calc(var(--tabbar-h) + 22px + env(safe-area-inset-bottom)); }
+}
+
+/* ============================================================================
+   РЕДАКТОР ФОТО НА ТЕЛЕФОНЕ (как в Telegram): фото — на весь доступный экран; под ним
+   компактная полоса настроек только выбранного инструмента; ниже — инструменты в ряд и
+   подпись с кнопкой «Отправить». Раньше ряд из 8 инструментов растягивал окно до 558 px
+   при экране 360: правая часть (крестик, «Отправить») уезжала за край.
+   ========================================================================= */
+/* Колонка окна не растягивается под содержимое (на всех ширинах). */
+.pe-window { grid-template-columns: minmax(0, 1fr); }
+/* «Коррекция» — инструмент только телефона: на компьютере коррекция всегда в правой панели. */
+@media (min-width: 651px) { .pe-tool[data-tool="adjust"] { display: none; } }
+
+@media (max-width: 650px) {
+    .pe-backdrop { --pe-bg: #000; background: #000; }
+    .pe-window {
+        display: flex;
+        flex-direction: column;
+        padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+        background: #000;
+        box-shadow: none;
+    }
+
+    /* Шапка: крестик слева, отмена/повтор, «Сбросить» справа. */
+    .pe-header { flex-wrap: nowrap; gap: 4px; padding: 6px 8px; border: 0; }
+    .pe-close { order: -1; width: 44px; height: 44px; background: transparent; color: #fff; }
+    .pe-window .pe-close { font-size: 0; line-height: 0; }   /* символ «×» — вместо него иконка ниже */
+    .pe-close::before {
+        content: "";
+        width: 22px;
+        height: 22px;
+        background: currentColor;
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M5 5l14 14M19 5 5 19'/%3E%3C/svg%3E") center / contain no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M5 5l14 14M19 5 5 19'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+    .pe-hist { gap: 2px; }
+    .pe-icon-btn { width: 42px; height: 42px; border-radius: 50%; color: #fff; }
+    .pe-hist { order: 0; }
+    .pe-spacer { order: 1; }
+    .pe-chip-btn { order: 2; min-height: 36px; padding: 0 14px; background: rgba(255,255,255,.1); color: #fff; }
+
+    .pe-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .pe-stage { order: 1; flex: 1; min-height: 0; background: #000; }
+    .pe-canvas-wrap { border-radius: 2px; box-shadow: none; }
+
+    /* Настройки инструмента — полоса под фото; пустая (у «Выбора» без выделения) — не занимает места. */
+    .pe-panel {
+        order: 2;
+        flex: none;
+        max-height: 32vh;
+        gap: 0;
+        padding: 0 12px;
+        border: 0;
+        background: #0b0b0d;
+    }
+    .pe-backdrop:not(.pe-has-options) .pe-panel { display: none; }
+    .pe-sec { padding: 8px 0; border: 0; }
+    #pe-sec-hint { display: none; }
+    .pe-sec h3 { margin: 0 0 6px; font-size: 11px; }
+    /* Коррекция — только в инструменте «Коррекция», поворот — в «Кадре» (как в Telegram);
+       «Добавить фото» — плюсик в ленте миниатюр. Заголовки очевидных разделов не нужны. */
+    .pe-backdrop:not([data-tool="adjust"]) .pe-sec-adjust,
+    .pe-backdrop:not([data-tool="crop"]) .pe-sec:has([data-pe="rotate"]) { display: none; }
+    #pe-sec-color h3, #pe-sec-textstyle h3, #pe-sec-emoji h3, #pe-sec-crop h3 { display: none; }
+    .pe-backdrop[data-tool="crop"] .pe-sec:has([data-pe="rotate"]) { padding-top: 0; }
+    .pe-backdrop[data-tool="crop"] .pe-sec:has([data-pe="rotate"]) h3 { display: none; }
+    .pe-sec:has([data-pe="add-photos"]) { display: none; }
+    .pe-sec .pe-btn-wide { min-height: 40px; margin-top: 2px; }
+    /* Коррекция компактно: подпись · ползунок · значение в одну строку. */
+    .pe-sec-adjust h3 { display: none; }
+    .pe-slider-row { grid-template-columns: 92px minmax(0, 1fr) 34px; align-items: center; gap: 8px; margin: 0; min-height: 36px; }
+    .pe-slider-row > span { grid-column: 1; grid-row: 1; font-size: 12.5px; }
+    .pe-slider-row input { grid-column: 2; grid-row: 1; }
+    .pe-slider-row output { grid-column: 3; grid-row: 1; text-align: right; }
+
+    /* Цвета и эмодзи — в одну ленту с прокруткой вбок, крупно под палец. */
+    .pe-colors { flex-wrap: nowrap; gap: 10px; overflow-x: auto; padding: 4px 2px; scrollbar-width: none; }
+    .pe-colors::-webkit-scrollbar { display: none; }
+    .pe-swatch { flex: none; width: 32px; height: 32px; }
+    .pe-emojis { grid-template-columns: none; grid-template-rows: repeat(2, 44px); grid-auto-flow: column; grid-auto-columns: 44px; overflow-x: auto; scrollbar-width: none; }
+    .pe-emojis::-webkit-scrollbar { display: none; }
+    .pe-emojis button { font-size: 26px; }
+    .pe-ratios { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .pe-ratios button { flex: none; min-height: 36px; }
+    .pe-row .pe-btn { min-height: 42px; }
+    .pe-window input[type="range"] { height: 32px; }
+
+    /* Инструменты — ряд под настройками, прокрутка вбок. */
+    .pe-tools {
+        order: 3;
+        flex: none;
+        flex-direction: row;
+        gap: 2px;
+        padding: 6px 8px;
+        overflow-x: auto;
+        border: 0;
+        border-top: 1px solid rgba(255,255,255,.08);
+        background: #000;
+    }
+    .pe-tool { flex: 0 0 auto; min-width: 60px; min-height: 52px; padding: 6px 4px; font-size: 10.5px; }
+    .pe-tool.active { box-shadow: none; }
+
+    /* Лента миниатюр (альбом) — компактнее. */
+    .pe-strip { flex: none; gap: 8px; padding: 6px 10px; background: #000; border-color: rgba(255,255,255,.08); }
+    .pe-thumb { width: 46px; height: 46px; }
+    .pe-thumb-del { width: 26px; height: 26px; top: -8px; right: -8px; opacity: 1; }
+    .pe-thumb-del::after { content: ""; position: absolute; inset: -9px; }   /* попасть пальцем легче, чем видно */
+
+    /* Подпись и «Отправить» — как поле ввода сообщения: круглая кнопка справа. */
+    .pe-footer { flex: none; gap: 8px; padding: 6px 8px 8px; border: 0; background: #000; }
+    .pe-info { display: none; }
+    .pe-caption { height: 44px; padding: 0 16px; }
+    .pe-send { flex: none; width: 48px; height: 48px; padding: 0; justify-content: center; border-radius: 50%; }
+    .pe-send span { display: none; }
+    .pe-send svg { width: 22px; height: 22px; margin-left: -2px; }
+}
+
+/* ============================================================================
+   ПАНЕЛЬ ВВОДА НА ТЕЛЕФОНЕ — как в Telegram: без подложки, поле и кнопки «парят» стеклянными
+   капсулами прямо на обоях чата (раньше под ними был белый полупрозрачный прямоугольник).
+   ========================================================================= */
+html.phone-device .chat-area .input {
+    border-top: 0 !important;
+    background: transparent !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    padding-top: 6px;
+}
+html.phone-device .chat-area .input .input-box,
+html.phone-device .chat-area .input > .input-button,
+html.phone-device .chat-area .input > .record-button {
+    border: .5px solid color-mix(in srgb, var(--text) 10%, transparent) !important;
+    background: color-mix(in srgb, var(--surface) 84%, transparent) !important;
+    -webkit-backdrop-filter: blur(16px) saturate(170%);
+    backdrop-filter: blur(16px) saturate(170%);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .1), 0 4px 14px rgba(0, 0, 0, .06) !important;
+}
+html.phone-device .chat-area .input > .attach-button { color: var(--accent); }
+html.phone-device.lite-device .chat-area .input .input-box,
+html.phone-device.lite-device .chat-area .input > .input-button,
+html.phone-device.lite-device .chat-area .input > .record-button { background: color-mix(in srgb, var(--surface) 95%, transparent) !important; -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+/* ============================================================================
+   КАРТОЧКА СОБЕСЕДНИКА НА ТЕЛЕФОНЕ — как профиль в Telegram: цветная шапка (градиент цвета
+   профиля с лёгким узором) — аватар, имя, статус, три кнопки; ниже, на фоне темы, белые
+   сгруппированные карточки: ник / «о себе» / дата, затем действия списком с цветными
+   значками. Ник и «о себе» переносит под шапку phone-pages.js (phoneProfileLayout).
+   ========================================================================= */
+html.phone-device .info.info-window { background: var(--bg) !important; }
+html.phone-device .info-window-left {
+    position: relative;
+    height: auto;
+    background:
+        radial-gradient(120% 85% at 50% 0%, hsl(var(--gh) 72% 62%) 0%, hsl(calc(var(--gh) + 18) 62% 47%) 62%, hsl(calc(var(--gh) + 30) 58% 38%) 100%) !important;
+    border-radius: 0 0 26px 26px;
+    overflow: hidden;
+}
+/* Лёгкий узор поверх цвета — как фон профиля в Telegram. */
+html.phone-device .info-window-left > .info-window-scroll::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: rgba(255, 255, 255, .1);
+    -webkit-mask: var(--profile-pattern) 0 0 / 150px 150px repeat;
+    mask: var(--profile-pattern) 0 0 / 150px 150px repeat;
+}
+html.phone-device .info.info-window.has-photo .info-window-left > .info-window-scroll::before { display: none; }
+/* Фон шапки из фото (собеседник, группа, свой профиль) — сочный, как в Telegram: фото крупнее
+   шапки (пятна цвета большие, края не серые), размытие умеренное, насыщенность выше, а темнее
+   только низ — под текстом и кнопками. Раньше: сильное размытие с приглушённым цветом и
+   затемнение до 50% — выходила мутная серая каша. */
+html.phone-device .info.info-window.has-photo .info-window-left::before,
+html.phone-device .group-hero.has-photo::before,
+html.phone-device .info.profile-screen.has-photo .profile-hero::before {
+    inset: -35% !important;
+    background-size: cover !important;
+    filter: blur(22px) saturate(1.8) contrast(1.08) !important;
+    transform: translateZ(0);
+}
+html.phone-device .info.info-window.has-photo .info-window-left::after,
+html.phone-device .group-hero.has-photo::after,
+html.phone-device .info.profile-screen.has-photo .profile-hero::after {
+    background: linear-gradient(180deg, rgba(0, 0, 0, .12) 0%, rgba(0, 0, 0, 0) 28%, rgba(0, 0, 0, .04) 60%, rgba(0, 0, 0, .34) 100%) !important;
+}
+html.phone-device .info-window-scroll {
+    height: auto;
+    overflow: visible;
+    gap: 2px;
+    padding: calc(env(safe-area-inset-top) + 18px) 14px 16px !important;
+}
+html.phone-device .info.info-window .info-avatar.info-window-avatar {
+    width: 104px;
+    height: 104px;
+    margin: 0;
+    border: 0;
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, .28), 0 10px 28px rgba(0, 0, 0, .22);
+    font-size: 44px;
+}
+html.phone-device .info-window-name { margin-top: 12px; font-size: 24px; letter-spacing: -.01em; text-shadow: 0 1px 8px rgba(0, 0, 0, .18); }
+html.phone-device .info-window-left .info-window-handle-text { display: none; }
+html.phone-device .mood.info-window-mood {
+    margin-top: 2px;
+    padding: 0;
+    background: none;
+    color: rgba(255, 255, 255, .82);
+    font-size: 14px;
+    font-weight: 500;
+}
+html.phone-device .mood.info-window-mood .status-dot { display: none; }
+html.phone-device .info-window-quick { align-self: stretch; gap: 8px; margin-top: 16px; }
+html.phone-device .info-quick-btn {
+    flex: 1;
+    width: auto;
+    min-height: 58px;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 4px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, .2);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    font-size: 12px;
+}
+html.phone-device .info-quick-btn[aria-pressed="false"] { background: rgba(0, 0, 0, .2); }
+
+/* Под шапкой — фон темы и белые карточки. */
+html.phone-device .info-window-right { padding: 14px 12px calc(28px + env(safe-area-inset-bottom)); background: var(--bg); }
+html.phone-device .info-window-title { display: none; }
+html.phone-device .info-window .info-label { margin: 18px 6px 8px; font-size: 12.5px; letter-spacing: .03em; }
+
+/* Ник / о себе / дата / группы — одной карточкой: значение крупно, подпись под ним. */
+html.phone-device .info-window-right > .info-window-contact {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border-radius: 14px;
+    background: var(--surface);
+    overflow: hidden;
+}
+html.phone-device .info-window-contact .info-contact-row {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 2px;
+    margin: 0;
+    padding: 11px 16px;
+    border-radius: 0;
+    background: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
+html.phone-device .info-window-contact .info-contact-row { border-top: 0; }
+html.phone-device .info-window-contact .info-contact-row:not([hidden]) ~ .info-contact-row:not([hidden]) { box-shadow: inset 0 .5px 0 var(--border); }
+html.phone-device .info-window-contact .info-contact-label { font-size: 13px; font-weight: 500; color: var(--muted); }
+html.phone-device .info-window-contact .info-contact-value,
+html.phone-device .info-window-contact .info-bio { margin: 0; font-size: 16px; color: var(--text); }
+html.phone-device .info-window-contact #info-username-row .info-contact-value { color: var(--accent); }
+html.phone-device .info-window-contact .info-copy-row:active { background: var(--surface2); }
+
+/* Действия — список как в настройках Telegram: строки на одной карточке с разделителями. */
+html.phone-device .info-window .info-actions {
+    grid-template-columns: 1fr;
+    gap: 0;
+    border-radius: 14px;
+    background: var(--surface);
+    overflow: hidden;
+}
+html.phone-device .info-window .info-action {
+    min-height: 54px;
+    gap: 14px;
+    padding: 9px 16px;
+    border: 0;
+    border-radius: 0;
+    background: none !important;
+    transform: none !important;
+}
+html.phone-device .info-window .info-action:active { background: var(--surface2) !important; }
+html.phone-device .info-window .info-actions > .info-action:not([hidden]) ~ .info-action:not([hidden])::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 60px;
+    right: 0;
+    height: .5px;
+    background: var(--border);
+}
+html.phone-device .info-window .info-action { position: relative; }
+/* Значки действий — цветные квадраты с белым символом, как в настройках Telegram. */
+html.phone-device .info-window .info-action-icon { --ic: #8e8e93; width: 30px; height: 30px; border-radius: 8px; background: var(--ic) !important; color: #fff !important; }
+html.phone-device .info-window .info-action-icon svg { width: 18px; height: 18px; stroke-width: 2; }
+html.phone-device .info-window .info-action[data-profile-toggle="notifications"] .info-action-icon { --ic: #ff3b30; }
+html.phone-device .info-window .info-action[data-profile-toggle="sound"] .info-action-icon { --ic: #ff9500; }
+html.phone-device .info-window .info-action[onclick^="toggleMuteDurations"] .info-action-icon { --ic: #5856d6; }
+html.phone-device .info-window .info-action[onclick^="openTtlPicker"] .info-action-icon { --ic: #30b0c7; }
+html.phone-device .info-window .info-action[onclick^="handleSecretChatAction"] .info-action-icon { --ic: #34c759; }
+html.phone-device .info-window .info-action[onclick^="shareContact"] .info-action-icon { --ic: #007aff; }
+html.phone-device .info-window .info-action[onclick^="openSharedGroupsModal"] .info-action-icon { --ic: #ff9f0a; }
+html.phone-device .info-window .info-action[onclick^="openChatWallpaperPicker"] .info-action-icon { --ic: #ff2d55; }
+html.phone-device .info-window .info-action[onclick^="openProfileQRCode"] .info-action-icon { --ic: #af52de; }
+html.phone-device .info-window .info-action.danger .info-action-icon { --ic: #ff3b30; }
+html.phone-device .info-window .info-action[aria-pressed="false"][data-profile-toggle="notifications"] .info-action-icon,
+html.phone-device .info-window .info-action[aria-pressed="false"][data-profile-toggle="sound"] .info-action-icon { --ic: #8e8e93; }
+html.phone-device .info-window .info-action-label { font-size: 15.5px; font-weight: 500; }
+html.phone-device .info-window .info-action-hint { font-size: 12.5px; }
+/* Звонок и видео — уже большими кнопками в шапке. */
+html.phone-device .info-window .info-actions > .info-action[onclick^="startCall"] { display: none; }
+html.phone-device .info-window .mute-durations { margin: 0 12px 10px; }
+
+/* ============================================================================
+   НОВАЯ ГРУППА / ДОБАВИТЬ УЧАСТНИКОВ — как в Telegram. Шаг 1: выбранные «фишками»
+   прямо в поле поиска, список контактов на всю высоту (имя и @ник, выбран — галочка
+   на аватаре), круглая кнопка «дальше» справа внизу. Шаг 2: фото, название, список
+   участников и круглая кнопка «создать». На компьютере — те же строки, кнопки обычные.
+   ========================================================================= */
+.new-group-modal .ng-head-text { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.2; }
+.new-group-modal .ng-head-sub { font-size: 12.5px; font-weight: 500; letter-spacing: 0; color: var(--muted); }
+.new-group-modal .ng-head-sub:empty { display: none; }
+
+.new-group-modal .ng-picker {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    max-height: 132px;
+    overflow-y: auto;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    background: var(--surface2);
+    cursor: text;
+    transition: border-color .15s ease;
+}
+.new-group-modal .ng-picker:focus-within { border-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+.new-group-modal .ng-picker input[type="text"] {
+    flex: 1 1 140px;
+    min-width: 140px;
+    padding: 6px 4px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font-size: 14px;
+}
+.new-group-modal .ng-picker input[type="text"]:focus { border: 0; }
+.new-group-modal .new-group-selected-chips { display: contents; }
+.new-group-modal .new-group-selected-chips[hidden] { display: none; }
+.new-group-modal .new-group-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 170px;
+    height: 30px;
+    padding: 0 10px 0 0;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--text);
+    font: inherit;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    animation: ng-chip-in .18s ease-out;
+}
+@keyframes ng-chip-in { from { opacity: 0; transform: scale(.7); } }
+.new-group-modal .new-group-chip:active { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+.new-group-modal .ng-chip-avatar {
+    width: 30px !important; height: 30px !important; flex: 0 0 30px !important;
+    min-width: 30px !important; max-width: 30px !important; min-height: 30px !important; max-height: 30px !important;
+    font-size: 12px;
+}
+.new-group-modal .ng-chip-avatar .avatar-initials { font-size: 11px !important; }
+.new-group-modal .ng-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.new-group-modal .ng-chip-x { margin-left: -1px; font-size: 17px; line-height: 1; color: var(--muted); }
+
+.new-group-modal .ng-row-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; text-align: left; }
+.new-group-modal .ng-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.new-group-modal .ng-row-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .86em; color: var(--muted); }
+.new-group-modal .ng-row .new-chat-result-avatar { overflow: visible; transition: transform .18s ease; }
+.new-group-modal .ng-row .new-chat-result-avatar.selected::before { display: none; }
+.new-group-modal .ng-row.selected .new-chat-result-avatar { transform: scale(.9); }
+.new-group-modal .ng-row.selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.new-group-modal .ng-check {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 21px;
+    height: 21px;
+    border: 2px solid var(--surface);
+    border-radius: 50%;
+    background: var(--accent);
+    transform: scale(0);
+    transition: transform .2s cubic-bezier(.3, 1.5, .5, 1);
+}
+.new-group-modal .ng-check svg { width: 13px; height: 13px; fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.new-group-modal .ng-row.selected .ng-check { transform: scale(1.1); }
+
+.new-group-modal .ng-fab-icon { display: none; }
+.new-group-modal .ng-members { max-height: 220px; overflow-y: auto; }
+.new-group-modal .ng-member { display: flex; align-items: center; gap: 12px; padding: 7px 8px; }
+.new-group-modal .ng-member .new-chat-result-avatar { width: 36px; height: 36px; flex: 0 0 36px; }
+.new-group-modal .ng-members-label { margin-top: 4px; }
+
+/* Фото группы: пока не выбрано — камера. */
+.new-group-avatar-preview { position: relative; }
+.new-group-avatar-preview::before {
+    content: "";
+    width: 30px;
+    height: 30px;
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8.5A2 2 0 0 1 6 6.5h1.6l1.2-1.8h6.4l1.2 1.8H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z'/%3E%3Ccircle cx='12' cy='12.5' r='3.2'/%3E%3Cpath d='M19 3v4M17 5h4'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8.5A2 2 0 0 1 6 6.5h1.6l1.2-1.8h6.4l1.2 1.8H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z'/%3E%3Ccircle cx='12' cy='12.5' r='3.2'/%3E%3Cpath d='M19 3v4M17 5h4'/%3E%3C/svg%3E") center / contain no-repeat;
+    color: var(--muted);
+}
+.new-group-avatar-preview.has-image::before { display: none; }
+
+@media (max-width: 650px) {
+    /* Окно — колонка на весь экран: прокручивается только список, кнопка висит поверх. */
+    :root .m-page > .new-group-modal {
+        display: flex !important;
+        flex-direction: column;
+        overflow: hidden !important;
+        padding-bottom: 0 !important;
+    }
+    :root .m-page > .new-group-modal > .forward-modal-header { margin-bottom: 6px !important; }
+    .new-group-modal > .ng-step:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .new-group-modal .ng-head-sub { font-size: 13px; }
+
+    .new-group-modal .ng-picker { flex: none; min-height: 46px; padding: 6px 10px; }
+    .new-group-modal .ng-picker input[type="text"] { font-size: 16px; }
+
+    .new-group-modal .ng-results,
+    .new-group-modal .ng-members {
+        flex: 1;
+        min-height: 0;
+        max-height: none !important;
+        margin: 6px -16px 0 !important;
+        padding: 0 8px calc(100px + env(safe-area-inset-bottom));
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+    .new-group-modal .section-label { padding: 12px 10px 6px; font-size: 13px; }
+    .new-group-modal .ng-row,
+    .new-group-modal .ng-member { gap: 14px; padding: 8px 10px; border-radius: 14px; font-size: 16px; }
+    .new-group-modal .ng-row .new-chat-result-avatar,
+    .new-group-modal .ng-member .new-chat-result-avatar {
+        width: 48px; height: 48px; flex: 0 0 48px;
+        min-width: 48px; max-width: 48px; min-height: 48px; max-height: 48px;
+        font-size: 19px;
+    }
+    .new-group-modal .ng-row .avatar-initials,
+    .new-group-modal .ng-member .avatar-initials { font-size: 17px !important; }
+    .new-group-modal .ng-row-sub { font-size: 14px; }
+
+    /* Круглая кнопка «дальше / создать» справа внизу. */
+    .new-group-modal .ng-fab {
+        position: absolute !important;
+        right: 18px;
+        bottom: calc(22px + env(safe-area-inset-bottom));
+        z-index: 6;
+        display: grid !important;
+        place-items: center;
+        width: 58px !important;
+        min-width: 0 !important;
+        height: 58px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        border-radius: 50% !important;
+        background: var(--accent) !important;
+        color: #fff !important;
+        opacity: 1 !important;
+        box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 38%, transparent), 0 2px 6px rgba(0, 0, 0, .18) !important;
+        transition: transform .24s cubic-bezier(.3, 1.4, .5, 1), opacity .18s ease;
+    }
+    .new-group-modal .ng-fab:active { transform: scale(.92); }
+    .new-group-modal .ng-fab .ng-fab-label { display: none; }
+    .new-group-modal .ng-fab .ng-fab-icon { display: block; width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+    .new-group-modal .new-group-next-btn.ng-fab:not(.shown) { transform: scale(0); opacity: 0 !important; pointer-events: none; }
+
+    /* Шаг 2: фото слева, название с подчёркиванием справа, ниже — участники. */
+    .new-group-modal .new-group-avatar-picker { flex: none; flex-direction: row; align-items: center; gap: 16px; padding: 6px 2px 14px; }
+    .new-group-modal .new-group-avatar-preview {
+        width: 66px; height: 66px; flex: 0 0 66px;
+        border: 0;
+        background-color: var(--accent);
+    }
+    .new-group-modal .new-group-avatar-preview::before { width: 30px; height: 30px; color: #fff; }
+    .new-group-modal #new-group-title {
+        flex: 1;
+        min-width: 0;
+        padding: 10px 2px;
+        border: 0;
+        border-bottom: 2px solid color-mix(in srgb, var(--text) 20%, transparent);
+        border-radius: 0;
+        background: transparent;
+        font-size: 18px;
+        transition: border-color .15s ease;
+    }
+    .new-group-modal #new-group-title:focus { border-bottom-color: var(--accent); }
+    .new-group-modal .ng-members-label { flex: none; margin: 4px 0 0; }
+    .new-group-modal #new-group-step-name .delete-choice-actions { display: contents; }
+    .new-group-modal #new-group-step-name .delete-choice-cancel { display: none; }
+}

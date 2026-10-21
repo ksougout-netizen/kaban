@@ -448,6 +448,17 @@ function applyChatWallpaper(chatId) {
         if (wallpaper.pattern) chatArea.style.setProperty("--wpp", wallpaper.pattern);
         else chatArea.style.removeProperty("--wpp");
         chatArea.classList.toggle("has-pattern", !!wallpaper.pattern);
+        // Узоры тем Telegram — свой цвет и плотность узора (см. TG_WALLPAPERS).
+        if (wallpaper.ink) {
+            chatArea.style.setProperty("--wpp-ink", wallpaper.ink);
+            chatArea.style.setProperty("--wpp-amount", (wallpaper.amount || 14) + "%");
+        } else {
+            chatArea.style.removeProperty("--wpp-ink");
+            chatArea.style.removeProperty("--wpp-amount");
+        }
+        chatArea.classList.toggle("has-ink", !!wallpaper.ink);
+        // Нижняя полоса Android берёт цвет низа обоев (android-app.js) — сообщаем о смене.
+        document.dispatchEvent(new Event("kaban-theme"));
     }
 
     const hint = document.getElementById("chat-wallpaper-hint");
@@ -466,7 +477,7 @@ function openChatWallpaperPicker() {
     grid.className = "wp-grid";
     grid.innerHTML =
         wallpaperTileHTML(inherited, !ownId, "setChatWallpaper('inherit')", "Общие")
-        + WALLPAPERS.filter((w) => !w.hidden)
+        + visibleWallpapers()
             .map((w) => wallpaperTileHTML(w, ownId === w.id, `setChatWallpaper('${w.id}')`, w.label))
             .join("");
 
@@ -548,7 +559,7 @@ function fillProfileForm(profile) {
         let hue = 0;
         for (const ch of profile.display_name || "") hue = (hue * 31 + ch.charCodeAt(0)) % 360;
         screen.style.setProperty("--gh", String(hue));
-        screen.style.setProperty("--gp", profile.avatar_url ? `url(${profile.avatar_url})` : "none");
+        setHeroPhoto(screen, profile.avatar_url);
         screen.classList.toggle("has-photo", !!profile.avatar_url);
     }
     const initial = (profile.display_name || "").trim().charAt(0).toUpperCase() || "Я";
@@ -1300,10 +1311,15 @@ function renderChatListFromCache() {
     if (foldersBar) foldersBar.hidden = isShowingArchivedChats;
     const sourceRows = cachedChatRows.filter((row) => archivedIds.has(row.chat_id) === isShowingArchivedChats);
     const visibleRows = filterChatRowsByFolder(sourceRows);
+    // Архив, как в Telegram, спрятан над списком: показывается жестом «потянуть вниз»
+    // (pull-reveal.js → kabanArchiveRevealed). Подпись — имена чатов в архиве.
+    const archiveRevealed = typeof kabanArchiveRevealed !== "undefined" && kabanArchiveRevealed;
+    const archivedNames = cachedChatRows.filter((row) => archivedIds.has(row.chat_id))
+        .map((row) => row.chats?.type === "group" ? row.chats?.title : row.otherUser?.display_name).filter(Boolean).slice(0, 3).join(", ");
     const archiveControl = isShowingArchivedChats
-        ? `<button type="button" class="archive-shortcut" onclick="showActiveChats()"><span class="archive-shortcut-icon" aria-hidden="true">‹</span><span class="archive-shortcut-title">К списку чатов</span></button>`
+        ? `<button type="button" class="archive-shortcut archive-back" onclick="showActiveChats()"><span class="archive-shortcut-icon" aria-hidden="true">‹</span><span class="archive-shortcut-title">К списку чатов</span></button>`
         : archiveCount
-            ? `<button type="button" class="archive-shortcut" onclick="showArchivedChats()"><span class="archive-shortcut-icon" aria-hidden="true">↓</span><span class="archive-shortcut-title">Архив</span><span class="archive-shortcut-count">${archiveCount}</span></button>`
+            ? `<button type="button" class="archive-shortcut${archiveRevealed ? "" : " is-collapsed"}" onclick="showArchivedChats()"><span class="archive-shortcut-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg></span><span class="archive-shortcut-copy"><span class="archive-shortcut-title">Архив</span><span class="archive-shortcut-names">${escapeHTML(archivedNames)}</span></span><span class="archive-shortcut-count">${archiveCount}</span></button>`
             : "";
 
     emptyState.hidden = true;
@@ -1619,7 +1635,72 @@ function attachLongPress(container, rowSelector, onLongPress, duration = 480) {
 
 function handleBottomNavTap(tab, element) {
     if (isTapSuppressed(element)) return;
+    // Как в Telegram: нажатие на уже открытую вкладку «Чаты» — список наверх, а если он уже
+    // наверху — к следующему непрочитанному чату. Для «Контактов»/«Звонков» — просто наверх.
+    if (element?.classList.contains("active") && !document.body.classList.contains("chat-selected")
+        && !document.querySelector(".m-page.open") && tab !== "settings") {
+        scrollActiveTabList(tab);
+        return;
+    }
     switchMobileTab(tab);
+}
+
+// «Пилюля» под активной вкладкой нижней панели (как в Telegram на iOS 26): едет к нажатой.
+// Следит за классом active у вкладок — им управляют switchMobileTab, phone-pages.js и др.
+(function initTabPill() {
+    const nav = document.getElementById("bottom-nav");
+    if (!nav || !nav.classList.contains("tg-tabbar")) return;
+    const pill = document.createElement("span");
+    pill.className = "tg-tab-pill instant";
+    pill.setAttribute("aria-hidden", "true");
+    nav.prepend(pill);
+    let frame = 0;
+    const place = () => {
+        frame = 0;
+        const active = nav.querySelector(".bottom-nav-item.active:not([hidden])");
+        // Классы «пилюли» меняем, только если правда меняются: иначе наблюдатель ниже
+        // (он смотрит на class внутри панели) запускал бы place() снова и снова.
+        if (!active || !active.offsetWidth) { if (pill.classList.contains("ready")) pill.classList.remove("ready"); return; }
+        pill.style.width = active.offsetWidth + "px";
+        pill.style.transform = `translateX(${active.offsetLeft}px)`;
+        if (!pill.classList.contains("ready")) pill.classList.add("ready");
+        // Первая установка — без анимации, дальше — плавно.
+        if (pill.classList.contains("instant")) requestAnimationFrame(() => requestAnimationFrame(() => pill.classList.remove("instant")));
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(place); };
+    new MutationObserver((records) => { if (records.some((r) => r.target !== pill)) schedule(); })
+        .observe(nav, { subtree: true, attributes: true, attributeFilter: ["class", "hidden"] });
+    window.addEventListener("resize", schedule);
+    schedule();
+})();
+
+// Прокручиваемый предок списка (у разных раскладок это разные элементы).
+function scrollParentOf(el) {
+    for (let node = el; node && node !== document.body; node = node.parentElement) {
+        const oy = getComputedStyle(node).overflowY;
+        if ((oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight + 1) return node;
+    }
+    return null;
+}
+
+function scrollActiveTabList(tab) {
+    const listId = tab === "contacts" ? "contacts-list" : tab === "calls" ? "calls-list" : "real-chat-list";
+    const list = document.getElementById(listId);
+    const scroller = list && scrollParentOf(list);
+    if (!scroller) return;
+    if (tab !== "chats" || scroller.scrollTop > 8) { scroller.scrollTo({ top: 0, behavior: "smooth" }); return; }
+    // Уже наверху: следующий непрочитанный чат (по кругу), подсветить его коротко.
+    const rows = [...list.querySelectorAll(".real-chat")].filter((row) => {
+        const meta = cachedChatRows.find((r) => r.chat_id === row.dataset.chatId);
+        return (meta?.unreadCount || 0) > 0 || meta?.manuallyUnread;
+    });
+    if (!rows.length) { toast("Непрочитанных чатов нет"); return; }
+    const top = scroller.getBoundingClientRect().top;
+    const next = rows.find((row) => row.getBoundingClientRect().top > top + 80) || rows[0];
+    scroller.scrollTo({ top: scroller.scrollTop + next.getBoundingClientRect().top - top - 60, behavior: "smooth" });
+    next.classList.remove("chat-flash");
+    void next.offsetWidth;
+    next.classList.add("chat-flash");
 }
 
 function handleContactRowTap(userId, element) {
@@ -1639,6 +1720,9 @@ function handleChatRowTap(chatId, element) {
 // готовый openProfileScreen), поэтому её нажатие не меняет активный
 // персистентный таб (Чаты/Контакты остаются как были под шторкой).
 function switchMobileTab(tab) {
+
+    // Телефон: Профиль и Настройки — полноэкранные вкладки (phone-pages.js); другая вкладка их закрывает.
+    if (typeof mPagesCloseTabs === "function") mPagesCloseTabs(tab);
 
     // Настройки и профиль открываются ПОВЕРХ чата — выходить из него не нужно.
     // Из чата на список чатов/контактов/звонков переходим только на телефоне, где
@@ -1689,7 +1773,8 @@ function syncBottomNavActive() {
 }
 
 function openProfileFromSettings() {
-    closeSettings();
+    // Телефон: профиль — страница поверх «Настроек» (как в Telegram), «назад» возвращает в них.
+    if (!isPhoneWidth) closeSettings();
     openProfileScreen();
 }
 
@@ -2375,81 +2460,198 @@ document.addEventListener("DOMContentLoaded", () => {
     if (realChatList) attachChatSwipeGestures(realChatList);
 });
 
-// Свайп по строке чата — влево закрепляет/открепляет уведомления (мьют),
-// вправо закрепляет/открепляет чат в списке. Сопротивление после порога
-// реакции (не улетает бесконечно за пальцем), лёгкая вибро-отметка при
-// пересечении порога, решение принимается на отпускании — рядом с уже
-// готовым attachLongPress на этом же контейнере (событие свайпа гасит
-// таймер долгого нажатия само, через движение > 10px).
+// Свайп по строке чата — как в Telegram. Под строкой открываются цветные кнопки:
+//   влево  → справа «Без звука», «Удалить», «В архив»; дотянуть до конца — в архив;
+//   вправо → слева «Прочитано/Непрочитано», «Закрепить»; дотянуть до конца — прочитано.
+// Отпустили на полпути — кнопки остаются открытыми (нажать нужную), тап мимо закрывает.
+// Рядом с attachLongPress на этом же контейнере (движение > 10px гасит долгое нажатие).
 let activeChatSwipe = null;
-const CHAT_SWIPE_THRESHOLD = 70;
-const CHAT_SWIPE_MAX_REVEAL = 96;
+let openChatSwipe = null;          // { row, layer, offset } — строка с открытыми кнопками
+const CHAT_SWIPE_BUTTON = 74;      // ширина одной кнопки
+const CHAT_SWIPE_START = 14;       // столько пальцем, прежде чем строка поедет (случайные касания не двигают)
+const CHAT_SWIPE_OPEN_MIN = 50;    // меньше — строка просто возвращается (если не быстрый взмах)
+const CHAT_SWIPE_FULL_RATIO = 0.7; // дальше этой доли ширины строки — сразу главное действие
+const CHAT_SWIPE_DAMP = 0.65;      // за кнопками строка идёт за пальцем медленнее — полный свайп только намеренно
+
+const CHAT_SWIPE_ICONS = {
+    read: '<path d="M4 12.5l4.5 4.5L20 6.5"/>',
+    unread: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>',
+    pin: '<path d="M9 4h6M9 4l1 7-3 2v2h10v-2l-3-2 1-7"/><path d="M12 15v6"/>',
+    mute: '<path d="M6 10a6 6 0 0 1 10.5-4M18 10v4l2 3H4l2-3v-1"/><path d="M10 19a2 2 0 0 0 4 0"/><path d="M3 3l18 18"/>',
+    sound: '<path d="M6 10a6 6 0 0 1 12 0v4l2 3H4l2-3Z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
+    delete: '<path d="M5 6h14M9 6V4h6v2m-9 0 1 14h10l1-14"/>',
+    archive: '<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/>'
+};
+
+// Кнопки стороны. Главное действие (полный свайп) — крайняя к краю экрана кнопка.
+function chatSwipeActions(chatId, side) {
+    const row = cachedChatRows.find((r) => r.chat_id === chatId) || {};
+    if (side === "right") {
+        const unread = row.manuallyUnread || row.unreadCount > 0;
+        return [
+            { key: "read", label: unread ? "Прочитано" : "Непрочит.", icon: unread ? "read" : "unread", color: "#3b82f6",
+                run: () => unread ? markChatReadWithoutOpening(chatId) : toggleChatManuallyUnread(chatId) },
+            { key: "pin", label: row.is_pinned ? "Открепить" : "Закрепить", icon: "pin", color: "#22c55e", run: () => toggleChatPinned(chatId) }
+        ];
+    }
+    const archived = getArchivedChatIds().has(chatId);
+    return [
+        { key: "mute", label: row.is_muted ? "Со звуком" : "Без звука", icon: row.is_muted ? "sound" : "mute", color: "#f59e0b", run: () => toggleChatMuted(chatId) },
+        { key: "delete", label: row.chats?.type === "group" ? "Покинуть" : "Удалить", icon: "delete", color: "#ef4444", run: () => deleteChatFromList(chatId) },
+        { key: "archive", label: archived ? "Вернуть" : "В архив", icon: "archive", color: "#8e8e93", run: () => toggleChatArchived(chatId) }
+    ];
+}
+
+function buildChatSwipeLayer(row, side) {
+    const actions = chatSwipeActions(row.dataset.chatId, side);
+    const layer = document.createElement("div");
+    layer.className = `chat-swipe-actions side-${side}`;
+    layer.style.top = row.offsetTop + "px";
+    layer.style.height = row.offsetHeight + "px";
+    layer.style.borderRadius = getComputedStyle(row).borderRadius;
+    // Слой — ровно под строкой (у строк бывают отступы по краям списка).
+    if (side === "right") layer.style.left = row.offsetLeft + "px";
+    else layer.style.right = (row.offsetParent?.clientWidth ?? row.parentElement.clientWidth) - row.offsetLeft - row.offsetWidth + "px";
+    layer.innerHTML = actions.map((a, i) => `
+        <button type="button" class="chat-swipe-btn${(side === "right" ? i === 0 : i === actions.length - 1) ? " is-primary" : ""}" data-key="${a.key}" style="--c:${a.color}">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${CHAT_SWIPE_ICONS[a.icon]}</svg>
+            <span>${a.label}</span>
+        </button>`).join("");
+    layer.addEventListener("click", (event) => {
+        const button = event.target.closest(".chat-swipe-btn");
+        if (!button) return;
+        event.stopPropagation();
+        const action = actions.find((a) => a.key === button.dataset.key);
+        closeOpenChatSwipe();
+        action?.run();
+    });
+    row.parentElement.insertBefore(layer, row);
+    return { layer, actions, side };
+}
+
+// Ширина слоя = насколько уехала строка; дальше порога главная кнопка занимает всё.
+function paintChatSwipe(swipe, offset) {
+    const width = Math.abs(offset);
+    swipe.view.layer.style.width = width + "px";
+    // Пока кнопки узкие — только значки, подписи появляются, когда им хватает места.
+    swipe.view.layer.classList.toggle("is-narrow", width / swipe.view.actions.length < 64);
+    const full = width >= swipe.row.offsetWidth * CHAT_SWIPE_FULL_RATIO;
+    if (full !== swipe.full) {
+        swipe.full = full;
+        swipe.view.layer.classList.toggle("is-full", full);
+        if (navigator.vibrate) { try { navigator.vibrate(8); } catch { /* нет API */ } }
+    }
+    swipe.row.style.transform = `translateX(${offset}px)`;
+}
+
+function closeOpenChatSwipe(instant = false) {
+    const open = openChatSwipe;
+    openChatSwipe = null;
+    if (!open) return;
+    open.row.classList.remove("chat-swipe-open", "chat-swiping");
+    open.row.classList.add("chat-swipe-settle");
+    open.row.style.transform = "";
+    if (instant || !open.row.isConnected) { open.layer.remove(); return; }
+    open.layer.style.transition = "width .34s cubic-bezier(.2,.85,.25,1)";
+    open.layer.style.width = "0px";
+    setTimeout(() => { open.layer.remove(); open.row.classList.remove("chat-swipe-settle"); }, 360);
+}
 
 function attachChatSwipeGestures(container) {
+
+    // Тап мимо открытых кнопок (или прокрутка списка) закрывает их, не открывая чат под пальцем.
+    document.addEventListener("pointerdown", (event) => {
+        if (!openChatSwipe || event.target.closest(".chat-swipe-actions")) return;
+        // Как в Telegram: первый тап только закрывает кнопки — ни этот, ни соседний чат не открывается.
+        const row = event.target.closest(".real-chat");
+        if (row) markGestureSuppression(row);
+        closeOpenChatSwipe();
+    }, true);
+    container.closest(".sidebar-scroll, .chat-list, #sidebar-chats-view")?.addEventListener("scroll", () => closeOpenChatSwipe(), { passive: true });
+    // Список перерисовался (новое сообщение и т. п.) — кнопки от старой строки убираем.
+    new MutationObserver(() => { if (openChatSwipe && !openChatSwipe.row.isConnected) closeOpenChatSwipe(true); }).observe(container, { childList: true });
 
     container.addEventListener("pointerdown", (event) => {
         const row = event.target.closest(".real-chat");
         if (!row || event.target.closest("button") || (event.pointerType === "mouse" && event.button !== 0)) return;
-        activeChatSwipe = { row, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, armedNotified: false };
-        try { row.setPointerCapture(event.pointerId); } catch { /* палец мог уже отпуститься — не критично */ }
+        activeChatSwipe = { row, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, started: false, full: false };
     });
 
     container.addEventListener("pointermove", (event) => {
 
-        if (!activeChatSwipe || activeChatSwipe.pointerId !== event.pointerId) return;
+        const swipe = activeChatSwipe;
+        if (!swipe || swipe.pointerId !== event.pointerId) return;
 
-        const deltaX = event.clientX - activeChatSwipe.startX;
-        const deltaY = event.clientY - activeChatSwipe.startY;
-        if (Math.abs(deltaX) <= Math.abs(deltaY) || Math.abs(deltaX) < 4) return;
-
-        const row = activeChatSwipe.row;
-        const overshoot = Math.abs(deltaX) - CHAT_SWIPE_MAX_REVEAL;
-        const magnitude = overshoot > 0 ? CHAT_SWIPE_MAX_REVEAL + overshoot * 0.25 : Math.abs(deltaX);
-        const offset = deltaX < 0 ? -magnitude : magnitude;
-
-        row.classList.add("chat-swiping");
-        row.style.transform = `translateX(${offset}px)`;
-
-        const armed = Math.abs(offset) >= CHAT_SWIPE_THRESHOLD;
-        row.classList.toggle("chat-swipe-armed", armed);
-        row.classList.toggle("chat-swipe-left", offset < 0);
-        row.classList.toggle("chat-swipe-right", offset > 0);
-
-        if (armed && !activeChatSwipe.armedNotified) {
-            activeChatSwipe.armedNotified = true;
-            if (navigator.vibrate) { try { navigator.vibrate(6); } catch { /* iOS Safari: нет API */ } }
-        } else if (!armed) {
-            activeChatSwipe.armedNotified = false;
+        const deltaX = event.clientX - swipe.startX;
+        const deltaY = event.clientY - swipe.startY;
+        if (!swipe.started) {
+            if (Math.abs(deltaX) < CHAT_SWIPE_START && Math.abs(deltaY) < CHAT_SWIPE_START) return;
+            if (Math.abs(deltaX) <= Math.abs(deltaY) * 1.6) { activeChatSwipe = null; return; }   // это прокрутка
+            swipe.started = true;
+            // Строка трогается с места плавно, без рывка на величину порога.
+            swipe.startX = event.clientX - Math.sign(deltaX) * 2;
+            try { swipe.row.setPointerCapture(event.pointerId); } catch { /* палец уже отпущен */ }
+            swipe.row.classList.remove("chat-swipe-settle");
+            swipe.row.classList.add("chat-swiping");
         }
+
+        const raw = event.clientX - swipe.startX;
+        swipe.lastX = event.clientX; swipe.lastT = performance.now();
+        swipe.samples = [...(swipe.samples || []).slice(-4), { x: event.clientX, t: swipe.lastT }];
+        const side = raw > 0 ? "right" : "left";
+        if (!swipe.view || swipe.view.side !== side) {
+            swipe.view?.layer.remove();
+            swipe.full = false;
+            swipe.view = buildChatSwipeLayer(swipe.row, side);
+        }
+        // До ширины кнопок — 1:1 за пальцем, дальше медленнее, у края строки почти упирается.
+        const open = swipe.view.actions.length * CHAT_SWIPE_BUTTON;
+        const limit = swipe.row.offsetWidth * 0.94;
+        let magnitude = Math.abs(raw);
+        if (magnitude > open) magnitude = open + (magnitude - open) * CHAT_SWIPE_DAMP;
+        if (magnitude > limit) magnitude = limit + (magnitude - limit) * 0.15;
+        paintChatSwipe(swipe, raw < 0 ? -magnitude : magnitude);
 
     });
 
     function finishChatSwipe(event) {
 
-        if (!activeChatSwipe || activeChatSwipe.pointerId !== event.pointerId) return;
-
         const swipe = activeChatSwipe;
-        const deltaX = event.clientX - swipe.startX;
-        const deltaY = event.clientY - swipe.startY;
-        const row = swipe.row;
-
-        row.classList.remove("chat-swiping", "chat-swipe-armed", "chat-swipe-left", "chat-swipe-right");
-        row.style.transform = "";
+        if (!swipe || swipe.pointerId !== event.pointerId) return;
         activeChatSwipe = null;
+        if (!swipe.started || !swipe.view) return;
 
-        if (Math.abs(deltaX) < CHAT_SWIPE_THRESHOLD || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+        // Жест был — короткий тап по той же строке чуть позже не должен открыть чат.
+        markGestureSuppression(swipe.row);
+        const { row, view } = swipe;
+        const width = Math.abs(event.clientX - swipe.startX);
+        // Быстрый короткий взмах тоже открывает кнопки (как в Telegram).
+        const first = swipe.samples?.[0], last = swipe.samples?.[swipe.samples.length - 1];
+        const speed = first && last && last.t > first.t ? Math.abs(last.x - first.x) / (last.t - first.t) : 0;
+        row.classList.remove("chat-swiping");
+        row.classList.add("chat-swipe-settle");
 
-        // Свайп засчитан — короткий тап по той же строке чуть позже не должен
-        // случайно открыть чат (тот же приём подавления, что у долгого нажатия,
-        // привязан именно к ЭТОЙ строке — см. markGestureSuppression).
-        markGestureSuppression(row);
-
-        const chatId = row.dataset.chatId;
-        if (deltaX < 0) {
-            toggleChatMuted(chatId);
-        } else {
-            toggleChatPinned(chatId);
+        if (swipe.full && event.type !== "pointercancel") {
+            const primary = view.actions[view.side === "right" ? 0 : view.actions.length - 1];
+            openChatSwipe = { row, layer: view.layer };
+            closeOpenChatSwipe();
+            primary.run();
+            return;
         }
+        const openWidth = view.actions.length * CHAT_SWIPE_BUTTON;
+        if ((width >= CHAT_SWIPE_OPEN_MIN || (speed > 0.45 && width > 24)) && event.type !== "pointercancel") {
+            const offset = view.side === "right" ? openWidth : -openWidth;
+            view.layer.style.transition = "width .34s cubic-bezier(.2,.85,.25,1)";
+            view.layer.classList.remove("is-full", "is-narrow");
+            view.layer.style.width = openWidth + "px";
+            row.style.transform = `translateX(${offset}px)`;
+            row.classList.add("chat-swipe-open");
+            openChatSwipe = { row, layer: view.layer };
+            setTimeout(() => { view.layer.style.transition = ""; }, 360);
+            return;
+        }
+        openChatSwipe = { row, layer: view.layer };
+        closeOpenChatSwipe();
 
     }
 
@@ -2499,9 +2701,11 @@ let activeSheetDrag = null;
 
 document.addEventListener("pointerdown", (event) => {
 
-    if (window.innerWidth > 650) return; // шторки — только мобильная ширина, см. CSS
+    if (!isPhoneWidth) return; // шторки — только мобильная ширина, см. CSS
     const panel = event.target.closest(SHEET_PANEL_SELECTOR);
     if (!panel) return;
+    // Полноэкранная страница (phone-pages.js) — не шторка: вниз не тянется, закрывается свайпом вправо.
+    if (panel.classList.contains("m-page-panel")) return;
     if (event.target.closest("button, a, input, textarea, select")) return;
 
     // Тянуть можно только за самый верх (где ручка) — иначе обычный скролл
@@ -2557,7 +2761,9 @@ let activeEdgeBackDrag = null;
 
 document.addEventListener("pointerdown", (event) => {
 
-    if (window.innerWidth > 650) return;
+    // Пальцем «назад» ведёт phone-pages.js (свайп вправо из любого места чата); здесь — мышь и перо.
+    if (event.pointerType === "touch") return;
+    if (!isPhoneWidth) return;
     if (!document.body.classList.contains("chat-selected")) return;
     if (event.clientX > EDGE_BACK_ZONE_PX) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -2636,6 +2842,16 @@ let hasMoreMessages = true;
 let isLoadingOlderMessages = false;
 let oldestLoadedMessageCreatedAt = null;
 let olderMessagesRetryAt = 0;
+
+// Первая страница истории на телефоне дорисовывается кусками в простое (openRealChat). Кому
+// нужны все загруженные строки сразу — поиск по чату, переход к сообщению — дорисовывают их
+// немедленно (иначе поиск не находил, а переход говорил «сообщение недоступно»).
+let pendingHistoryFill = null;
+function flushPendingHistory() {
+    const fill = pendingHistoryFill;
+    pendingHistoryFill = null;
+    if (fill) fill();
+}
 
 // "был(а) в сети только что / N минут/часов/дней назад" — общая формула
 // для шапки чата и списка чатов, единообразно с тем, как это выглядит в
@@ -3305,6 +3521,28 @@ async function openRealChat(chatId) {
         hasMoreMessages = hasMore;
         oldestLoadedMessageCreatedAt = serverPageOldest(messages);
 
+        // Телефон, чат открывается внизу: сразу рисуем только последние сообщения (их и видно),
+        // остальные — выше, кусками в следующих кадрах. Раньше вся страница (50 сообщений, а с
+        // карточками ботов — тысячи элементов) раскладывалась одним куском: на слабом телефоне
+        // это подвисание на 0,3–0,8 с при каждом открытии чата. Сохранённое место чтения или
+        // непрочитанные выше — рисуем всё сразу (якорь должен существовать).
+        const FIRST_BATCH = 14;
+        const savedPosition = typeof chatScrollPositions !== "undefined" ? chatScrollPositions.get(chatId) : null;
+        // Непрочитанных немного — все они (и разделитель «Непрочитанные») попадают в первую порцию.
+        const progressive = isPhoneWidth && messages.length > FIRST_BATCH + 6
+            && !(savedPosition && !savedPosition.atBottom)
+            && (cachedChatRows.find((r) => r.chat_id === chatId)?.unreadCount || 0) < FIRST_BATCH - 2;
+        // Порции — по времени, а не по числу строк: карточка бота стоит как десяток обычных
+        // сообщений, и 12–14 карточек на слабом телефоне давали кадр в 0,3–0,9 с (столько же,
+        // сколько сборка, потом уходит ещё на первую раскладку новых строк). Сразу — с конца,
+        // пока укладываемся в ~12 мс (но не меньше трёх строк и всех непрочитанных), дальше —
+        // порциями по ~30 мс в простое главного потока (requestIdleCallback), чтобы не мешать
+        // жестам. Мелкие порции каждый кадр растягивали дорисовку на секунды, и всё это время
+        // каждый кадр ещё и перерисовывал ленту.
+        // Подобрано замерами на эмуляторе с CPU x8 (≈ Galaxy S8+): 8 мс — дорисовка 4–5 с
+        // (каждая вставка сверху перерисовывает ленту), 80 мс — кадры до 0,28 с, 30 мс — ровнее всего.
+        const FILL_BUDGET_MS = 30;
+        let index = messages.length;
         if (messages.length) {
             if (!hasMoreMessages) {
                 const dateLabel = document.createElement("div");
@@ -3312,7 +3550,53 @@ async function openRealChat(chatId) {
                 dateLabel.textContent = "Начало переписки";
                 messagesContainer.insertBefore(dateLabel, typing);
             }
-            messages.forEach((message) => appendRealMessageRow(message, message.sender_id === me.id, { quiet: true }));
+            if (progressive) {
+                const minFirst = Math.max(3, (cachedChatRows.find((r) => r.chat_id === chatId)?.unreadCount || 0) + 2);
+                const started = performance.now();
+                index--;
+                appendRealMessageRow(messages[index], messages[index].sender_id === me.id, { quiet: true });
+                // Экран должен быть заполнен сразу: короткие сообщения — это 15–20 строк на экран,
+                // а не три (проверяем высоту, только когда время уже вышло — это раскладка).
+                const screenFilled = () => messagesContainer.scrollHeight > messagesContainer.clientHeight * 1.15;
+                while (index > 0 && messages.length - index < FIRST_BATCH
+                    && (messages.length - index < minFirst || performance.now() - started < 12 || !screenFilled())) {
+                    index--;
+                    appendRealMessageRow(messages[index], messages[index].sender_id === me.id, { prepend: true, quiet: true });
+                }
+            } else {
+                messages.forEach((message) => appendRealMessageRow(message, message.sender_id === me.id, { quiet: true }));
+                index = 0;
+            }
+            const label = messagesContainer.querySelector(".date:not(.date-auto)");
+            if (!index && label && label !== messagesContainer.firstElementChild) messagesContainer.insertBefore(label, messagesContainer.firstChild);
+        }
+        if (index > 0) {
+            // Пока дорисовываем, подгрузка старой истории ждёт — иначе она встала бы между кусками.
+            isLoadingOlderMessages = true;
+            const rest = messages;
+            const later = window.requestIdleCallback
+                ? (fn) => requestIdleCallback(fn, { timeout: 400 })
+                : (fn) => requestAnimationFrame(() => setTimeout(fn, 0));
+            const step = (all = false) => {
+                if (myRequestToken !== chatOpenRequestToken || currentChatId !== chatId) { pendingHistoryFill = null; return; }   // уже другой чат
+                if (index <= 0) return;   // уже дорисовали (flushPendingHistory)
+                const box = document.getElementById("messages");
+                const started = performance.now();
+                do {
+                    index--;
+                    appendRealMessageRow(rest[index], rest[index].sender_id === me.id, { prepend: true, quiet: true });
+                } while (index > 0 && (all === true || performance.now() - started < FILL_BUDGET_MS));
+                if (index > 0) { later(step); return; }
+                pendingHistoryFill = null;
+                // «Начало переписки» — над всей историей, а не над последними сообщениями.
+                const label = box.querySelector(".date:not(.date-auto)");
+                if (label && label !== box.firstElementChild) box.insertBefore(label, box.firstChild);
+                updateMessageGrouping();
+                isLoadingOlderMessages = false;
+                scheduleSharedMediaRender();
+            };
+            pendingHistoryFill = () => step(true);
+            later(step);
         }
 
         updateMessageGrouping();

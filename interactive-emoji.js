@@ -210,14 +210,21 @@
 
     function subscribe(chatId) {
         if (channelChatId === chatId) return;
-        try { if (channel) getSupabaseClient().removeChannel(channel); } catch { /* ок */ }
+        try { if (channel) getSupabaseClient().removeChannel(channel).catch(() => {}); } catch { /* ок */ }
         channel = null;
         channelChatId = chatId;
         if (!chatId || (typeof currentChatIsSecret !== "undefined" && currentChatIsSecret)) return;
-        try {
-            channel = getSupabaseClient().channel(`fx:${chatId}`, { config: { broadcast: { self: false } } });
-            channel.on("broadcast", { event: "emoji" }, ({ payload }) => onRemote(chatId, payload)).subscribe();
-        } catch { channel = null; }
+        // Вернулись в чат, канал которого ещё закрывается, — ждём его (см. waitChannelTopicFree).
+        const db = getSupabaseClient();
+        const create = () => {
+            if (channelChatId !== chatId || channel) return;
+            try {
+                channel = db.channel(`fx:${chatId}`, { config: { broadcast: { self: false } } });
+                channel.on("broadcast", { event: "emoji" }, ({ payload }) => onRemote(chatId, payload)).subscribe();
+            } catch { channel = null; }
+        };
+        if (typeof whenChannelTopicFree === "function") whenChannelTopicFree(db, `fx:${chatId}`, create);
+        else create();
     }
 
     function broadcast(payload) {

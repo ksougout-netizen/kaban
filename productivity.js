@@ -63,6 +63,10 @@ function startReminders() {
 
 function stopReminders() { clearInterval(reminderTimer); reminderTimer = null; }
 
+// Вход по сохранённой сессии бывает быстрее загрузки этого файла: applyRealSessionState
+// (script-ui.js) не находил startReminders — напоминания молчали до перезапуска.
+setTimeout(() => { if (typeof myRealUserId !== "undefined" && myRealUserId && !reminderTimer) startReminders(); }, 0);
+
 function syncRemindersHint() {
     const hint = document.getElementById("reminders-row-hint");
     if (!hint) return;
@@ -460,6 +464,7 @@ async function jumpToMessage(chatId, messageId) {
     }
 
     const findRow = () => document.querySelector(`.message-row[data-message-id="${messageId}"]`);
+    if (!findRow() && typeof flushPendingHistory === "function") flushPendingHistory();
 
     let pages = 0;
     while (!findRow() && hasMoreMessages && currentChatId === chatId && pages < 40) {

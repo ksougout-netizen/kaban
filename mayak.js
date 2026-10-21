@@ -186,12 +186,50 @@ function buildMayakTripHTML(t) {
 /* ---- аэропорт, аэроэкспресс, паромы ---- */
 
 function mayakFlightStatusClass(s) {
-    return /задерж|отмен/i.test(s || "") ? "bad" : /вылетел|прибыл/i.test(s || "") ? "done" : "ok";
+    return /задерж|отмен/i.test(s || "") ? "bad" : /вылетел|отправлен|прибыл|приземл/i.test(s || "") ? "done" : "ok";
+}
+
+// Точка маршрута: город, время (старое по расписанию зачёркнуто), день и чьё это время.
+function mayakFlightPoint(city, p, side) {
+    const moved = p.best && p.best !== p.sched;
+    const late = Number(p.late) || 0;
+    return `
+        <div class="fl-pt fl-pt-${side}">
+            <span class="fl-pt-city">${escapeHTML(city)}</span>
+            <b class="${late >= 10 ? "is-late" : late <= -10 ? "is-early" : ""}">${escapeHTML(p.best || "—")}</b>
+            ${moved ? `<s>${escapeHTML(p.sched)}</s>` : ""}
+            <small>${escapeHTML([p.day, p.kind].filter(Boolean).join(" · "))}</small>
+            <small>${escapeHTML(p.tz || "")}</small>
+            ${p.vvo ? `<small class="fl-pt-vvo">${escapeHTML(p.vvo)} по Владивостоку</small>` : ""}
+        </div>`;
 }
 
 function buildMayakFlightHTML(f) {
     if (!f) return "";
     const late = f.actual && f.actual !== f.sched;
+    const other = [f.city, f.airport].filter(Boolean).join(" · ");
+    if (f.dep && f.arr) {
+        const [from, to] = f.dir === "departure" ? ["Владивосток", f.city] : [f.city, "Владивосток"];
+        const ci = f.checkin && !f.done ? [f.checkin.desk && escapeHTML(`стойки ${f.checkin.desk}`), f.checkin.start && `<span>${escapeHTML(`${f.checkin.start}–${f.checkin.end}`)}</span>`].filter(Boolean).join(", ") : "";
+        return `
+        <div class="tr-card fl-card">
+            <div class="fl-top">
+                <span class="fl-dir">${f.dir === "departure" ? "🛫 Вылет" : "🛬 Прилёт"} · ${escapeHTML(other)}</span>
+                <span class="fl-status ${mayakFlightStatusClass(f.status)}">${escapeHTML(f.status || "нет статуса")}</span>
+            </div>
+            <div class="fl-num">${escapeHTML(f.num || "")} <small>${escapeHTML(f.airline || "")}</small></div>
+            <div class="fl-legs">
+                ${mayakFlightPoint(from, f.dep, "from")}
+                <div class="fl-mid"><span class="fl-plane">✈</span><span class="fl-line"></span><small>${f.duration ? `в пути<br>${escapeHTML(f.duration)}` : ""}</small></div>
+                ${mayakFlightPoint(to, f.arr, "to")}
+            </div>
+            ${f.delay ? `<div class="fl-delay">${f.dir === "departure" ? "Вылет" : "Прилёт"} позже расписания на ${Number(f.delay)} мин</div>` : ""}
+            ${ci ? `<div class="fl-extra"><span>🧳 Регистрация</span><b>${ci}</b></div>` : ""}
+            ${f.aircraft || (f.codeshare || []).length ? `<div class="tr-note">${escapeHTML([f.aircraft, (f.codeshare || []).length ? `тот же рейс: ${f.codeshare.join(", ")}` : ""].filter(Boolean).join(" · "))}</div>` : ""}
+            ${f.tracking ? `<div class="fl-live">🔔 Слежу: карточка обновляется сама, о задержке и посадке напишу${f.dir === "arrival" ? ", а за ~40 минут до посадки — напомню выезжать" : ""}</div>` : ""}
+            <div class="tr-note">Данные: ${escapeHTML(f.source || "табло аэропорта")} · ${escapeHTML(mayakTimeText(f.checked_at))}</div>
+        </div>`;
+    }
     return `
         <div class="tr-card fl-card">
             <div class="fl-top">
@@ -207,7 +245,7 @@ function buildMayakFlightHTML(f) {
             </div>
             ${f.aircraft ? `<div class="tr-note">${escapeHTML(f.aircraft)}</div>` : ""}
             ${f.tracking ? `<div class="fl-live">🔔 Слежу: карточка обновляется сама, о задержке и посадке напишу${f.dir === "arrival" ? ", а за ~40 минут до посадки — напомню выезжать" : ""}</div>` : ""}
-            <div class="tr-note">Данные: онлайн-табло аэропорта (VL.ru) · ${escapeHTML(mayakTimeText(f.checked_at))}</div>
+            <div class="tr-note">Данные: ${escapeHTML(f.source || "онлайн-табло аэропорта (VL.ru)")} · ${escapeHTML(mayakTimeText(f.checked_at))}</div>
         </div>`;
 }
 
@@ -219,7 +257,7 @@ function buildMayakBoardHTML(b) {
             <span class="fl-row-copy"><b>${escapeHTML(f.city || "")}</b><small>${escapeHTML([f.num, f.airline, f.terminal && `терм. ${f.terminal}`].filter(Boolean).join(" · "))}</small></span>
             <span class="fl-status ${mayakFlightStatusClass(f.status)}">${escapeHTML(f.status || "")}</span>
         </div>`).join("");
-    return `<div class="tr-card"><div class="tr-head"><span class="tr-icon">${b.dir === "departure" ? "🛫" : "🛬"}</span><div class="tr-route"><span>${b.dir === "departure" ? "Вылет из Владивостока" : "Прилёт во Владивосток"}${b.city ? ` · ${escapeHTML(b.city)}` : ""}</span></div></div>${rows || `<div class="tr-empty">Рейсов не нашёл</div>`}<div class="tr-note">Номер рейса из списка → «/рейс SU-5803» — карточка и слежка</div></div>`;
+    return `<div class="tr-card"><div class="tr-head"><span class="tr-icon">${b.dir === "departure" ? "🛫" : "🛬"}</span><div class="tr-route"><span>${b.dir === "departure" ? "Вылет из Владивостока" : "Прилёт во Владивосток"}${b.city ? ` · ${escapeHTML(b.city)}` : ""}</span></div></div>${rows || `<div class="tr-empty">Рейсов не нашёл</div>`}<div class="tr-note">Номер рейса из списка → «/рейс SU-5803» — время прилёта, время в пути и слежка · данные: ${escapeHTML(items[0]?.source || "табло аэропорта")}</div></div>`;
 }
 
 function buildMayakAeroexpressHTML(a) {
@@ -318,7 +356,29 @@ function mayakParseTrip(text) {
 }
 
 const MAYAK_BOX = { nominatim: "131.70,43.35,132.25,42.90", photon: "131.70,42.90,132.25,43.35" };
+
+// «до Партизанского проспекта» → «Партизанский проспект»: карта ищет по именительному падежу.
+function mayakNominative(text) {
+    return String(text).split(/\s+/).map((w) => {
+        const lw = w.toLowerCase();
+        if (/\d/.test(w) || lw.length <= 3) return w;
+        const keepCase = (s) => (w[0] === w[0].toUpperCase() ? s[0].toUpperCase() + s.slice(1) : s);
+        let r = lw.replace(/(ского|цкого)$/, (m) => m === "ского" ? "ский" : "цкий").replace(/ого$/, "ый").replace(/его$/, "ий")
+            .replace(/(ской|цкой)$/, (m) => m === "ской" ? "ская" : "цкая").replace(/ной$/, "ная").replace(/ей$/, "ая")
+            .replace(/([бвгджзклмнпрстфхцчшщ])а$/, "$1").replace(/([бвгджзклмнпрстфхцчшщ])е$/, "$1").replace(/ы$/, "а").replace(/([кгхжчшщ])и$/, "$1а");
+        return keepCase(r);
+    }).join(" ");
+}
+
 async function mayakGeocode(text) {
+    const guess = mayakNominative(text);
+    if (guess === text) return mayakGeocodeOne(text);
+    // Как написали и в именительном падеже — одновременно; как написали — в приоритете.
+    const [a, b] = await Promise.all([mayakGeocodeOne(text), mayakGeocodeOne(guess)]);
+    return a || b;
+}
+
+async function mayakGeocodeOne(text) {
     const timeout = (ms) => new Promise((r) => setTimeout(() => r(null), ms));
     const nominatim = fetch(`https://nominatim.openstreetmap.org/search?${new URLSearchParams({ format: "jsonv2", limit: "1", countrycodes: "ru", "accept-language": "ru", viewbox: MAYAK_BOX.nominatim, bounded: "1", q: text })}`)
         .then((r) => r.ok ? r.json() : []).then((j) => (j[0] ? { lat: Number(j[0].lat), lon: Number(j[0].lon), name: j[0].name || "" } : null)).catch(() => null);
